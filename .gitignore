@@ -1,0 +1,19 @@
+# ---- Python 字节码 / 缓存（自动生成，不入库）----
+__pycache__/
+*.py[cod]
+*.pyo
+
+# ---- PyInstaller 打包产物（每次打包重新生成）----
+/build/
+/dist/
+
+# ---- 打包交付夹（产物，发给用户用，不入库）----
+/发布/
+
+# ---- 运行时数据：机器/账号特定，不入库 ----
+/config.json      # 运行时生成：含本机标定坐标 + dry_run 实战开关（示例见 config.example.json）
+/captures/        # 命中截图
+/templates/       # 用户自己截的装备模板图
+
+# ---- 本地个人设置（每台机不同，不入库）----
+.claude/settings.local.json
