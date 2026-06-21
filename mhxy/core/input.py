@@ -94,10 +94,12 @@ class Mouse:
         self.backend = backend
         self.hz = humanize or {}
 
-    def _speed(self):
-        """整体速度倍率：用于缩短拟人化延迟。限制下限避免除零/过慢。"""
+    def _speed(self, override=None):
+        """整体速度倍率：用于缩短拟人化延迟。限制下限避免除零/过慢。
+        override 非空时用它（命中下单的『极速』倍率），否则用配置里的常速 speed。"""
         try:
-            return max(0.2, float(self.hz.get("speed", 1.0)))
+            v = override if override is not None else self.hz.get("speed", 1.0)
+            return max(0.2, float(v))
         except (TypeError, ValueError):
             return 1.0
 
@@ -130,20 +132,22 @@ class Mouse:
         return pyautogui
 
     # ---- 拟人化动作 ----
-    def human_move(self, x, y):
-        """移动到 (x,y) 附近（带随机落点），返回实际落点。"""
+    def human_move(self, x, y, speed=None):
+        """移动到 (x,y) 附近（带随机落点），返回实际落点。
+        speed 非空时按该倍率提速（命中下单用，越快越像直线瞬移）。"""
         sx, sy = get_cursor()
         r = int(self.hz.get("click_radius", 4))
         tx, ty = x + random.randint(-r, r), y + random.randint(-r, r)
         dist = math.hypot(tx - sx, ty - sy)
-        px_per_step = max(4, self.hz.get("px_per_step", 12))
-        steps = max(8, min(80, int(dist / px_per_step) + random.randint(6, 14)))
+        spd = self._speed(speed)
+        # 极速时步数随倍率收缩（更少步、更直），常速保持原来的平滑曲线
+        px_per_step = max(4, self.hz.get("px_per_step", 12) * max(1.0, spd / 1.5))
+        steps = max(4, min(80, int(dist / px_per_step) + random.randint(6, 14)))
         off = min(140.0, dist * 0.35 + 8)
         c1 = (sx + (tx - sx) * 0.3 + random.uniform(-off, off),
               sy + (ty - sy) * 0.3 + random.uniform(-off, off))
         c2 = (sx + (tx - sx) * 0.7 + random.uniform(-off, off),
               sy + (ty - sy) * 0.7 + random.uniform(-off, off))
-        spd = self._speed()
         for i in range(1, steps + 1):
             t = i / steps
             te = t * t * (3 - 2 * t)  # ease-in-out
@@ -152,10 +156,10 @@ class Mouse:
             time.sleep(random.uniform(0.004, 0.018) / spd)
         return tx, ty
 
-    def click(self, x, y):
-        """拟人化移动并点击。"""
-        spd = self._speed()
-        self.human_move(x, y)
+    def click(self, x, y, speed=None):
+        """拟人化移动并点击。speed 非空时整段按该倍率提速（命中下单的极速直击）。"""
+        spd = self._speed(speed)
+        self.human_move(x, y, speed=speed)
         time.sleep(random.uniform(0.03, 0.10) / spd)
         self._down()
         time.sleep(random.uniform(0.04, 0.13) / spd)

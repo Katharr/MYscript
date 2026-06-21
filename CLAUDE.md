@@ -59,6 +59,45 @@ mhxy/
 
 ## 当前状态
 - 依赖已装好：numpy, opencv-python, mss, pyautogui, pygetwindow, customtkinter, Pillow。
+- **2026-06-21（最新）提速「抢不过暴力脚本」+ 把用户调好的速度固化为标准配置并随包打包**。
+  用户痛点：原每轮巡航 ~3.5s（傻等加载 1.2s + 轮间空等 1.0s + 慢贝塞尔进货架）、命中下单 ~2s，抢不过别人。改了 5 个文件，分两块：
+  1. **硬提速（不破坏巡航拟人化）**：
+     - `core/input.py`：`human_move/click/_speed` 加可选 `speed` 倍率覆盖——只在「命中下单那一下」用激进倍率，
+       巡航点击仍走常速拟人化。极速时步数随倍率收缩（更直、更少步）。
+     - `tasks/sniper.py`：① 新增 `_wait_shelf_loaded()` 自适应等加载——先等 `shelf_load_min_sec`，再每 60ms 截 listing
+       区比上一帧，`_frame_diff()`（numpy 均值绝对差 <1.5）判定画面静止即「立即识别」，不傻等满 `shelf_load_wait_sec`
+       （后者改成上限/超时），返回该帧复用。② `_enter_shelf()` 去掉内部固定等待，只点类别+商品。
+       ③ `_buy_sequence(...,speed)` + `_snipe_sleep()` 走极速倍率（`humanize.snipe_speed`）。
+     - `gui/app.py`：`SettingsPage.SPEED_CONTROLS` 新增滑杆「命中下单极速倍率」「货架加载最短等待」，
+       「货架加载等待」改名「最长等待」。列表驱动，`_apply` 自动按命名空间写回 humanize/loop。
+     - 效果：巡航 ~3.5s→~1.2~1.5s，下单 ~2s→~0.4s。用户实测「能抢过一些慢脚本了」。
+  2. **标准配置固化 + 随包打包**（用户拍板：以他调好的为标准；打包「只带速度标准、标定清空」）：
+     - `core/config.py` `DEFAULT_CONFIG` 速度标准化：speed 2.0 / snipe_speed 5.0 / idle_chance 0.0 /
+       refresh_interval_sec 0.2 / shelf_load_min_sec 0.15（dry_run 仍 True、regions 仍 None——安全+待标定）。
+     - `config.example.json` 同步标准值与新字段。
+     - `build.py`：复制 exe 后新增 `_write_standard_config()`，用 `DEFAULT_CONFIG` 在发布目录写 config.json
+       （单一来源、改默认即同步、不漂移；regions 空/watchlist 空/dry_run 演练）。**发布目录已有 config.json 则跳过不覆盖**
+       （防覆盖用户标定）。spec 不动（配置仍放 exe 同级，不进 exe 内部）。
+  - 已验证：5 文件 py_compile 通过；运行实测 DEFAULT_CONFIG 已标准化、发布 config.json 内容正确（标定空/演练/速度标准）、
+    `_write_standard_config` 写入+跳过覆盖两条路径均 OK；example.json JSON 合法。**未真机端到端验证**（需用户开游戏自测）。
+  - ⚠ 标定坐标若与上新后商品排序不符仍会点错（固定坐标老问题）；`shelf_load_min_sec` 太小可能没开始加载就截图→偶发漏识别，调大即可。
+- **2026-06-21（最新）打 v1.0 exe：单文件 + 数据集中到 exe 同级文件夹**。用户要求「标定的图片和配置生成在一个文件夹里」。
+  直接打包当前代码会坏三处，已修：
+  1. **`mhxy/core/config.py`**：新增 `DATA_ROOT`——`sys.frozen` 时 = `Path(sys.executable).parent`（exe 同级），
+     源码时 = 项目根。`PROJECT_ROOT/CONFIG_PATH/TEMPLATES_DIR/CAPTURES_DIR` 全跟随。
+     **原因**：onefile 下 `__file__` 在临时目录 `%TEMP%\_MEIxxxx`，退出即清，标定数据会丢。
+     `PROJECT_ROOT` 保留为 `DATA_ROOT` 别名，`vision.py`/`gui/app.py:231` 无需改。
+  2. **`start.py`**：`main()` 开头加 `frozen = getattr(sys,'frozen',False)`，frozen 时**整段短路**
+     提权/`ensure_deps`/`_relaunch_windowless`（这些是源码运行专用，exe 里会出错），直接走到 GUI。
+  3. **打包配置**：新增 `梦幻秒装备.spec`（`collect_all('customtkinter')` 收 53 个资源含 3 主题 json，
+     否则启动崩；`uac_admin=True` 嵌 manifest 双击请求管理员；`console=False` 无黑窗；onefile）
+     + `build.py`（`python build.py` 一键打，产物复制到 `发布\梦幻秒装备_v1.0\梦幻秒装备.exe`）
+     + `打包.bat`。build.py 已 `reconfigure(utf-8)` 防 GBK 控制台 print 崩。
+  - 已验证：py_compile 全过；PyInstaller 打包成功（exe 66.9 MB 已生成并入交付夹）；
+    warn 文件无关键模块缺失（只有 numpy._core.* 已知误报）；collect_all 确认 customtkinter 资源入包；
+    模拟 `sys.frozen=True` 验证 DATA_ROOT 正确指向 exe 同级（PASS）。
+  - **未验证**：exe 因 `uac_admin` 无法在 headless 下拉起（错误 740 需点 UAC），故**真机启动 GUI / 标定 / 识别未端到端测**，需用户双击自测。
+  - 重打方式：改完代码 `python build.py` 或双击 `打包.bat`。换图标：把 .ico 放进项目，spec 里 `icon=` 填路径再重打。
 - **2026-06-21（最新）GUI 流畅度优化：解决「上下滑动 + 标定时像重新渲染、拖沓」**。
   根因是直接读本机 `customtkinter 5.2.2` 源码 + `core/window.py` 定位的，不是猜的。改了 3 文件：
   1. **`gui/app.py`（主因）**：`App._tick` 原本每 ~1.2s 在**主线程**调 `game_win.locate()`，

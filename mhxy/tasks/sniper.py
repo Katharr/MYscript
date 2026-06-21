@@ -10,6 +10,8 @@ import time
 import ctypes
 import datetime
 
+import numpy as np
+
 from ..core import vision
 from ..core import window as win_mod
 from ..core.config import CAPTURES_DIR
@@ -53,8 +55,9 @@ class SniperTask(Task):
 
         threshold = loop["match_threshold"]
         refresh_interval = loop["refresh_interval_sec"]
-        shelf_wait = loop.get("shelf_load_wait_sec", 1.2)
         cooldown = loop["after_buy_cooldown_sec"]
+        # 命中后「下单那一下」用更激进的速度倍率（只在抢的瞬间生效，巡航点击仍保持常速拟人化）
+        snipe_speed = ctx.cfg.get("humanize", {}).get("snipe_speed", 3.0)
         listing = regions["listing"]
         mouse = ctx.mouse
 
@@ -78,16 +81,18 @@ class SniperTask(Task):
 
             # 刷新 = 重新进货架：点左侧类别 → 点右侧商品条目 → 等货架加载。
             # 货架页面进去后不会自动上新，必须退出重进，所以这一步每轮都做。
-            if not self._enter_shelf(ctx, regions, shelf_wait):
+            if not self._enter_shelf(ctx, regions):
                 self._interruptible_sleep(ctx, self._jitter(refresh_interval, ctx))
                 continue
 
-            # 截货架区域并匹配
+            # 截货架区域并匹配。自适应等加载：画面一静止就识别，不傻等满 shelf_load_wait_sec。
             list_rect = ctx.window.region_to_screen_rect(listing)
             if list_rect is None:
                 self._interruptible_sleep(ctx, 0.5)
                 continue
-            scene = win_mod.grab(list_rect)
+            scene = self._wait_shelf_loaded(ctx, list_rect, loop)
+            if scene is None:
+                continue
 
             for it, tpl in templates:
                 if ctx.should_stop():
@@ -104,8 +109,8 @@ class SniperTask(Task):
                 if dry_run:
                     ctx.log("  [演练] 不下单。确认无误后到设置里切换为实战。")
                 else:
-                    self._buy_sequence(ctx, regions, screen_xy)
-                    ctx.log("  已执行购买动作序列。")
+                    self._buy_sequence(ctx, regions, screen_xy, snipe_speed)
+                    ctx.log("  已执行购买动作序列（极速）。")
                     self._interruptible_sleep(ctx, cooldown)
                 break  # 一轮处理一件即可
 
@@ -127,8 +132,9 @@ class SniperTask(Task):
         r = ctx.cfg.get("humanize", {}).get("interval_jitter", 0.4)
         return max(0.05, base * (1 + random.uniform(-r, r)))
 
-    def _enter_shelf(self, ctx, regions, shelf_wait):
-        """刷新动作：点左侧类别 → 点右侧商品条目 → 等货架加载。
+    def _enter_shelf(self, ctx, regions):
+        """刷新动作：点左侧类别 → 点右侧商品条目（进货架）。
+        等加载交给 _wait_shelf_loaded 自适应处理，这里只负责点击。
         任一步缺标定或被停止则返回 False（主循环会跳过本轮识别）。"""
         cat = regions.get("category_button")
         prod = regions.get("product_entry")
@@ -142,25 +148,65 @@ class SniperTask(Task):
             return False
         if not self._click_region(ctx, prod):      # 选右侧商品 → 进入它的货架
             return False
-        # 等货架加载完（带抖动），加载期间也能被停止打断
-        self._interruptible_sleep(ctx, self._jitter(shelf_wait, ctx))
         return not ctx.should_stop()
 
-    def _click_region(self, ctx, region):
+    def _wait_shelf_loaded(self, ctx, list_rect, loop):
+        """自适应等货架加载：先等一个最短时间，再每隔一小段截图比上一帧，
+        画面一旦静止（两帧几乎无差异）就认为加载完、立即返回该帧用于识别；
+        始终不超过 shelf_load_wait_sec（上限/超时）。被停止则返回 None。"""
+        min_w = self._jitter(loop.get("shelf_load_min_sec", 0.25), ctx)
+        max_w = max(min_w, loop.get("shelf_load_wait_sec", 1.2))
+        STABLE_DIFF = 1.5        # 两帧平均像素差低于此即视为画面静止（加载完成）
+        POLL = 0.06              # 轮询间隔
+
+        self._interruptible_sleep(ctx, min_w)
+        if ctx.should_stop():
+            return None
+        prev = win_mod.grab(list_rect)
+        deadline = time.time() + max(0.0, max_w - min_w)
+        while time.time() < deadline:
+            if ctx.should_stop():
+                return None
+            time.sleep(POLL)
+            cur = win_mod.grab(list_rect)
+            if cur is None:
+                return prev
+            if self._frame_diff(prev, cur) < STABLE_DIFF:
+                return cur       # 画面静止 → 加载完成，立即识别
+            prev = cur
+        return prev
+
+    @staticmethod
+    def _frame_diff(a, b):
+        """两帧平均像素绝对差。形状不一致返回大值（视为仍在变化）。"""
+        if a is None or b is None or a.shape != b.shape:
+            return 999.0
+        return float(np.abs(a.astype(np.int16) - b.astype(np.int16)).mean())
+
+    def _click_region(self, ctx, region, speed=None):
         if not region:
             return False
         center = ctx.window.region_center_screen(region)
         if center is None:
             return False
-        ctx.mouse.click(center[0], center[1])
+        ctx.mouse.click(center[0], center[1], speed=speed)
         return True
 
-    def _buy_sequence(self, ctx, regions, hit_xy):
-        ctx.mouse.click(hit_xy[0], hit_xy[1])          # 点中装备
-        ctx.mouse.sleep(0.18, 0.5)
-        self._click_region(ctx, regions.get("buy_button"))      # 购买
-        ctx.mouse.sleep(0.18, 0.5)
-        self._click_region(ctx, regions.get("confirm_button"))  # 确认（可空）
+    def _buy_sequence(self, ctx, regions, hit_xy, speed=None):
+        """命中后的下单序列。speed 传入『极速』倍率，让这一连串点击尽量快——抢货成败就在这里。"""
+        ctx.mouse.click(hit_xy[0], hit_xy[1], speed=speed)      # 点中装备
+        self._snipe_sleep(0.18, speed)
+        self._click_region(ctx, regions.get("buy_button"), speed=speed)     # 购买
+        self._snipe_sleep(0.18, speed)
+        self._click_region(ctx, regions.get("confirm_button"), speed=speed) # 确认（可空）
+
+    @staticmethod
+    def _snipe_sleep(base, speed):
+        """下单中间的极短等待，按极速倍率压缩（仍留一点随机抖动，避免完全等距）。"""
+        import random
+        spd = max(0.2, float(speed)) if speed else 1.0
+        s = base / spd
+        time.sleep(max(0.0, s * (1 + random.uniform(-0.2, 0.2))))
 
     def _save_capture(self, scene, name):
         fname = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_") + str(name) + ".png"

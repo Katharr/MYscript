@@ -4,11 +4,12 @@
   "window_offset": [0, 0],
   "hotkey_toggle": "F5",
   "humanize": {
-    "speed": 1.0,
+    "speed": 2.0,
+    "snipe_speed": 5.0,
     "click_radius": 4,
     "px_per_step": 12,
     "interval_jitter": 0.4,
-    "idle_chance": 0.02,
+    "idle_chance": 0.0,
     "idle_min_sec": 1.5,
     "idle_max_sec": 5.0
   },
@@ -16,8 +17,9 @@
     "sniper": {
       "dry_run": true,
       "loop": {
-        "refresh_interval_sec": 1.0,
+        "refresh_interval_sec": 0.2,
         "shelf_load_wait_sec": 1.2,
+        "shelf_load_min_sec": 0.15,
         "match_threshold": 0.85,
         "after_buy_cooldown_sec": 2.0
       },
