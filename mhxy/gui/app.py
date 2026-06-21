@@ -312,7 +312,7 @@ class SniperPage(ctk.CTkFrame):
             self._log_line("标定完成，配置已更新。", "info")
 
         try:
-            self._cal_dialog = CalibrateDialog(self.app, on_done=_after)
+            self._cal_dialog = CalibrateDialog(self.app, task_name=self.TASK_NAME, on_done=_after)
         except Exception as e:
             self._cal_dialog = None
             self._log_line(f"打开标定向导失败：{e}", "error")
@@ -335,6 +335,295 @@ class SniperPage(ctk.CTkFrame):
             self.pill_game.configure(text="● 游戏已连接", fg_color="#15301f", text_color=T.SUCCESS)
         else:
             self.pill_game.configure(text="○ 未检测到游戏", fg_color=T.SURFACE_2, text_color=T.TEXT_DIM)
+
+    def _log_line(self, msg, level="info"):
+        ts = datetime.datetime.now().strftime("%H:%M:%S")
+        self.log.configure(state="normal")
+        try:
+            self.log._textbox.insert("end", f"[{ts}] {msg}\n", level)
+        except Exception:
+            self.log.insert("end", f"[{ts}] {msg}\n")
+        self.log.see("end")
+        self.log.configure(state="disabled")
+
+    def _clear_log(self):
+        self.log.configure(state="normal")
+        self.log.delete("1.0", "end")
+        self.log.configure(state="disabled")
+
+
+# ----------------------------------------------------------------------
+# 刷副本·宝图 页面
+# ----------------------------------------------------------------------
+class TreasureMapPage(ctk.CTkFrame):
+    TASK_NAME = "treasure_map"
+    RUN_LABEL = "▶  开始刷宝图"
+
+    def __init__(self, master, app):
+        super().__init__(master, fg_color="transparent")
+        self.app = app
+        self.fonts = app.fonts
+        self.runner = None
+        self._cal_dialog = None
+
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(2, weight=1)
+
+        self._build_header()
+        self._build_control()
+        self._build_body()
+        self.refresh()
+
+    def _build_header(self):
+        bar = ctk.CTkFrame(self, fg_color="transparent")
+        bar.grid(row=0, column=0, sticky="ew", padx=4, pady=(2, 14))
+        bar.grid_columnconfigure(0, weight=1)
+        left = ctk.CTkFrame(bar, fg_color="transparent")
+        left.grid(row=0, column=0, sticky="w")
+        ctk.CTkLabel(left, text="刷副本 · 宝图", font=self.fonts["title"], text_color=T.TEXT).pack(anchor="w")
+        ctk.CTkLabel(left, text="自动开活动→收藏宝图→挖宝→领奖，战斗交给游戏自动",
+                     font=self.fonts["small"], text_color=T.TEXT_DIM).pack(anchor="w", pady=(2, 0))
+        right = ctk.CTkFrame(bar, fg_color="transparent")
+        right.grid(row=0, column=1, sticky="e")
+        self.pill_game = Pill(right, self.fonts)
+        self.pill_game.pack(side="left", padx=(0, 8))
+        self.pill_mode = Pill(right, self.fonts)
+        self.pill_mode.pack(side="left")
+
+    def _build_control(self):
+        card = Card(self)
+        card.grid(row=1, column=0, sticky="ew", padx=4, pady=(0, 14))
+        card.grid_columnconfigure(0, weight=1)
+
+        # 第一行：开始按钮（左） + 标定/刷新（右）
+        top = ctk.CTkFrame(card, fg_color="transparent")
+        top.grid(row=0, column=0, sticky="ew", padx=18, pady=(16, 10))
+        top.grid_columnconfigure(1, weight=1)
+        self.btn_run = ctk.CTkButton(top, text=self.RUN_LABEL, font=self.fonts["btn"],
+                                     height=46, width=200, corner_radius=T.RADIUS_SM,
+                                     fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
+                                     command=self._toggle_run)
+        self.btn_run.grid(row=0, column=0, sticky="w")
+        tools = ctk.CTkFrame(top, fg_color="transparent")
+        tools.grid(row=0, column=2, sticky="e")
+        ctk.CTkButton(tools, text="标定", font=self.fonts["body"], height=38, width=104,
+                      corner_radius=T.RADIUS_SM, fg_color=T.SURFACE_2, hover_color=T.BORDER,
+                      command=self._open_calibrate).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(tools, text="刷新配置", font=self.fonts["body"], height=38, width=104,
+                      corner_radius=T.RADIUS_SM, fg_color=T.SURFACE_2, hover_color=T.BORDER,
+                      command=self.refresh).pack(side="left")
+
+        # 分隔线
+        ctk.CTkFrame(card, fg_color=T.BORDER, height=1).grid(
+            row=1, column=0, sticky="ew", padx=18, pady=(0, 4))
+
+        # 第二行：两个开关左右分布，各带一行说明
+        opts = ctk.CTkFrame(card, fg_color="transparent")
+        opts.grid(row=2, column=0, sticky="ew", padx=18, pady=(8, 16))
+        opts.grid_columnconfigure(0, weight=1, uniform="o")
+        opts.grid_columnconfigure(1, weight=1, uniform="o")
+
+        box1 = ctk.CTkFrame(opts, fg_color="transparent")
+        box1.grid(row=0, column=0, sticky="w")
+        self.switch_mode = ctk.CTkSwitch(box1, text="实战模式", font=self.fonts["body"],
+                                         progress_color=T.DANGER, command=self._toggle_mode)
+        self.switch_mode.pack(anchor="w")
+        ctk.CTkLabel(box1, text="关 = 演练（只识别自检，安全）　开 = 真开活动/用宝图/领奖",
+                     font=self.fonts["small"], text_color=T.TEXT_DIM,
+                     justify="left", wraplength=360).pack(anchor="w", pady=(5, 0))
+
+        box2 = ctk.CTkFrame(opts, fg_color="transparent")
+        box2.grid(row=0, column=1, sticky="w", padx=(16, 0))
+        self.switch_skip = ctk.CTkSwitch(box2, text="已有宝图", font=self.fonts["body"],
+                                         progress_color=T.ACCENT, command=self._toggle_skip)
+        self.switch_skip.pack(anchor="w")
+        ctk.CTkLabel(box2, text="跳过领取，复位后直接挖包裹里的藏宝图",
+                     font=self.fonts["small"], text_color=T.TEXT_DIM,
+                     justify="left", wraplength=360).pack(anchor="w", pady=(5, 0))
+
+    def _build_body(self):
+        body = ctk.CTkFrame(self, fg_color="transparent")
+        body.grid(row=2, column=0, sticky="nsew", padx=4)
+        body.grid_columnconfigure(0, weight=2, uniform="b")
+        body.grid_columnconfigure(1, weight=3, uniform="b")
+        body.grid_rowconfigure(0, weight=1)
+
+        # 左：运行参数 + 标定状态
+        left = Card(body)
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 7))
+        left.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(left, text="运行参数", font=self.fonts["h2"], text_color=T.TEXT).grid(
+            row=0, column=0, sticky="w", padx=16, pady=(14, 6))
+
+        lim = ctk.CTkFrame(left, fg_color="transparent")
+        lim.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 6))
+        ctk.CTkLabel(lim, text="时间上限(分钟，0=不限)", font=self.fonts["body"],
+                     text_color=T.TEXT).pack(side="left")
+        self.var_limit = ctk.StringVar(value="30")
+        ctk.CTkEntry(lim, textvariable=self.var_limit, width=70, font=self.fonts["body"],
+                     fg_color=T.SURFACE_2, border_color=T.BORDER).pack(side="left", padx=(8, 0))
+        ctk.CTkLabel(left, text="主终止条件是背包藏宝图挖空；时间上限只是安全网。\n"
+                               "鼠标甩到屏幕左上角可紧急停止。",
+                     font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left").grid(
+                         row=2, column=0, sticky="w", padx=16, pady=(2, 8))
+
+        self.lbl_calib = ctk.CTkLabel(left, text="", font=self.fonts["small"], text_color=T.TEXT_DIM,
+                                      justify="left")
+        self.lbl_calib.grid(row=3, column=0, sticky="w", padx=16, pady=(2, 14))
+
+        # 右：日志
+        right = Card(body)
+        right.grid(row=0, column=1, sticky="nsew", padx=(7, 0))
+        right.grid_rowconfigure(1, weight=1)
+        right.grid_columnconfigure(0, weight=1)
+        rhead = ctk.CTkFrame(right, fg_color="transparent")
+        rhead.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 8))
+        rhead.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(rhead, text="运行日志", font=self.fonts["h2"], text_color=T.TEXT).grid(row=0, column=0, sticky="w")
+        ctk.CTkButton(rhead, text="清空", font=self.fonts["small"], height=26, width=56,
+                      corner_radius=T.RADIUS_SM, fg_color=T.SURFACE_2, hover_color=T.BORDER,
+                      command=self._clear_log).grid(row=0, column=1, sticky="e")
+        self.log = ctk.CTkTextbox(right, font=self.fonts["mono"], fg_color=T.SURFACE_2,
+                                  text_color=T.TEXT, corner_radius=T.RADIUS_SM, wrap="word")
+        self.log.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 12))
+        for lvl, color in T.LEVEL_COLOR.items():
+            try:
+                self.log._textbox.tag_config(lvl, foreground=color)
+            except Exception:
+                pass
+        self.log.configure(state="disabled")
+        self._log_line("界面就绪。第一次使用请先「标定」(区域 + 各标志模板)，并核对快捷键。", "info")
+
+    # ---- 刷新 / 状态 ----
+    def refresh(self):
+        self.app.cfg = cfg_mod.load_config()
+        tc = cfg_mod.task_config(self.app.cfg, self.TASK_NAME)
+        dry = tc.get("dry_run", True)
+        (self.switch_mode.select if not dry else self.switch_mode.deselect)()
+        self._render_mode_pill(dry)
+        skip = tc.get("skip_collect", False)
+        (self.switch_skip.select if skip else self.switch_skip.deselect)()
+        lim = tc.get("loop", {}).get("time_limit_min", 30)
+        self.var_limit.set(str(lim))
+        # 标定完成度概览（已有宝图时只需挖宝相关项）
+        regions = tc.get("regions", {})
+        templates = tc.get("templates", {})
+        need_r = ["scene", "bag_list"] if skip else ["scene", "activity_list", "bag_list"]
+        need_t = (["flag_next_map", "treasure_item"] if skip else
+                  ["flag_treasure_entry", "flag_tingting", "flag_next_map", "treasure_item"])
+        rdone = sum(1 for k in need_r if regions.get(k))
+        tdone = sum(1 for k in need_t if templates.get(k))
+        self.lbl_calib.configure(
+            text=f"标定：必要区域 {rdone}/{len(need_r)}，必要模板 {tdone}/{len(need_t)}"
+                 + ("　✓ 可运行" if rdone == len(need_r) and tdone == len(need_t) else "　（还需标定）"))
+
+    def _render_mode_pill(self, dry):
+        if dry:
+            self.pill_mode.configure(text="演练", fg_color="#1d3a2b", text_color=T.SUCCESS)
+        else:
+            self.pill_mode.configure(text="实战", fg_color="#3a1d1d", text_color=T.DANGER)
+
+    def update_game_pill(self, connected):
+        if connected:
+            self.pill_game.configure(text="● 游戏已连接", fg_color="#15301f", text_color=T.SUCCESS)
+        else:
+            self.pill_game.configure(text="○ 未检测到游戏", fg_color=T.SURFACE_2, text_color=T.TEXT_DIM)
+
+    # ---- 运行控制 ----
+    def _toggle_run(self):
+        if self.runner and self.runner.is_running():
+            self.runner.stop()
+            self._log_line("正在停止…", "warn")
+            self.btn_run.configure(text="停止中…", state="disabled")
+            return
+        # 启动前把时间上限写回配置
+        self._apply_time_limit()
+        self.app.cfg = cfg_mod.load_config()
+        task_cls = get_task(self.TASK_NAME)
+        self.runner = TaskRunner(task_cls(), self.app.cfg)
+        ok, problems = self.runner.start()
+        if not ok:
+            for p in problems:
+                self._log_line("无法启动：" + p, "error")
+            self.runner = None
+            return
+        self.btn_run.configure(text="■  停止", fg_color=T.DANGER, hover_color=T.DANGER_HOVER, state="normal")
+
+    def _apply_time_limit(self):
+        try:
+            v = float(self.var_limit.get())
+        except (TypeError, ValueError):
+            return
+        cfg = cfg_mod.load_config()
+        tc = cfg_mod.task_config(cfg, self.TASK_NAME)
+        tc.setdefault("loop", {})["time_limit_min"] = max(0.0, round(v, 1))
+        cfg_mod.set_task_config(cfg, self.TASK_NAME, tc)
+        cfg_mod.save_config(cfg)
+        self.app.cfg = cfg
+
+    def _on_runner_finished(self):
+        self.btn_run.configure(text=self.RUN_LABEL, fg_color=T.ACCENT,
+                               hover_color=T.ACCENT_HOVER, state="normal")
+
+    def _toggle_mode(self):
+        live = bool(self.switch_mode.get())
+        cfg = cfg_mod.load_config()
+        tc = cfg_mod.task_config(cfg, self.TASK_NAME)
+        tc["dry_run"] = not live
+        cfg_mod.set_task_config(cfg, self.TASK_NAME, tc)
+        cfg_mod.save_config(cfg)
+        self.app.cfg = cfg
+        self._render_mode_pill(not live)
+        if live:
+            self._log_line("⚠ 已切到实战：会真开活动、真用宝图、真领奖，请用小号！", "warn")
+        else:
+            self._log_line("已切回演练（只识别自检，安全）。", "info")
+
+    def _toggle_skip(self):
+        skip = bool(self.switch_skip.get())
+        cfg = cfg_mod.load_config()
+        tc = cfg_mod.task_config(cfg, self.TASK_NAME)
+        tc["skip_collect"] = skip
+        cfg_mod.set_task_config(cfg, self.TASK_NAME, tc)
+        cfg_mod.save_config(cfg)
+        self.app.cfg = cfg
+        self.refresh()
+        if skip:
+            self._log_line("已开启「已有宝图」：将跳过开活动领取，复位后直接开背包挖图。", "info")
+        else:
+            self._log_line("已关闭「已有宝图」：恢复完整流程（先开活动领宝图）。", "info")
+
+    def _open_calibrate(self):
+        if getattr(self, "_cal_dialog", None) is not None:
+            try:
+                if self._cal_dialog.winfo_exists():
+                    self._cal_dialog.lift()
+                    self._cal_dialog.focus_force()
+                    return
+            except Exception:
+                pass
+        from .calibrate_dialog import CalibrateDialog
+
+        def _after():
+            self._cal_dialog = None
+            self.refresh()
+            self._log_line("标定完成，配置已更新。", "info")
+
+        try:
+            self._cal_dialog = CalibrateDialog(self.app, task_name=self.TASK_NAME, on_done=_after)
+        except Exception as e:
+            self._cal_dialog = None
+            self._log_line(f"打开标定向导失败：{e}", "error")
+
+    # ---- 日志（由 App._tick 驱动）----
+    def pump(self):
+        if self.runner:
+            q = self.runner.log_queue
+            while not q.empty():
+                level, msg = q.get()
+                self._log_line(msg, level)
+            if not self.runner.is_running() and self.btn_run.cget("text") != self.RUN_LABEL:
+                self._on_runner_finished()
 
     def _log_line(self, msg, level="info"):
         ts = datetime.datetime.now().strftime("%H:%M:%S")
@@ -612,7 +901,10 @@ class AboutPage(ctk.CTkFrame):
 # 主窗口
 # ----------------------------------------------------------------------
 class App(ctk.CTk):
-    NAV = [("sniper", "🗡  秒装备"), ("settings", "⚙  设置"), ("about", "ⓘ  关于")]
+    NAV = [("sniper", "🗡  秒装备"), ("treasure_map", "🗺  刷副本·宝图"),
+           ("settings", "⚙  设置"), ("about", "ⓘ  关于")]
+    # 可运行任务页（有 runner/pump/update_game_pill），App 的定时器/热键/关闭钩子按此遍历
+    RUNNABLE_KEYS = ("sniper", "treasure_map")
 
     def __init__(self):
         super().__init__()
@@ -672,6 +964,7 @@ class App(ctk.CTk):
 
         self.pages = {
             "sniper": SniperPage(self.container, self),
+            "treasure_map": TreasureMapPage(self.container, self),
             "settings": SettingsPage(self.container, self),
             "about": AboutPage(self.container, self),
         }
@@ -679,6 +972,7 @@ class App(ctk.CTk):
             p.grid(row=0, column=0, sticky="nsew")
 
     def _show(self, key):
+        self._current_key = key   # 记当前可见页，全局热键只控它
         self.pages[key].tkraise()
         if hasattr(self.pages[key], "refresh"):
             self.pages[key].refresh()
@@ -696,10 +990,11 @@ class App(ctk.CTk):
         self.after(1600, lbl.destroy)
 
     def _tick(self):
-        # 抽日志（仅秒装备页有 runner）
-        sniper = self.pages.get("sniper")
-        if sniper:
-            sniper.pump()
+        # 抽日志：所有可运行任务页
+        for k in self.RUNNABLE_KEYS:
+            p = self.pages.get(k)
+            if p:
+                p.pump()
         # 每约 1.2s 检测一次游戏窗口（放后台线程，避免阻塞 UI 造成滑动卡顿）
         self._tick_count += 1
         if self._tick_count % 8 == 0:
@@ -732,9 +1027,10 @@ class App(ctk.CTk):
         if found == self._game_connected:
             return  # 状态没变就不动控件，省掉无谓重绘
         self._game_connected = found
-        sniper = self.pages.get("sniper")
-        if sniper:
-            sniper.update_game_pill(found)
+        for k in self.RUNNABLE_KEYS:
+            p = self.pages.get(k)
+            if p:
+                p.update_game_pill(found)
 
     # ---- 全局快捷键轮询：上升沿触发开始/停止 ----
     def _poll_hotkey(self):
@@ -750,17 +1046,20 @@ class App(ctk.CTk):
         self.after(60, self._poll_hotkey)
 
     def _trigger_hotkey(self, name):
-        sniper = self.pages.get("sniper")
-        if not sniper:
+        # 全局热键只作用于「当前可见」的可运行任务页，避免同时启停多个任务
+        key = getattr(self, "_current_key", "sniper")
+        page = self.pages.get(key)
+        if page is None or not hasattr(page, "_toggle_run"):
             return
-        was_running = bool(sniper.runner and sniper.runner.is_running())
-        sniper._toggle_run()
+        was_running = bool(getattr(page, "runner", None) and page.runner.is_running())
+        page._toggle_run()
         self.toast(f"[{name}] {'已停止' if was_running else '已开始'}")
 
     def _on_close(self):
-        sniper = self.pages.get("sniper")
-        if sniper and sniper.runner and sniper.runner.is_running():
-            sniper.runner.stop()
+        for k in self.RUNNABLE_KEYS:
+            p = self.pages.get(k)
+            if p and getattr(p, "runner", None) and p.runner.is_running():
+                p.runner.stop()
         self.destroy()
 
 

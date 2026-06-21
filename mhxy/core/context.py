@@ -18,6 +18,9 @@ class TaskContext:
                                  cfg.get("window_offset", [0, 0]))
         self.mouse = Mouse(cfg.get("input_backend", "sendinput"),
                            cfg.get("humanize", {}))
+        # 键盘动作（按键/组合键）也在同一个拟人化输入对象上，导航/复位靠它发快捷键。
+        self.keyboard = self.mouse
+        self.hotkeys = cfg.get("hotkeys", {})   # 键名映射，任务用 ctx.send_hotkey(动作名) 发
         self._log_fn = log_fn or (lambda msg, level="info": None)
         self.stop_event = stop_event or threading.Event()
 
@@ -31,6 +34,15 @@ class TaskContext:
 
     def stop(self):
         self.stop_event.set()
+
+    # ---- 便捷：按动作名发配置里的快捷键（如 send_hotkey("open_bag")）----
+    def send_hotkey(self, action):
+        """查 cfg.hotkeys[action] 得到键名列表（如 ["alt","e"]）并发出。
+        返回是否成功（动作未配置或键名为空则返回 False，调用方可降级为点坐标）。"""
+        keys = self.hotkeys.get(action)
+        if not keys:
+            return False
+        return self.keyboard.send_hotkey(keys)
 
     # ---- 便捷：取本任务的配置块 ----
     def task_cfg(self, task_name):

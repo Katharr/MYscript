@@ -45,6 +45,17 @@ DEFAULT_CONFIG = {
         "idle_max_sec": 5.0
     },
 
+    # ---- 游戏快捷键（脚本导航/复位用，键名列表，如 ["alt","e"]）----
+    #   ⚠ 这些是《梦幻西游》经典端游的键位种子值，时空(手游PC端)可能不同！
+    #     用户须进游戏「系统设置-快捷键」核对后改这里。某项留空 [] 表示该入口没有快捷键，
+    #     任务会降级为点击标定坐标（如 open_activity 空时点 regions.activity_button）。
+    "hotkeys": {
+        "close_panel": ["esc"],          # 关闭面板/复位
+        "open_bag": ["alt", "e"],        # 打开背包（经典端游 Alt+E，待核对）
+        "open_task": ["alt", "q"],       # 打开任务栏
+        "open_activity": []              # 打开「活动」界面：键位未知，留空→点 activity_button 坐标
+    },
+
     # ---- 各任务独立配置 ----
     "tasks": {
         "sniper": {
@@ -64,6 +75,42 @@ DEFAULT_CONFIG = {
                 "confirm_button": None
             },
             "watchlist": []              # [{name, template, max_price}]
+        },
+
+        # ---- 刷副本·宝图（一次性两阶段状态机；游戏自带自动战斗全托管，脚本只导航+监控+关键点击）----
+        "treasure_map": {
+            "dry_run": True,             # true=演练：只识别+打日志，不发快捷键/不点关键操作/不真用图
+            "skip_collect": False,       # true=已有宝图：跳过阶段A(开活动领宝图任务)，直接开背包挖包裹里的藏宝图
+            "loop": {
+                "time_limit_min": 30,        # 时间上限（分钟）安全网，0=不限；主终止是「背包挖空」
+                "match_threshold": 0.85,     # 标志模板匹配阈值
+                "tick_interval_sec": 0.6,    # 每次「截图→判状态」的节拍（带抖动）
+                "still_min_sec": 0.3,        # 帧差判静止：最短先等
+                "still_wait_sec": 2.0,       # 帧差判静止：单次最长等/超时
+                "collect_idle_sec": 4.0,     # 收集阶段：人物连续静止这么久且非战斗非对话→判定收集完成
+                "activity_timeout_sec": 30,  # 开活动→找到宝图入口的超时
+                "dialog_timeout_sec": 30,    # 等 NPC 对话框出现的超时
+                "collect_timeout_sec": 600,  # 整个收集阶段上限（自动战斗可能很久，给足）
+                "dig_timeout_sec": 120,      # 单张挖宝（含战斗）超时
+                "scroll_step": -3,           # 每次滚轮格数（负=向下翻）
+                "scroll_max_tries": 8,       # 滑动找目标最多翻几屏，超了仍没找到→兜底
+                "max_stuck_recover": 3       # 连续卡死多少次就主动停
+            },
+            "regions": {                 # 相对游戏窗口 [x,y,w,h]，标定向导写入
+                "scene": None,           # 主识别区（整窗或大半屏，所有 flag 都在这里找）
+                "activity_button": None, # 「活动」入口按钮（open_activity 无快捷键时点它）
+                "activity_list": None,   # 活动列表区域（滚轮在此找宝图任务条目）
+                "bag_list": None,        # 背包列表区域（滚轮在此找藏宝图）
+                "blank_spot": None       # 安全空白处（卡死恢复时点这里关弹窗）
+            },
+            "templates": {               # 状态标志模板路径（标定向导裁图写入，tm_ 前缀）
+                "flag_treasure_entry": None, # 活动列表里「宝图任务」条目
+                "flag_tingting": None,       # 对话框「听听无妨」选项
+                "flag_dialog": None,         # 对话框出现的标志（可选）
+                "flag_battle": None,         # 战斗界面独有标志（监控用，避免误判卡死）
+                "flag_next_map": None,       # 挖完弹出的「下一张使用」按钮
+                "treasure_item": None        # 背包里藏宝图道具图标（双击用图靠它定位）
+            }
         }
     }
 }

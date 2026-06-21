@@ -23,9 +23,40 @@ ULONG_PTR = ctypes.POINTER(ctypes.c_ulong)
 MOUSEEVENTF_MOVE = 0x0001
 MOUSEEVENTF_LEFTDOWN = 0x0002
 MOUSEEVENTF_LEFTUP = 0x0004
+MOUSEEVENTF_WHEEL = 0x0800          # 滚轮：mouseData 为正向上、负向下，120=一格
 MOUSEEVENTF_ABSOLUTE = 0x8000
+WHEEL_DELTA = 120                   # 一“格”滚轮的标准增量
 INPUT_MOUSE = 0
+INPUT_KEYBOARD = 1
+KEYEVENTF_EXTENDEDKEY = 0x0001
+KEYEVENTF_KEYUP = 0x0002
+KEYEVENTF_SCANCODE = 0x0008    # 用扫描码而非虚拟键——游戏多走 DirectInput/原始输入，只认扫描码
+MAPVK_VK_TO_VSC = 0
 SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN = 76, 77, 78, 79
+# 需要带「扩展键」标志的 VK（方向键/Home/End/PgUp/PgDn/Ins/Del/右Alt等），其扫描码前缀 0xE0
+_EXTENDED_VKS = {0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x2D, 0x2E, 0x5B, 0x5C, 0x5D, 0x90}
+
+# 键名 -> Windows 虚拟键码（VK）。供 send_hotkey/press_key 用。
+VK = {
+    "esc": 0x1B, "escape": 0x1B, "tab": 0x09, "enter": 0x0D, "return": 0x0D,
+    "space": 0x20, "backspace": 0x08, "delete": 0x2E, "del": 0x2E,
+    "alt": 0x12, "ctrl": 0x11, "control": 0x11, "shift": 0x10,
+    "up": 0x26, "down": 0x28, "left": 0x25, "right": 0x27,
+    "home": 0x24, "end": 0x23, "pageup": 0x21, "pagedown": 0x22,
+}
+for _c in "abcdefghijklmnopqrstuvwxyz":      # 字母 A-Z：VK 与大写 ASCII 相同
+    VK[_c] = ord(_c.upper())
+for _d in "0123456789":                       # 数字 0-9
+    VK[_d] = ord(_d)
+for _i in range(1, 13):                        # F1-F12
+    VK["f%d" % _i] = 0x70 + (_i - 1)
+
+
+def vk_of(key):
+    """把键名（不区分大小写）解析成 VK 码；已是 int 则原样返回；未知返回 None。"""
+    if isinstance(key, int):
+        return key
+    return VK.get(str(key).strip().lower())
 
 
 class _MOUSEINPUT(ctypes.Structure):
@@ -34,8 +65,14 @@ class _MOUSEINPUT(ctypes.Structure):
                 ("time", ctypes.c_ulong), ("dwExtraInfo", ULONG_PTR)]
 
 
+class _KEYBDINPUT(ctypes.Structure):
+    _fields_ = [("wVk", ctypes.c_ushort), ("wScan", ctypes.c_ushort),
+                ("dwFlags", ctypes.c_ulong), ("time", ctypes.c_ulong),
+                ("dwExtraInfo", ULONG_PTR)]
+
+
 class _INPUTUNION(ctypes.Union):
-    _fields_ = [("mi", _MOUSEINPUT)]
+    _fields_ = [("mi", _MOUSEINPUT), ("ki", _KEYBDINPUT)]
 
 
 class _INPUT(ctypes.Structure):
@@ -66,18 +103,47 @@ def _to_absolute(x, y):
             int((y - vy) * 65535 / max(1, vh - 1)))
 
 
-def _send(flags, ax=0, ay=0):
+def _send(flags, ax=0, ay=0, data=0):
     extra = ctypes.c_ulong(0)
-    mi = _MOUSEINPUT(ax, ay, 0, flags, 0, ctypes.cast(ctypes.pointer(extra), ULONG_PTR))
+    # mouseData 为无符号 32 位：滚轮负方向(向下)需按 2's complement 转换。
+    mi = _MOUSEINPUT(ax, ay, data & 0xFFFFFFFF, flags, 0,
+                     ctypes.cast(ctypes.pointer(extra), ULONG_PTR))
     inp = _INPUT()
     inp.type = INPUT_MOUSE
     inp.mi = mi
     user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(inp))
 
 
+def _send_key(vk, up=False):
+    """发一个键的按下/抬起。优先用「扫描码」(KEYEVENTF_SCANCODE)——很多游戏走 DirectInput/
+    原始输入，只认硬件扫描码，纯虚拟键(wVk)会被忽略(按了等于没按)。
+    取不到扫描码时退回虚拟键。"""
+    extra = ctypes.c_ulong(0)
+    scan = user32.MapVirtualKeyW(vk, MAPVK_VK_TO_VSC)
+    flags = KEYEVENTF_KEYUP if up else 0
+    if scan:
+        flags |= KEYEVENTF_SCANCODE
+        if vk in _EXTENDED_VKS:
+            flags |= KEYEVENTF_EXTENDEDKEY
+        wvk, wscan = 0, scan & 0xFFFF
+    else:
+        wvk, wscan = vk, 0
+    ki = _KEYBDINPUT(wvk, wscan, flags, 0,
+                     ctypes.cast(ctypes.pointer(extra), ULONG_PTR))
+    inp = _INPUT()
+    inp.type = INPUT_KEYBOARD
+    inp.ki = ki
+    user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(inp))
+
+
 def _raw_move(x, y):
     ax, ay = _to_absolute(x, y)
     _send(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE, ax, ay)
+
+
+def _raw_wheel(notches):
+    """滚轮滚动 notches 格（正=向上，负=向下）。"""
+    _send(MOUSEEVENTF_WHEEL, 0, 0, int(notches) * WHEEL_DELTA)
 
 
 def _bezier(p0, p1, p2, p3, t):
@@ -165,6 +231,66 @@ class Mouse:
         time.sleep(random.uniform(0.04, 0.13) / spd)
         self._up()
         time.sleep(random.uniform(0.02, 0.08) / spd)
+
+    def double_click(self, x, y, speed=None):
+        """拟人化双击：先移到目标，再快速两次按下/抬起（间隔在系统双击阈值内）。"""
+        spd = self._speed(speed)
+        self.human_move(x, y, speed=speed)
+        time.sleep(random.uniform(0.03, 0.08) / spd)
+        for i in range(2):
+            self._down()
+            time.sleep(random.uniform(0.03, 0.07))
+            self._up()
+            if i == 0:
+                time.sleep(random.uniform(0.06, 0.13))   # 两次点击间隔（双击阈值内）
+
+    def scroll(self, notches, x=None, y=None, speed=None):
+        """滚轮滚动 notches 格（正=向上，负=向下）。给 (x,y) 则先移到该点再滚
+        （很多界面只对鼠标悬停的列表生效）。拆成单格多次滚动 + 抖动，更像人。"""
+        if self.backend == "sendinput":
+            if x is not None and y is not None:
+                self.human_move(x, y, speed=speed)
+                time.sleep(random.uniform(0.03, 0.10))
+            n = int(notches)
+            step = 1 if n >= 0 else -1
+            for _ in range(abs(n)):
+                _raw_wheel(step)
+                time.sleep(random.uniform(0.02, 0.07))
+        else:
+            clk = self._clk()
+            if x is not None and y is not None:
+                clk.moveTo(int(x), int(y))
+            clk.scroll(int(notches), x=int(x) if x is not None else None,
+                       y=int(y) if y is not None else None)
+
+    # ---- 键盘（导航/复位用快捷键，SendInput 底层） ----
+    def press_key(self, key):
+        """按一下单键（键名或 VK 码）。未知键名忽略并返回 False。"""
+        vk = vk_of(key)
+        if vk is None:
+            return False
+        _send_key(vk, up=False)
+        time.sleep(random.uniform(0.03, 0.09))
+        _send_key(vk, up=True)
+        time.sleep(random.uniform(0.02, 0.06))
+        return True
+
+    def send_hotkey(self, *keys):
+        """发组合键，如 send_hotkey("alt", "e")：依次按下修饰键→主键，再逆序抬起。
+        keys 可以是 ["alt","e"] 这样的列表或多个位置参数。未知键名整体跳过返回 False。"""
+        if len(keys) == 1 and isinstance(keys[0], (list, tuple)):
+            keys = list(keys[0])
+        vks = [vk_of(k) for k in keys]
+        if not vks or any(v is None for v in vks):
+            return False
+        for v in vks:                       # 依次按下（修饰键在前）
+            _send_key(v, up=False)
+            time.sleep(random.uniform(0.02, 0.06))
+        time.sleep(random.uniform(0.03, 0.08))
+        for v in reversed(vks):             # 逆序抬起
+            _send_key(v, up=True)
+            time.sleep(random.uniform(0.02, 0.05))
+        return True
 
     # ---- 拟人化等待 ----
     def sleep(self, base, jitter_ratio=None):

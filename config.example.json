@@ -13,6 +13,12 @@
     "idle_min_sec": 1.5,
     "idle_max_sec": 5.0
   },
+  "hotkeys": {
+    "close_panel": ["esc"],
+    "open_bag": ["alt", "e"],
+    "open_task": ["alt", "q"],
+    "open_activity": []
+  },
   "tasks": {
     "sniper": {
       "dry_run": true,
@@ -33,6 +39,40 @@
       "watchlist": [
         { "name": "wujibie_xianglian", "template": "templates/wujibie_xianglian.png", "max_price": null }
       ]
+    },
+    "treasure_map": {
+      "dry_run": true,
+      "skip_collect": false,
+      "loop": {
+        "time_limit_min": 30,
+        "match_threshold": 0.85,
+        "tick_interval_sec": 0.6,
+        "still_min_sec": 0.3,
+        "still_wait_sec": 2.0,
+        "collect_idle_sec": 4.0,
+        "activity_timeout_sec": 30,
+        "dialog_timeout_sec": 30,
+        "collect_timeout_sec": 600,
+        "dig_timeout_sec": 120,
+        "scroll_step": -3,
+        "scroll_max_tries": 8,
+        "max_stuck_recover": 3
+      },
+      "regions": {
+        "scene": [0, 0, 1024, 768],
+        "activity_button": [900, 120, 60, 40],
+        "activity_list": [600, 200, 360, 420],
+        "bag_list": [560, 220, 380, 360],
+        "blank_spot": [200, 150, 20, 20]
+      },
+      "templates": {
+        "flag_treasure_entry": "templates/tm_flag_treasure_entry.png",
+        "flag_tingting": "templates/tm_flag_tingting.png",
+        "flag_dialog": null,
+        "flag_battle": "templates/tm_flag_battle.png",
+        "flag_next_map": "templates/tm_flag_next_map.png",
+        "treasure_item": "templates/tm_treasure_item.png"
+      }
     }
   }
 }

@@ -7,14 +7,9 @@
 """
 
 import time
-import ctypes
-import datetime
-
-import numpy as np
 
 from ..core import vision
 from ..core import window as win_mod
-from ..core.config import CAPTURES_DIR
 from .base import Task, register
 
 
@@ -23,6 +18,19 @@ class SniperTask(Task):
     name = "sniper"
     title = "秒装备"
     description = "盯市场列表，目标装备一出现就秒下单"
+
+    # 标定向导用：区域项即原 REGION_ITEMS；秒装备有「装备清单」卡片，无标志模板。
+    CALIBRATION = {
+        "regions": [
+            ("listing", "货架/列表区域", "进货架后要识别的那片区域，框大一点把整列摊位都包进去"),
+            ("category_button", "商品类别按钮", "左侧侧边栏里的类别，如「奇珍异宝」——刷新第①步点它"),
+            ("product_entry", "商品条目", "右侧信息框里要进的那个商品——刷新第②步点它进货架"),
+            ("buy_button", "购买按钮", "选中摊位后出现的「购买」按钮"),
+            ("confirm_button", "确认购买按钮", "二次确认弹窗的按钮，没有可不标"),
+        ],
+        "templates": [],
+        "watchlist": True,
+    }
 
     def preflight(self, ctx):
         tc = ctx.task_cfg(self.name)
@@ -120,18 +128,7 @@ class SniperTask(Task):
 
         ctx.log(f"已停止。共循环 {rounds} 轮。")
 
-    # ---- 内部小工具 ----
-    def _is_admin(self):
-        try:
-            return bool(ctypes.windll.shell32.IsUserAnAdmin())
-        except Exception:
-            return True  # 非 Windows 或查询失败时不打扰
-
-    def _jitter(self, base, ctx):
-        import random
-        r = ctx.cfg.get("humanize", {}).get("interval_jitter", 0.4)
-        return max(0.05, base * (1 + random.uniform(-r, r)))
-
+    # ---- 内部小工具（_is_admin/_jitter/_frame_diff/_click_region/_save_capture/_interruptible_sleep 已上移 Task 基类）----
     def _enter_shelf(self, ctx, regions):
         """刷新动作：点左侧类别 → 点右侧商品条目（进货架）。
         等加载交给 _wait_shelf_loaded 自适应处理，这里只负责点击。
@@ -176,22 +173,6 @@ class SniperTask(Task):
             prev = cur
         return prev
 
-    @staticmethod
-    def _frame_diff(a, b):
-        """两帧平均像素绝对差。形状不一致返回大值（视为仍在变化）。"""
-        if a is None or b is None or a.shape != b.shape:
-            return 999.0
-        return float(np.abs(a.astype(np.int16) - b.astype(np.int16)).mean())
-
-    def _click_region(self, ctx, region, speed=None):
-        if not region:
-            return False
-        center = ctx.window.region_center_screen(region)
-        if center is None:
-            return False
-        ctx.mouse.click(center[0], center[1], speed=speed)
-        return True
-
     def _buy_sequence(self, ctx, regions, hit_xy, speed=None):
         """命中后的下单序列。speed 传入『极速』倍率，让这一连串点击尽量快——抢货成败就在这里。"""
         ctx.mouse.click(hit_xy[0], hit_xy[1], speed=speed)      # 点中装备
@@ -207,16 +188,3 @@ class SniperTask(Task):
         spd = max(0.2, float(speed)) if speed else 1.0
         s = base / spd
         time.sleep(max(0.0, s * (1 + random.uniform(-0.2, 0.2))))
-
-    def _save_capture(self, scene, name):
-        fname = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_") + str(name) + ".png"
-        vision.save_image(str(CAPTURES_DIR / fname), scene)
-        return fname
-
-    def _interruptible_sleep(self, ctx, seconds):
-        """可被停止打断的等待。"""
-        end = time.time() + seconds
-        while time.time() < end:
-            if ctx.should_stop():
-                return
-            time.sleep(min(0.05, max(0.0, end - time.time())))
