@@ -70,24 +70,34 @@ def _relaunch_windowless():
 
 
 def main():
-    # 关键修复：游戏客户端多以管理员权限运行。脚本若是普通权限，
-    # 当游戏窗口（高完整性级别）处于前台时，Windows 会因 UIPI 静默丢弃我们的
-    # SendInput —— 表现为「焦点在脚本上鼠标能动，一切到游戏就不动、点击无效」。
-    # 故先把自己提权到管理员，与游戏同级，鼠标注入才能落到游戏窗口上。
-    if not _is_admin():
-        if _elevate():
-            return  # 已发起管理员实例，本普通权限进程退出。
-        # 提权被用户拒绝：仍以普通权限启动（界面可用），但切到游戏后多半点不动，提示之。
-        print("⚠ 未获得管理员权限：切换到游戏窗口后鼠标可能无法移动/点击。\n"
-              "  建议右键『启动.bat』→『以管理员身份运行』，或在 UAC 弹窗点『是』。\n")
+    # 打包成 exe（PyInstaller，sys.frozen=True）时，下面这些「源码运行」专用步骤全不适用，
+    # 必须短路掉：
+    #   - 提权：已用 PyInstaller --uac-admin 把「请求管理员」写进 exe 的 manifest，双击即弹
+    #           UAC，无需运行时 ShellExecuteW 重启（那套会把 .py 路径当参数传错）。
+    #   - ensure_deps：依赖已打进 exe，import 必成功，绝不能再 pip install。
+    #   - _relaunch_windowless：exe 用 --windowed 打包本就无黑窗，也没有 pythonw 可用。
+    # 故 frozen 时直接走到 GUI。
+    frozen = getattr(sys, "frozen", False)
 
-    if not ensure_deps():
-        input("\n按回车退出……")
-        return
+    if not frozen:
+        # 关键修复：游戏客户端多以管理员权限运行。脚本若是普通权限，
+        # 当游戏窗口（高完整性级别）处于前台时，Windows 会因 UIPI 静默丢弃我们的
+        # SendInput —— 表现为「焦点在脚本上鼠标能动，一切到游戏就不动、点击无效」。
+        # 故先把自己提权到管理员，与游戏同级，鼠标注入才能落到游戏窗口上。
+        if not _is_admin():
+            if _elevate():
+                return  # 已发起管理员实例，本普通权限进程退出。
+            # 提权被拒：仍以普通权限启动（界面可用），但切到游戏后多半点不动，提示之。
+            print("⚠ 未获得管理员权限：切换到游戏窗口后鼠标可能无法移动/点击。\n"
+                  "  建议右键『启动.bat』→『以管理员身份运行』，或在 UAC 弹窗点『是』。\n")
 
-    # 依赖已就绪：若仍带控制台，则用 pythonw 重启以甩掉黑窗，本进程随即退出。
-    if _has_console() and _relaunch_windowless():
-        return
+        if not ensure_deps():
+            input("\n按回车退出……")
+            return
+
+        # 依赖已就绪：若仍带控制台，则用 pythonw 重启以甩掉黑窗，本进程随即退出。
+        if _has_console() and _relaunch_windowless():
+            return
 
     from mhxy.core import window as win_mod
     win_mod.set_dpi_aware()
