@@ -1,0 +1,20 @@
+# 依赖。安装：在本文件夹打开终端执行  pip install -r requirements.txt
+# 或直接双击「启动.bat」，首次会自动安装。
+
+# 图像识别与截图
+numpy
+opencv-python
+mss
+
+# 输入模拟（sendinput 为主，下面两个为备用后端 / 失败回退）
+pyautogui
+
+# 窗口定位
+pygetwindow
+
+# 图形界面
+customtkinter
+Pillow
+
+# 可选备用点击后端：默认点击在游戏里没反应时再装，并把设置里的输入后端改成 pydirectinput
+# pydirectinput

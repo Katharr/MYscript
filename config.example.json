@@ -1,0 +1,36 @@
+{
+  "window_title": "梦幻西游",
+  "input_backend": "sendinput",
+  "window_offset": [0, 0],
+  "hotkey_toggle": "F5",
+  "humanize": {
+    "speed": 1.0,
+    "click_radius": 4,
+    "px_per_step": 12,
+    "interval_jitter": 0.4,
+    "idle_chance": 0.02,
+    "idle_min_sec": 1.5,
+    "idle_max_sec": 5.0
+  },
+  "tasks": {
+    "sniper": {
+      "dry_run": true,
+      "loop": {
+        "refresh_interval_sec": 1.0,
+        "shelf_load_wait_sec": 1.2,
+        "match_threshold": 0.85,
+        "after_buy_cooldown_sec": 2.0
+      },
+      "regions": {
+        "listing": [120, 200, 600, 360],
+        "category_button": [40, 240, 96, 36],
+        "product_entry": [180, 300, 160, 40],
+        "buy_button": [760, 480, 90, 36],
+        "confirm_button": [430, 360, 100, 40]
+      },
+      "watchlist": [
+        { "name": "wujibie_xianglian", "template": "templates/wujibie_xianglian.png", "max_price": null }
+      ]
+    }
+  }
+}

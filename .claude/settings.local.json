@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "PowerShell($py = \\(Get-Command python -ErrorAction SilentlyContinue\\); if \\($py\\) { python -m py_compile core.py calibrate.py sniper.py; if \\($?\\) { \"OK: 三个文件语法通过\" } } else { \"未检测到 python，跳过语法检查（你装好 Python 后再跑即可）\" })",
+      "PowerShell(python -m py_compile core.py human_input.py calibrate.py sniper.py; if \\($?\\) { \"OK: 四个文件语法全部通过\" })",
+      "PowerShell(python -c \"import human_input as h; print\\('cursor=', h.get_cursor\\(\\)\\); print\\('to_abs=', h._to_absolute\\(100,100\\)\\); print\\('vscreen=', h._virtual_screen\\(\\)\\); print\\('SendInput结构与坐标换算 OK，未移动鼠标'\\)\")",
+      "PowerShell(python -m pip install -r requirements.txt)",
+      "PowerShell(python -m pip install customtkinter Pillow)",
+      "Bash(ls templates *)",
+      "Bash(cat config.json)"
+    ]
+  }
+}
