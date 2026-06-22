@@ -5,11 +5,12 @@
 游戏自带「自动战斗」全托管，脚本只做导航 + 状态监控 + 关键点击：
 
 阶段 A 收图：
-  复位(快捷键) → 开「活动」→ 滚轮找「宝图任务」点它 → 传送+自动寻路到 NPC 对话
-  → 弹框选「听听无妨」→ 自动寻宝(自动战斗) → 所有藏宝图拿完后人物站着不动(帧差判静止=收集完成)。
+  开「活动」(快捷键 Alt+C) → 滚轮找「宝图任务」条目 → 点该行【右侧的「参加」按钮】(按行匹配，不是点条目本身)
+  → 传送+自动寻路到 NPC 对话 → 弹框选「听听无妨」→ 自动寻宝(自动战斗)
+  → 所有藏宝图拿完后人物站着不动(帧差判静止=收集完成)。
 阶段 B 挖宝：
   开背包(快捷键) → 滚轮找藏宝图 → 双击用 → 自动传送挖宝 → 挖完游戏弹「下一张使用」按钮 → 点它
-  → 循环到不再弹 → 再开背包确认无图 → 结束。
+  → 循环到不再弹 → 再开背包确认无图 →【关上背包】→ 结束。
 
 导航靠 ctx.send_hotkey(动作名)（键位在 config.hotkeys，用户需按游戏「系统设置-快捷键」核对）；
 无快捷键的入口（如活动）降级为点标定坐标。滑动用鼠标滚轮。
@@ -24,8 +25,7 @@ from ..core import vision
 from ..core import window as win_mod
 from .base import Task, register
 
-# 状态机状态
-S_RESET = "RESET"
+# 状态机状态（已去掉开头「复位」：正常流程不再连发关面板快捷键，用户拍板）
 S_OPEN_ACTIVITY = "OPEN_ACTIVITY"
 S_DIALOG = "DIALOG"
 S_COLLECTING = "COLLECTING"
@@ -35,12 +35,16 @@ S_DIGGING = "DIGGING"
 S_CHECK_DONE = "CHECK_DONE"
 S_FINISHED = "FINISHED"
 
-_STILL_DIFF = 2.0   # 帧差低于此视为画面静止（人物不动）
+_STILL_DIFF = 8.0   # 帧差低于此视为画面静止（人物不动）的默认阈值——可被 loop.still_diff 覆盖。
+#   太小→人物待机动画/周围NPC玩家走动/特效会让整屏帧差长期偏高，永远判不到「静止」→收集/挖宝误超时。
+#   运行时日志会实时打印真实帧差，照着把阈值设到「静止时帧差」之上、「走动时帧差」之下即可。
 
 # 必备模板（缺失则 preflight 阻断）与可选模板（缺失仅 warn）
-_FLAG_KEYS = ["flag_treasure_entry", "flag_tingting", "flag_dialog",
+#   flag_join=活动列表里「宝图任务」那一行右侧的「参加」按钮——按行匹配点它（不是点条目本身）。
+_FLAG_KEYS = ["flag_treasure_entry", "flag_join", "flag_tingting",
               "flag_battle", "flag_next_map", "treasure_item"]
-_REQUIRED_FLAGS = ["flag_treasure_entry", "flag_tingting", "flag_next_map", "treasure_item"]
+_REQUIRED_FLAGS = ["flag_treasure_entry", "flag_join", "flag_tingting",
+                   "flag_next_map", "treasure_item"]
 
 
 @register
@@ -54,16 +58,14 @@ class TreasureMapTask(Task):
             ("scene", "主识别区", "整窗或大半屏——战斗/对话/下一张等所有标志都在这里找，框大一点"),
             ("activity_list", "活动列表区域", "「活动」界面里那片列表，滚轮在此翻找「宝图任务」条目"),
             ("bag_list", "背包列表区域", "背包里道具格那片区域，滚轮在此翻找藏宝图"),
-            ("activity_button", "活动入口按钮(可选)", "若「活动」没有快捷键，标这个按钮，脚本点它打开活动"),
-            ("blank_spot", "安全空白处(可选)", "卡死恢复时点这里关掉异常弹窗，选一处永远安全的空地"),
         ],
         "templates": [
             ("flag_treasure_entry", "宝图任务入口", "活动列表里「宝图任务」那一条，框图标+文字、要独特"),
+            ("flag_join", "参加按钮", "活动列表里「宝图任务」那一行右侧的「参加」按钮，框按钮本身、要独特"),
             ("flag_tingting", "「听听无妨」选项", "和 NPC 对话弹框里要点的那个选项"),
             ("flag_next_map", "「下一张使用」按钮", "挖完一张后游戏自动弹出的继续按钮"),
             ("treasure_item", "藏宝图道具", "背包里藏宝图那个图标的样子"),
             ("flag_battle", "战斗界面标志(可选)", "战斗独有的画面元素，用于避免战斗期被误判卡死"),
-            ("flag_dialog", "对话框标志(可选)", "对话框出现的独特标志，用于等对话/排除误判"),
         ],
         "watchlist": False,
     }
@@ -84,18 +86,18 @@ class TreasureMapTask(Task):
             if not regions.get(rk):
                 problems.append(f"『{label}』未标定 —— 请先做标定")
 
-        # 模板：挖宝必备始终要；领宝图的两个仅阶段A要
+        # 模板：挖宝必备始终要；领宝图相关仅阶段A要（含「参加」按钮）
         need_flags = ["flag_next_map", "treasure_item"]
         if not skip_collect:
-            need_flags += ["flag_treasure_entry", "flag_tingting"]
+            need_flags += ["flag_treasure_entry", "flag_join", "flag_tingting"]
         for tk in need_flags:
             path = templates.get(tk)
             if not path or vision.load_template(path) is None:
                 problems.append(f"模板『{tk}』缺失或加载失败 —— 请在标定向导里框选裁图")
 
-        # 活动入口仅阶段A需要：要么有快捷键，要么标了 activity_button 坐标
-        if not skip_collect and not ctx.hotkeys.get("open_activity") and not regions.get("activity_button"):
-            problems.append("打开『活动』没有办法：请在设置里填 open_activity 快捷键，或标定『活动入口按钮』")
+        # 活动入口仅阶段A需要：必须有 open_activity 快捷键（默认 Alt+C）
+        if not skip_collect and not ctx.hotkeys.get("open_activity"):
+            problems.append("打开『活动』缺快捷键：请在 config.hotkeys.open_activity 填上（如 alt+c）")
         # 开背包必须有快捷键（没有背包按钮可点）
         if not ctx.hotkeys.get("open_bag"):
             problems.append("打开『背包』缺快捷键：请在 config.hotkeys.open_bag 填上（如 alt+e）")
@@ -103,8 +105,8 @@ class TreasureMapTask(Task):
         if not ctx.window.locate():
             problems.append(f"没找到游戏窗口（标题含「{ctx.window.title_substr}」），请先打开游戏")
 
-        # 可选模板缺失只提示（flag_dialog 仅阶段A用，已有宝图时不提）
-        optional = ["flag_battle"] if skip_collect else ["flag_battle", "flag_dialog"]
+        # 可选模板缺失只提示
+        optional = ["flag_battle"]
         for tk in optional:
             if not templates.get(tk) or vision.load_template(templates.get(tk)) is None:
                 ctx.log(f"提示：可选模板『{tk}』未标定，将降级靠帧差+超时推进（可靠性略降）。", level="warn")
@@ -133,7 +135,7 @@ class TreasureMapTask(Task):
             if self._skip_collect:
                 hint = "打开背包，看日志能否认出 藏宝图/下一张/战斗"
             else:
-                hint = "手动打开对应界面，看日志能否认出 宝图入口/听听无妨/战斗/下一张/藏宝图"
+                hint = "手动打开对应界面，看日志能否认出 宝图入口/参加按钮/听听无妨/战斗/下一张/藏宝图"
             ctx.log("演练模式：不会真正推进副本，仅对当前屏幕循环做『各标志识别自检』。"
                     + hint + "。", level="warn")
             self._dry_run_selfcheck(ctx, regions, threshold, deadline, self._skip_collect)
@@ -147,7 +149,9 @@ class TreasureMapTask(Task):
             ctx.log(f"时间上限 {time_limit} 分钟（到点自停）。主终止条件是背包藏宝图挖空。")
 
         self._dug = 0
-        state = S_RESET
+        # 不再开头复位，直接进入对应阶段起始状态
+        start_state = S_DIG_OPEN_BAG if self._skip_collect else S_OPEN_ACTIVITY
+        state = start_state
         state_enter = time.time()
         recover = 0
 
@@ -168,14 +172,15 @@ class TreasureMapTask(Task):
                 break
             if nxt == "STUCK":
                 recover += 1
-                ctx.log(f"状态 {state} 卡住（第 {recover}/{loop.get('max_stuck_recover',3)} 次），尝试复位恢复…",
+                ctx.log(f"状态 {state} 卡住（第 {recover}/{loop.get('max_stuck_recover',3)} 次），尝试恢复…",
                         level="warn")
                 self._save_capture(self._grab_scene(ctx, regions), f"stuck_{state}")
                 if recover >= loop.get("max_stuck_recover", 3):
                     ctx.log("多次卡死仍无进展，主动停止。", level="error")
                     break
-                self._reset(ctx, ctx.hotkeys)
-                state, state_enter = S_RESET, time.time()
+                # 卡死兜底恢复：按一次 Esc 清掉异常弹窗（与正常流程的「复位」无关），回阶段起点重试
+                self._recover(ctx)
+                state, state_enter = start_state, time.time()
                 continue
 
             # 到达里程碑(收集/挖宝/挖到图)就清零恢复计数
@@ -190,10 +195,6 @@ class TreasureMapTask(Task):
     # 状态分发
     # ------------------------------------------------------------------
     def _dispatch(self, ctx, state, tc, loop, regions, threshold):
-        if state == S_RESET:
-            self._reset(ctx, ctx.hotkeys)
-            # 已有宝图：跳过阶段A(开活动领宝图)，复位后直接进挖宝
-            return S_DIG_OPEN_BAG if self._skip_collect else S_OPEN_ACTIVITY
         if state == S_OPEN_ACTIVITY:
             return self._st_open_activity(ctx, loop, regions, threshold)
         if state == S_DIALOG:
@@ -219,24 +220,20 @@ class TreasureMapTask(Task):
         except Exception:
             pass
 
-    def _reset(self, ctx, hotkeys):
-        """复位：先把游戏切到前台，再连发几次「关闭面板」快捷键，回到可操作状态。"""
+    def _recover(self, ctx):
+        """卡死兜底恢复（仅 STUCK 时用，不在正常流程跑）：聚焦游戏 + 按一次 Esc 清掉异常弹窗。
+        与用户要求去掉的「开头复位」不同——这里只为从卡死里爬出来。"""
         self._focus(ctx)
-        ctx.log("复位：关闭所有面板…")
-        for _ in range(3):
-            if ctx.should_stop():
-                return
-            if not ctx.send_hotkey("close_panel"):
-                break   # 没配 close_panel 就跳过
+        ctx.log("卡死恢复：按一次 Esc 关掉可能的异常弹窗…")
+        if ctx.send_hotkey("close_panel"):
             self._interruptible_sleep(ctx, self._jitter(0.25, ctx))
 
     def _st_open_activity(self, ctx, loop, regions, threshold):
-        # 打开活动：优先快捷键，没有就点标定的活动按钮（发键前先激活游戏）
+        # 打开活动：发 open_activity 快捷键（默认 Alt+C；发键前先激活游戏）
         self._focus(ctx)
         if not ctx.send_hotkey("open_activity"):
-            if not self._click_region(ctx, regions.get("activity_button")):
-                ctx.log("打不开活动界面（无快捷键且未标定活动按钮）。", level="error")
-                return "STUCK"
+            ctx.log("打不开活动界面（open_activity 快捷键未配置）。", level="error")
+            return "STUCK"
         ctx.log("已打开活动，滚轮翻找「宝图任务」…")
         self._interruptible_sleep(ctx, self._jitter(0.6, ctx))
 
@@ -245,9 +242,54 @@ class TreasureMapTask(Task):
         if hit is None:
             ctx.log("活动列表里没找到「宝图任务」入口。", level="warn")
             return "STUCK"
-        ctx.mouse.click(hit[0], hit[1])
-        ctx.log(f"点击「宝图任务」入口（相似度 {hit[2]:.3f}）。")
+        ctx.log(f"找到「宝图任务」条目（相似度 {hit[2]:.3f}），在该行右侧找「参加」按钮…")
+
+        # 点该行【右侧的「参加」按钮】，不是点条目本身
+        join = self._find_join_on_row(ctx, regions.get("activity_list"), (hit[0], hit[1]), threshold)
+        if join is None:
+            ctx.log("找到了「宝图任务」但没认出右侧的「参加」按钮（检查 flag_join 模板/阈值）。", level="warn")
+            return "STUCK"
+        ctx.mouse.click(join[0], join[1])
+        ctx.log(f"点击「参加」（相似度 {join[2]:.3f}），开始传送找 NPC。", level="hit")
         return S_DIALOG
+
+    def _find_join_on_row(self, ctx, list_region, entry_screen_xy, threshold):
+        """在「宝图任务」条目所在【行】的右侧条带里匹配「参加」按钮(flag_join)。
+        命中返回 (screen_x, screen_y, score)，否则 None。
+        按行+只取条目右侧，能抗滚动、抗一屏多个「参加」按钮。"""
+        join_tpl = self.flags.get("flag_join")
+        entry_tpl = self.flags.get("flag_treasure_entry")
+        if join_tpl is None:
+            ctx.log("找「参加」失败：flag_join 模板未标定。", level="warn")
+            return None
+        rect = (ctx.window.region_to_screen_rect(list_region)
+                if list_region else ctx.window.rect())
+        if rect is None:
+            return None
+        scene = win_mod.grab(rect)
+        if scene is None:
+            return None
+        rx, ry = rect[0], rect[1]
+        ex, ey = entry_screen_xy
+        # 行条带高度：取条目模板高 ×2，下限 40px；纵向以条目中心为中线
+        row_h = entry_tpl.shape[0] if entry_tpl is not None else 40
+        band = max(40, int(row_h * 2))
+        sh, sw = scene.shape[:2]
+        # 换算到 scene 局部坐标：纵向取条带、横向从条目中心到列表右缘（只看右侧）
+        ey_local = int(ey - ry)
+        ex_local = int(ex - rx)
+        y0 = max(0, ey_local - band // 2)
+        y1 = min(sh, ey_local + band // 2)
+        x0 = max(0, ex_local)
+        x1 = sw
+        if y1 - y0 < 1 or x1 - x0 < 1:
+            return None
+        crop = scene[y0:y1, x0:x1]
+        m = vision.match(crop, join_tpl, threshold)
+        if m is None:
+            return None
+        cx, cy, score = m
+        return (rx + x0 + cx, ry + y0 + cy, score)
 
     def _st_dialog(self, ctx, loop, regions, threshold):
         """等 NPC 对话框出现，点「听听无妨」。"""
@@ -271,23 +313,31 @@ class TreasureMapTask(Task):
         return "STOP"
 
     def _st_collecting(self, ctx, loop, regions, threshold):
-        """监控收集阶段：自动寻宝+自动战斗，直到人物持续静止（且非战斗非对话）=收集完成。"""
+        """监控收集阶段：自动寻宝+自动战斗，直到人物持续静止（且非战斗）=收集完成。
+        判定：整屏相邻帧平均像素差 < still_diff 持续 collect_idle_sec 秒。"""
         ctx.log("收集阶段：自动寻宝中（战斗交给游戏），等人物站定…")
         idle_need = loop.get("collect_idle_sec", 4.0)
         overall = loop.get("collect_timeout_sec", 600)
+        still_diff = loop.get("still_diff", _STILL_DIFF)
         t0 = time.time()
         last = None
         still_since = None
+        last_diag = 0.0
         while not ctx.should_stop():
             if time.time() - t0 > overall:
-                ctx.log("收集阶段超时。", level="warn")
-                return "STUCK"
+                # 超时不再退回阶段A（活动已参加、按钮已变成「已参加」，重开会连环卡死）；
+                # 按「已收集完」直接转挖宝——挖不到图时 CHECK_DONE 会干净收尾。
+                ctx.log(f"收集超过 {overall:.0f}s 仍没判到静止（多半是 still_diff 偏小），"
+                        "按已收集完处理，转入挖宝。", level="warn")
+                return S_DIG_OPEN_BAG
             scene_rect = self._scene_rect(ctx, regions)
             cur = win_mod.grab(scene_rect)
-            if self._present(cur, "flag_battle", threshold) or self._present(cur, "flag_dialog", threshold):
-                still_since, last = None, None   # 战斗/对话中不计静止
+            in_battle = self._present(cur, "flag_battle", threshold)
+            diff = self._frame_diff(last, cur) if last is not None else None
+            if in_battle:
+                still_since, last = None, None   # 战斗中不计静止
             else:
-                if last is not None and self._frame_diff(last, cur) < _STILL_DIFF:
+                if diff is not None and diff < still_diff:
                     if still_since is None:
                         still_since = time.time()
                     elif time.time() - still_since >= idle_need:
@@ -296,8 +346,22 @@ class TreasureMapTask(Task):
                 else:
                     still_since = None
                 last = cur
+            last_diag = self._log_motion_diag(ctx, "收集中", diff, still_diff, idle_need,
+                                              still_since, in_battle, last_diag)
             self._interruptible_sleep(ctx, 0.3)
         return "STOP"
+
+    def _log_motion_diag(self, ctx, label, diff, still_diff, idle_need,
+                         still_since, in_battle, last_diag):
+        """每 ~5s 打印一次实时帧差诊断，便于据此调 still_diff。返回新的 last_diag 时间。"""
+        now = time.time()
+        if now - (last_diag or 0.0) < 5.0:
+            return last_diag
+        d = f"{diff:.1f}" if diff is not None else "—"
+        held = (now - still_since) if still_since else 0.0
+        extra = "，战斗中" if in_battle else ""
+        ctx.log(f"{label}…帧差 {d}（静止阈值 {still_diff}，已静止 {held:.1f}/{idle_need}s）{extra}")
+        return now
 
     # ---- 阶段 B ----
     def _st_dig_open_bag(self, ctx):
@@ -323,9 +387,11 @@ class TreasureMapTask(Task):
         """监控挖宝：挖完游戏弹「下一张使用」→点它继续；长时间无弹窗且静止→认为挖完。"""
         per_map_timeout = loop.get("dig_timeout_sec", 120)
         idle_need = loop.get("collect_idle_sec", 4.0)
+        still_diff = loop.get("still_diff", _STILL_DIFF)
         t0 = time.time()
         last = None
         still_since = None
+        last_diag = 0.0
         while not ctx.should_stop():
             scene_rect = self._scene_rect(ctx, regions)
             cur = win_mod.grab(scene_rect)
@@ -341,10 +407,12 @@ class TreasureMapTask(Task):
                 self._interruptible_sleep(ctx, self._jitter(1.0, ctx))
                 continue
 
-            if self._present(cur, "flag_battle", threshold):
+            in_battle = self._present(cur, "flag_battle", threshold)
+            diff = self._frame_diff(last, cur) if last is not None else None
+            if in_battle:
                 t0, last, still_since = time.time(), None, None   # 战斗中刷新计时
             else:
-                if last is not None and self._frame_diff(last, cur) < _STILL_DIFF:
+                if diff is not None and diff < still_diff:
                     if still_since is None:
                         still_since = time.time()
                     elif time.time() - still_since >= idle_need:
@@ -354,6 +422,8 @@ class TreasureMapTask(Task):
                     still_since = None
                 last = cur
 
+            last_diag = self._log_motion_diag(ctx, "挖宝中", diff, still_diff, idle_need,
+                                              still_since, in_battle, last_diag)
             if time.time() - t0 > per_map_timeout:
                 ctx.log("单张挖宝超时，去确认背包。", level="warn")
                 return S_CHECK_DONE
@@ -371,9 +441,16 @@ class TreasureMapTask(Task):
                                 self.flags.get("treasure_item"), loop, threshold, "藏宝图(确认)")
         if hit is not None:
             ctx.log("背包仍有藏宝图，继续挖。")
-            return S_DIG_FIND
-        ctx.log("背包已无藏宝图 → 全部挖完。", level="hit")
+            return S_DIG_FIND   # 仍要挖：保持背包打开
+        ctx.log("背包已无藏宝图 → 全部挖完，关上背包。", level="hit")
+        self._close_bag(ctx)
         return S_FINISHED
+
+    def _close_bag(self, ctx):
+        """收尾关背包：聚焦后按一次「关闭面板」(Esc)。"""
+        self._focus(ctx)
+        if ctx.send_hotkey("close_panel"):
+            self._interruptible_sleep(ctx, self._jitter(0.25, ctx))
 
     # ------------------------------------------------------------------
     # 工具
@@ -432,8 +509,8 @@ class TreasureMapTask(Task):
             keys = [("flag_battle", "战斗"), ("flag_next_map", "下一张使用"),
                     ("treasure_item", "藏宝图")]
         else:
-            keys = [("flag_treasure_entry", "宝图入口"), ("flag_tingting", "听听无妨"),
-                    ("flag_dialog", "对话框"), ("flag_battle", "战斗"),
+            keys = [("flag_treasure_entry", "宝图入口"), ("flag_join", "参加按钮"),
+                    ("flag_tingting", "听听无妨"), ("flag_battle", "战斗"),
                     ("flag_next_map", "下一张使用"), ("treasure_item", "藏宝图")]
         while not ctx.should_stop():
             if deadline and time.time() >= deadline:

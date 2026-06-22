@@ -462,14 +462,26 @@ class TreasureMapPage(ctk.CTkFrame):
         self.var_limit = ctk.StringVar(value="30")
         ctk.CTkEntry(lim, textvariable=self.var_limit, width=70, font=self.fonts["body"],
                      fg_color=T.SURFACE_2, border_color=T.BORDER).pack(side="left", padx=(8, 0))
+
+        sd = ctk.CTkFrame(left, fg_color="transparent")
+        sd.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 6))
+        ctk.CTkLabel(sd, text="静止判定阈值(收集/挖宝完成)", font=self.fonts["body"],
+                     text_color=T.TEXT).pack(side="left")
+        self.var_still = ctk.StringVar(value="8")
+        ctk.CTkEntry(sd, textvariable=self.var_still, width=70, font=self.fonts["body"],
+                     fg_color=T.SURFACE_2, border_color=T.BORDER).pack(side="left", padx=(8, 0))
+
         ctk.CTkLabel(left, text="主终止条件是背包藏宝图挖空；时间上限只是安全网。\n"
+                               "“静止判定阈值”太小会一直判不到收集完成→看日志里的实时“帧差”，"
+                               "把阈值设到“静止时帧差”之上、“走动时帧差”之下。\n"
                                "鼠标甩到屏幕左上角可紧急停止。",
-                     font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left").grid(
-                         row=2, column=0, sticky="w", padx=16, pady=(2, 8))
+                     font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left",
+                     wraplength=340).grid(
+                         row=3, column=0, sticky="w", padx=16, pady=(2, 8))
 
         self.lbl_calib = ctk.CTkLabel(left, text="", font=self.fonts["small"], text_color=T.TEXT_DIM,
                                       justify="left")
-        self.lbl_calib.grid(row=3, column=0, sticky="w", padx=16, pady=(2, 14))
+        self.lbl_calib.grid(row=4, column=0, sticky="w", padx=16, pady=(2, 14))
 
         # 右：日志
         right = Card(body)
@@ -503,14 +515,16 @@ class TreasureMapPage(ctk.CTkFrame):
         self._render_mode_pill(dry)
         skip = tc.get("skip_collect", False)
         (self.switch_skip.select if skip else self.switch_skip.deselect)()
-        lim = tc.get("loop", {}).get("time_limit_min", 30)
-        self.var_limit.set(str(lim))
+        loopc = tc.get("loop", {})
+        self.var_limit.set(str(loopc.get("time_limit_min", 30)))
+        self.var_still.set(str(loopc.get("still_diff", 8.0)))
         # 标定完成度概览（已有宝图时只需挖宝相关项）
         regions = tc.get("regions", {})
         templates = tc.get("templates", {})
         need_r = ["scene", "bag_list"] if skip else ["scene", "activity_list", "bag_list"]
         need_t = (["flag_next_map", "treasure_item"] if skip else
-                  ["flag_treasure_entry", "flag_tingting", "flag_next_map", "treasure_item"])
+                  ["flag_treasure_entry", "flag_join", "flag_tingting",
+                   "flag_next_map", "treasure_item"])
         rdone = sum(1 for k in need_r if regions.get(k))
         tdone = sum(1 for k in need_t if templates.get(k))
         self.lbl_calib.configure(
@@ -550,13 +564,18 @@ class TreasureMapPage(ctk.CTkFrame):
         self.btn_run.configure(text="■  停止", fg_color=T.DANGER, hover_color=T.DANGER_HOVER, state="normal")
 
     def _apply_time_limit(self):
-        try:
-            v = float(self.var_limit.get())
-        except (TypeError, ValueError):
-            return
+        """启动前把「运行参数」里可调项（时间上限 / 静止判定阈值）写回配置。"""
         cfg = cfg_mod.load_config()
         tc = cfg_mod.task_config(cfg, self.TASK_NAME)
-        tc.setdefault("loop", {})["time_limit_min"] = max(0.0, round(v, 1))
+        loopc = tc.setdefault("loop", {})
+        try:
+            loopc["time_limit_min"] = max(0.0, round(float(self.var_limit.get()), 1))
+        except (TypeError, ValueError):
+            pass
+        try:
+            loopc["still_diff"] = max(0.5, round(float(self.var_still.get()), 1))
+        except (TypeError, ValueError):
+            pass
         cfg_mod.set_task_config(cfg, self.TASK_NAME, tc)
         cfg_mod.save_config(cfg)
         self.app.cfg = cfg

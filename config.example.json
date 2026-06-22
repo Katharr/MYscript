@@ -16,8 +16,50 @@
   "hotkeys": {
     "close_panel": ["esc"],
     "open_bag": ["alt", "e"],
-    "open_task": ["alt", "q"],
-    "open_activity": []
+    "open_task": ["alt", "y"],
+    "open_activity": ["alt", "c"],
+    "open_character": ["alt", "w"],
+    "open_skill": ["alt", "s"],
+    "open_summon": ["alt", "q"],
+    "open_team": ["alt", "t"],
+    "open_friend": ["alt", "f"],
+    "open_rank": ["alt", "r"],
+    "open_map": ["alt", "m"],
+    "open_minimap": ["tab"],
+    "open_system": ["alt", "j"],
+    "open_mount": ["alt", "k"],
+    "open_guide": ["alt", "h"],
+    "open_shop": ["alt", "a"],
+    "open_welfare": ["alt", "d"],
+    "open_strengthen": ["alt", "v"],
+    "open_guild": ["alt", "b"],
+    "open_home": ["alt", "n"],
+    "open_helper": ["alt", "z"],
+    "open_chat": ["alt", "x"],
+    "hide_ui": ["alt", "p"],
+    "afk": ["alt", "g"],
+    "boss_key": ["alt", "l"],
+    "pin_window": ["alt", "u"]
+  },
+  "game_hotkeys": {
+    "field": {
+      "f7": "横竖屏切换", "tab": "小地图",
+      "alt+q": "召唤灵", "alt+w": "人物", "alt+e": "包裹", "alt+r": "排行",
+      "alt+t": "队伍", "alt+y": "任务", "alt+u": "置顶客户端", "alt+p": "隐藏界面",
+      "alt+a": "商城", "alt+s": "技能", "alt+d": "福利", "alt+f": "好友",
+      "alt+g": "挂机", "alt+h": "指引", "alt+j": "系统", "alt+k": "坐骑", "alt+l": "老板键",
+      "alt+z": "助战", "alt+x": "聊天", "alt+c": "活动", "alt+v": "强化",
+      "alt+b": "帮派", "alt+n": "家园", "alt+m": "大地图"
+    },
+    "battle": {
+      "f7": "横竖屏切换",
+      "alt+q": "默认随机法术", "alt+w": "法术", "alt+e": "道具", "alt+r": "召唤",
+      "alt+t": "保护", "alt+y": "任务", "alt+u": "置顶客户端",
+      "alt+a": "攻击", "alt+s": "默认法术", "alt+d": "防御", "alt+f": "好友",
+      "alt+g": "捕捉", "alt+h": "指引", "alt+j": "系统", "alt+k": "坐骑", "alt+l": "老板键",
+      "alt+z": "特技", "alt+x": "聊天", "alt+c": "法宝", "alt+v": "强化",
+      "alt+b": "帮派", "alt+n": "家园"
+    }
   },
   "tasks": {
     "sniper": {
@@ -49,6 +91,7 @@
         "tick_interval_sec": 0.6,
         "still_min_sec": 0.3,
         "still_wait_sec": 2.0,
+        "still_diff": 8.0,
         "collect_idle_sec": 4.0,
         "activity_timeout_sec": 30,
         "dialog_timeout_sec": 30,
@@ -60,15 +103,13 @@
       },
       "regions": {
         "scene": [0, 0, 1024, 768],
-        "activity_button": [900, 120, 60, 40],
         "activity_list": [600, 200, 360, 420],
-        "bag_list": [560, 220, 380, 360],
-        "blank_spot": [200, 150, 20, 20]
+        "bag_list": [560, 220, 380, 360]
       },
       "templates": {
         "flag_treasure_entry": "templates/tm_flag_treasure_entry.png",
+        "flag_join": "templates/tm_flag_join.png",
         "flag_tingting": "templates/tm_flag_tingting.png",
-        "flag_dialog": null,
         "flag_battle": "templates/tm_flag_battle.png",
         "flag_next_map": "templates/tm_flag_next_map.png",
         "treasure_item": "templates/tm_treasure_item.png"

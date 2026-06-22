@@ -45,15 +45,64 @@ DEFAULT_CONFIG = {
         "idle_max_sec": 5.0
     },
 
-    # ---- 游戏快捷键（脚本导航/复位用，键名列表，如 ["alt","e"]）----
-    #   ⚠ 这些是《梦幻西游》经典端游的键位种子值，时空(手游PC端)可能不同！
-    #     用户须进游戏「系统设置-快捷键」核对后改这里。某项留空 [] 表示该入口没有快捷键，
-    #     任务会降级为点击标定坐标（如 open_activity 空时点 regions.activity_button）。
+    # ---- 游戏快捷键：脚本按「动作名」调用的语义映射（ctx.send_hotkey("open_bag")，键名列表）----
+    #   ✅ 2026-06-22 已按用户提供的《时空》游戏内【快捷键预览截图】逐格核对/订正（图为权威来源）。
+    #     ⚠ 之前那份文字情报有误：F8/O 实际是【未绑定】，活动其实是 Alt+C、聊天其实是 Alt+X。
+    #     某项留空 [] 表示该入口没快捷键（个别任务会据此降级处理）。
+    #     注：同一物理键在「功能页/战斗页」可能是不同功能，下面取的是【功能页(非战斗)】含义——
+    #     脚本导航基本都在非战斗态发起。完整实测全表见顶层 game_hotkeys。
     "hotkeys": {
-        "close_panel": ["esc"],          # 关闭面板/复位
-        "open_bag": ["alt", "e"],        # 打开背包（经典端游 Alt+E，待核对）
-        "open_task": ["alt", "q"],       # 打开任务栏
-        "open_activity": []              # 打开「活动」界面：键位未知，留空→点 activity_button 坐标
+        "close_panel": ["esc"],          # 关闭面板/复位（Esc 游戏内未绑定，但通用关面板/退栈）
+        "open_bag": ["alt", "e"],        # 包裹
+        "open_task": ["alt", "y"],       # 任务（订正：旧种子 alt+q 错——时空 alt+q 是召唤灵/默认随机法术）
+        "open_activity": ["alt", "c"],   # 活动（订正：实测 Alt+C；F8 其实未绑定，旧情报误把 F8 当活动）
+        "open_character": ["alt", "w"],  # 人物
+        "open_skill": ["alt", "s"],      # 技能（仅功能页；战斗页 alt+s 是默认法术）
+        "open_summon": ["alt", "q"],     # 召唤灵（功能页）
+        "open_team": ["alt", "t"],       # 队伍（功能页；战斗页 alt+t 是保护）
+        "open_friend": ["alt", "f"],     # 好友
+        "open_rank": ["alt", "r"],       # 排行（功能页；战斗页 alt+r 是召唤）
+        "open_map": ["alt", "m"],        # 大地图
+        "open_minimap": ["tab"],         # 小地图（功能页 Tab）
+        "open_system": ["alt", "j"],     # 系统
+        "open_mount": ["alt", "k"],      # 坐骑
+        "open_guide": ["alt", "h"],      # 指引
+        "open_shop": ["alt", "a"],       # 商城（功能页；战斗页 alt+a 是攻击）
+        "open_welfare": ["alt", "d"],    # 福利（功能页；战斗页 alt+d 是防御）
+        "open_strengthen": ["alt", "v"], # 强化
+        "open_guild": ["alt", "b"],      # 帮派
+        "open_home": ["alt", "n"],       # 家园
+        "open_helper": ["alt", "z"],     # 助战（功能页；战斗页 alt+z 是特技）
+        "open_chat": ["alt", "x"],       # 聊天（订正：实测 Alt+X；O 其实未绑定）
+        "hide_ui": ["alt", "p"],         # 隐藏界面（功能页）
+        "afk": ["alt", "g"],             # 挂机（功能页；战斗页 alt+g 是捕捉）
+        "boss_key": ["alt", "l"],        # 老板键
+        "pin_window": ["alt", "u"]       # 置顶客户端
+    },
+
+    # ---- 《时空》游戏内快捷键【实测全表】（用户 2026-06-22 截图核对，作为今后操控游戏的权威依据）----
+    #   只读参考表：脚本实际调用走上面的语义 hotkeys，新增任务/战斗逻辑时来这查键位。
+    #   只收录「已绑定」项（无绑定不列，故 F8/O/P/M(战斗) 等未绑定键不出现）。
+    #   同一物理键在两页可能是不同功能，故分开记录；用 物理键 -> 功能 表示。
+    "game_hotkeys": {
+        "field": {                       # 功能页（非战斗）
+            "f7": "横竖屏切换", "tab": "小地图",
+            "alt+q": "召唤灵", "alt+w": "人物", "alt+e": "包裹", "alt+r": "排行",
+            "alt+t": "队伍", "alt+y": "任务", "alt+u": "置顶客户端", "alt+p": "隐藏界面",
+            "alt+a": "商城", "alt+s": "技能", "alt+d": "福利", "alt+f": "好友",
+            "alt+g": "挂机", "alt+h": "指引", "alt+j": "系统", "alt+k": "坐骑", "alt+l": "老板键",
+            "alt+z": "助战", "alt+x": "聊天", "alt+c": "活动", "alt+v": "强化",
+            "alt+b": "帮派", "alt+n": "家园", "alt+m": "大地图"
+        },
+        "battle": {                      # 战斗页
+            "f7": "横竖屏切换",
+            "alt+q": "默认随机法术", "alt+w": "法术", "alt+e": "道具", "alt+r": "召唤",
+            "alt+t": "保护", "alt+y": "任务", "alt+u": "置顶客户端",
+            "alt+a": "攻击", "alt+s": "默认法术", "alt+d": "防御", "alt+f": "好友",
+            "alt+g": "捕捉", "alt+h": "指引", "alt+j": "系统", "alt+k": "坐骑", "alt+l": "老板键",
+            "alt+z": "特技", "alt+x": "聊天", "alt+c": "法宝", "alt+v": "强化",
+            "alt+b": "帮派", "alt+n": "家园"
+        }
     },
 
     # ---- 各任务独立配置 ----
@@ -87,6 +136,9 @@ DEFAULT_CONFIG = {
                 "tick_interval_sec": 0.6,    # 每次「截图→判状态」的节拍（带抖动）
                 "still_min_sec": 0.3,        # 帧差判静止：最短先等
                 "still_wait_sec": 2.0,       # 帧差判静止：单次最长等/超时
+                "still_diff": 8.0,           # 收集/挖宝判「人物静止」的整屏帧差阈值：低于此算静止。
+                                             #   太小→待机动画/周围走动/特效让永远判不到静止→误超时；
+                                             #   运行日志会实时打印真实帧差，照着设到静止<阈值<走动即可。
                 "collect_idle_sec": 4.0,     # 收集阶段：人物连续静止这么久且非战斗非对话→判定收集完成
                 "activity_timeout_sec": 30,  # 开活动→找到宝图入口的超时
                 "dialog_timeout_sec": 30,    # 等 NPC 对话框出现的超时
@@ -98,15 +150,13 @@ DEFAULT_CONFIG = {
             },
             "regions": {                 # 相对游戏窗口 [x,y,w,h]，标定向导写入
                 "scene": None,           # 主识别区（整窗或大半屏，所有 flag 都在这里找）
-                "activity_button": None, # 「活动」入口按钮（open_activity 无快捷键时点它）
                 "activity_list": None,   # 活动列表区域（滚轮在此找宝图任务条目）
-                "bag_list": None,        # 背包列表区域（滚轮在此找藏宝图）
-                "blank_spot": None       # 安全空白处（卡死恢复时点这里关弹窗）
+                "bag_list": None         # 背包列表区域（滚轮在此找藏宝图）
             },
             "templates": {               # 状态标志模板路径（标定向导裁图写入，tm_ 前缀）
                 "flag_treasure_entry": None, # 活动列表里「宝图任务」条目
+                "flag_join": None,           # 「宝图任务」那一行右侧的「参加」按钮（按行匹配点它）
                 "flag_tingting": None,       # 对话框「听听无妨」选项
-                "flag_dialog": None,         # 对话框出现的标志（可选）
                 "flag_battle": None,         # 战斗界面独有标志（监控用，避免误判卡死）
                 "flag_next_map": None,       # 挖完弹出的「下一张使用」按钮
                 "treasure_item": None        # 背包里藏宝图道具图标（双击用图靠它定位）
