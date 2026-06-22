@@ -9,3 +9,4 @@ from .base import Task, register, get_task, all_tasks  # noqa: F401
 # —— 在此注册所有任务（import 即触发注册）——
 from . import sniper         # noqa: F401,E402
 from . import treasure_map   # noqa: F401,E402
+from . import escort         # noqa: F401,E402

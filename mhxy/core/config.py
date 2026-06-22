@@ -161,6 +161,37 @@ DEFAULT_CONFIG = {
                 "flag_next_map": None,       # 挖完弹出的「下一张使用」按钮
                 "treasure_item": None        # 背包里藏宝图道具图标（双击用图靠它定位）
             }
+        },
+
+        # ---- 运镖（一次性循环押镖状态机；游戏自带自动寻路+自动战斗，脚本只导航+监控+关键点击）----
+        "escort": {
+            "dry_run": True,             # true=演练：只识别+打日志，不发快捷键/不点关键操作
+            "loop": {
+                "time_limit_min": 30,        # 时间上限（分钟）安全网，0=不限；主终止是「对话框不再弹出」
+                "match_threshold": 0.85,     # 标志模板匹配阈值
+                "max_escorts": 3,            # 押镖次数：做满即停（与「对话框不再弹出」互为保险）
+                "done_idle_sec": 6.0,        # 已是最后一趟、「运镖中」标志消失且无新对话框，持续这么久→判定全部结束
+                "dialog_timeout_sec": 60,    # 点「参加」后等首个「押送普通镖银」对话框的超时
+                "confirm_timeout_sec": 10,   # 点「押送普通镖银」后等「确认」按钮的超时（超时容错继续）
+                "escort_timeout_sec": 600,   # 单趟运镖（含自动战斗）超时，超了按本批结束处理
+                "still_min_sec": 0.3,        # 帧差判静止：最短先等
+                "still_wait_sec": 2.0,       # 帧差判静止：单次最长等/超时
+                "scroll_step": -3,           # 每次滚轮格数（负=向下翻）
+                "scroll_max_tries": 8,       # 滑动找「运镖」最多翻几屏
+                "max_stuck_recover": 3       # 连续卡死多少次就主动停
+            },
+            "regions": {                 # 相对游戏窗口 [x,y,w,h]，标定向导写入
+                "scene": None,           # 主识别区（整窗或大半屏，所有 flag 都在这里找）
+                "activity_list": None    # 活动列表区域（滚轮在此找运镖条目）
+            },
+            "templates": {               # 状态标志模板路径（标定向导裁图写入，tm_ 前缀）
+                "escort_entry": None,    # 活动列表里「运镖」条目
+                "escort_join": None,     # 「运镖」那一行右侧的「参加」按钮（按行匹配点它）
+                "escort_silver": None,   # 对话框「押送普通镖银」按钮
+                "escort_confirm": None,  # 点押送后再弹出的「确认」按钮
+                "escort_ongoing": None,  # 运镖途中常驻的「运镖中」标志（在=还在运镖、不停）
+                "escort_battle": None    # 战斗界面独有标志（监控用，避免误判结束）
+            }
         }
     }
 }

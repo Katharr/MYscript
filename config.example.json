@@ -114,6 +114,35 @@
         "flag_next_map": "templates/tm_flag_next_map.png",
         "treasure_item": "templates/tm_treasure_item.png"
       }
+    },
+    "escort": {
+      "dry_run": true,
+      "loop": {
+        "time_limit_min": 30,
+        "match_threshold": 0.85,
+        "max_escorts": 3,
+        "done_idle_sec": 6.0,
+        "dialog_timeout_sec": 60,
+        "confirm_timeout_sec": 10,
+        "escort_timeout_sec": 600,
+        "still_min_sec": 0.3,
+        "still_wait_sec": 2.0,
+        "scroll_step": -3,
+        "scroll_max_tries": 8,
+        "max_stuck_recover": 3
+      },
+      "regions": {
+        "scene": [0, 0, 1024, 768],
+        "activity_list": [600, 200, 360, 420]
+      },
+      "templates": {
+        "escort_entry": "templates/tm_escort_entry.png",
+        "escort_join": "templates/tm_escort_join.png",
+        "escort_silver": "templates/tm_escort_silver.png",
+        "escort_confirm": "templates/tm_escort_confirm.png",
+        "escort_ongoing": "templates/tm_escort_ongoing.png",
+        "escort_battle": "templates/tm_escort_battle.png"
+      }
     }
   }
 }
