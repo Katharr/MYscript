@@ -45,6 +45,7 @@ class CalibrateDialog(ctk.CTkToplevel):
 
         self.region_rows = {}
         self.template_rows = {}
+        self._full_window_keys = set()   # 支持「留空=整窗」的大检测区 key
         self.item_list = None
 
         self._build()
@@ -81,9 +82,14 @@ class CalibrateDialog(ctk.CTkToplevel):
             rcard = self._card(body, row); row += 1
             ctk.CTkLabel(rcard, text="① 区域与按钮", font=self.fonts["h2"], text_color=T.TEXT).grid(
                 row=0, column=0, columnspan=3, sticky="w", padx=16, pady=(14, 6))
-            for i, (key, name, desc) in enumerate(regions):
+            for i, item in enumerate(regions):
+                key, name, desc = item[0], item[1], item[2]
+                full_window = len(item) > 3 and bool(item[3])   # 第4元素=True 表示可整窗
+                if full_window:
+                    self._full_window_keys.add(key)
                 self._spec_row(rcard, 1 + i, key, name, desc, self.region_rows,
-                               lambda k=key, n=name: self._calibrate_region(k, n))
+                               lambda k=key, n=name: self._calibrate_region(k, n),
+                               full_window=full_window)
             ctk.CTkFrame(rcard, fg_color="transparent", height=8).grid(row=99, column=0)
 
         # ② 标志模板（框选裁图）
@@ -121,7 +127,7 @@ class CalibrateDialog(ctk.CTkToplevel):
         c.grid_columnconfigure(0, weight=1)
         return c
 
-    def _spec_row(self, card, grid_row, key, name, desc, store, command):
+    def _spec_row(self, card, grid_row, key, name, desc, store, command, full_window=False):
         row = ctk.CTkFrame(card, fg_color=T.SURFACE_2, corner_radius=T.RADIUS_SM)
         row.grid(row=grid_row, column=0, sticky="ew", padx=12, pady=4)
         row.grid_columnconfigure(0, weight=1)
@@ -131,10 +137,24 @@ class CalibrateDialog(ctk.CTkToplevel):
         ctk.CTkLabel(txt, text=desc, font=self.fonts["small"], text_color=T.TEXT_DIM).pack(anchor="w")
         status = ctk.CTkLabel(row, text="", font=self.fonts["small"], width=90)
         status.grid(row=0, column=1, padx=6)
+        # 可整窗的大检测区：多给一个「用整窗」按钮（把该区清空＝整窗检测）
+        if full_window:
+            ctk.CTkButton(row, text="用整窗", font=self.fonts["small"], width=58, height=30,
+                          corner_radius=T.RADIUS_SM, fg_color="transparent", hover_color=T.BORDER,
+                          border_width=1, border_color=T.BORDER,
+                          command=lambda k=key, n=name: self._use_full_window(k, n)).grid(
+                              row=0, column=2, padx=(0, 4))
         ctk.CTkButton(row, text="框选", font=self.fonts["body"], width=72, height=30,
                       corner_radius=T.RADIUS_SM, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
-                      command=command).grid(row=0, column=2, padx=(6, 12))
+                      command=command).grid(row=0, column=3, padx=(6, 12))
         store[key] = status
+
+    def _use_full_window(self, key, name):
+        """把某个可整窗的大检测区清空 → 运行时用整个窗口当检测区。"""
+        self.tc.setdefault("regions", {})[key] = None
+        self._save()
+        self._refresh()
+        self._toast(f"「{name}」已设为整窗检测（无需框选）", T.SUCCESS)
 
     def _build_watchlist_card(self, parent, grid_row):
         icard = self._card(parent, grid_row)
@@ -165,13 +185,21 @@ class CalibrateDialog(ctk.CTkToplevel):
 
     def _grab_roi(self, prompt, with_crop=False):
         title = self.cfg.get("window_title", "梦幻西游")
-        win = win_mod.GameWindow(title, self.cfg.get("window_offset", [0, 0]))
-        if not win.locate():
-            self._toast(f"没找到游戏窗口（标题含「{title}」），请先打开游戏。", T.WARN)
+        # 按「选择窗口」选中的目标窗口来标定（单开=选中那个；多开=第一个），
+        # 保证坐标相对将来真正操作的那个号——而不是自动选最大的那个。
+        wins = win_mod.resolve_targets(title, self.cfg.get("window_offset", [0, 0]),
+                                       self.cfg.get("targets", {}))
+        if not wins:
+            self._toast(f"没找到/没选中目标窗口（标题含「{title}」），"
+                        "请先打开游戏并在「选择窗口」里选好。", T.WARN)
             return None, None
+        win = wins[0]
         win.activate()
 
         wr = win.rect()
+        if wr is None:
+            self._toast("目标窗口已失效，请重新「选择窗口」。", T.WARN)
+            return None, None
         center = (wr[0] + wr[2] // 2, wr[1] + wr[3] // 2)
 
         self._set_alpha(0.0)
@@ -191,8 +219,10 @@ class CalibrateDialog(ctk.CTkToplevel):
             roi_abs, crop = result, None
         if roi_abs is None:
             return None, None
-        win.locate()
-        wr = win.rect()
+        wr = win.rect()        # win 已绑定到选中窗口，直接取它当前矩形（勿再 locate，否则会改选最大）
+        if wr is None:
+            self._toast("目标窗口已失效，请重新「选择窗口」。", T.WARN)
+            return None, None
         rel = [roi_abs[0] - wr[0], roi_abs[1] - wr[1], roi_abs[2], roi_abs[3]]
         return rel, crop
 
@@ -271,9 +301,12 @@ class CalibrateDialog(ctk.CTkToplevel):
     def _refresh(self):
         regions = self.tc.get("regions", {})
         for key, status in self.region_rows.items():
-            ok = bool(regions.get(key))
-            status.configure(text="● 已标定" if ok else "○ 未标定",
-                             text_color=T.SUCCESS if ok else T.TEXT_DIM)
+            if regions.get(key):
+                status.configure(text="● 已框选", text_color=T.SUCCESS)
+            elif key in self._full_window_keys:
+                status.configure(text="○ 整窗(默认)", text_color=T.TEXT_DIM)
+            else:
+                status.configure(text="○ 未标定", text_color=T.TEXT_DIM)
 
         templates = self.tc.get("templates", {})
         for key, status in self.template_rows.items():

@@ -66,6 +66,23 @@ class Task:
         except Exception:
             return True  # 非 Windows 或查询失败时不打扰
 
+    def _acquire_target_window(self, ctx):
+        """基础特性：把 ctx.window 指向「选择窗口」里选中的目标窗口，并保持有效。
+
+        - 已绑定且窗口仍有效 → 直接返回 True（快路径，不重复枚举）。
+        - 否则按 targets 配置重新选择并绑定（单开=选中那个号；多开暂取第一个，
+          多号顺序跑后续支持）。找不到任何目标窗口返回 False。
+
+        供有状态任务（运镖/宝图）替代原来每轮 `ctx.window.locate()`（那会自动选最大、
+        无法指定号），让它们也走「选择窗口」这条基础路径。"""
+        if ctx.window.rect() is not None:
+            return True
+        wins = ctx.select_windows()
+        if not wins:
+            return False
+        ctx.window = wins[0]
+        return ctx.window.rect() is not None
+
     def _jitter(self, base, ctx):
         r = ctx.cfg.get("humanize", {}).get("interval_jitter", 0.4)
         return max(0.05, base * (1 + random.uniform(-r, r)))

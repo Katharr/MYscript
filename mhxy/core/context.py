@@ -7,26 +7,56 @@
 import threading
 
 from . import config as cfg_mod
+from . import window as win_mod
 from .window import GameWindow
 from .input import Mouse
 
 
 class TaskContext:
-    def __init__(self, cfg, log_fn=None, stop_event=None):
+    def __init__(self, cfg, log_fn=None, stop_event=None, window=None, label=None):
         self.cfg = cfg
-        self.window = GameWindow(cfg.get("window_title", "梦幻西游"),
-                                 cfg.get("window_offset", [0, 0]))
+        # window 非空（多开派生子上下文）则绑定指定窗口；否则按标题建一个待 locate 的窗口。
+        self.window = window or GameWindow(cfg.get("window_title", "梦幻西游"),
+                                           cfg.get("window_offset", [0, 0]))
         self.mouse = Mouse(cfg.get("input_backend", "sendinput"),
                            cfg.get("humanize", {}))
         # 键盘动作（按键/组合键）也在同一个拟人化输入对象上，导航/复位靠它发快捷键。
         self.keyboard = self.mouse
         self.hotkeys = cfg.get("hotkeys", {})   # 键名映射，任务用 ctx.send_hotkey(动作名) 发
+        self.label = label                      # 多开时标识「号1/号2…」，单开为 None
         self._log_fn = log_fn or (lambda msg, level="info": None)
         self.stop_event = stop_event or threading.Event()
 
     # ---- 日志：任务调用 ctx.log(...)，GUI 通过 log_fn 收 ----
     def log(self, msg, level="info"):
+        if self.label:                          # 多开：给日志加「[号N] 」前缀，三个号共用一个面板也能分清
+            msg = f"[{self.label}] {msg}"
         self._log_fn(msg, level)
+
+    # ---- 多开：派生绑定指定窗口的子上下文（共享鼠标/日志/停止/配置）----
+    def make_child(self, window, label):
+        """基于本上下文派生一个绑定指定窗口的子上下文：
+        共享同一个鼠标(光标本就全局唯一)、日志出口、停止信号与配置，只是窗口与标签不同。"""
+        child = TaskContext(self.cfg, log_fn=self._log_fn,
+                            stop_event=self.stop_event, window=window, label=label)
+        child.mouse = self.mouse                # 共用同一只鼠标
+        child.keyboard = child.mouse
+        return child
+
+    # ---- 基础特性：按 targets 配置选出要操作的窗口列表 ----
+    def select_windows(self):
+        """单开→[选中的那个窗口]；多开→[选中的多个窗口]；找不到返回 []。"""
+        return win_mod.resolve_targets(self.cfg.get("window_title", "梦幻西游"),
+                                       self.cfg.get("window_offset", [0, 0]),
+                                       self.cfg.get("targets", {}))
+
+    # ---- 基础特性：取「大检测区」的屏幕矩形（整窗检测核心）----
+    def detection_rect(self, region):
+        """region 为空 → 用整个窗口当检测区（返回窗口屏幕矩形）；
+        否则按窗口内 [x,y,w,h] 换算成屏幕绝对矩形。窗口未定位返回 None。"""
+        if region:
+            return self.window.region_to_screen_rect(region)
+        return self.window.rect()
 
     # ---- 停止控制 ----
     def should_stop(self):

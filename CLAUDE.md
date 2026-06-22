@@ -21,6 +21,11 @@
 4. **安全默认 dry_run=true**（只识别不下单）。
 5. 用户**基本不读代码**，只在被明确告知“需要你亲手改的地方”才动手；要尽量傻瓜化（一键 + GUI）。
 6. 用户要求**模块化**、可持续扩展，并要一个**现代、简约、精致、信息密度适中**的 GUI。
+7. **活动列表卡片布局（运镖/宝图等「开活动→参加」类任务共用）**：活动界面的入口是**卡片**，
+   每张卡片右侧有「参加」按钮，且**默认两张卡片一排**。按行找「参加」时**只能在条目所属那张卡片的列内找**，
+   不能横向一路扫到列表右缘——否则会把右邻卡片的「参加」一起圈进来、点到右边卡片的参加（已踩坑修复）。
+   实现：`_find_join_on_row` 按 `loop.activity_columns`（默认 2）把列表等分定位条目所在列、`x1` 收到该列右边界。
+   排数变了就改配置 `tasks.<escort|treasure_map>.loop.activity_columns`，不必改代码。
 
 ## 架构（三层，包名 mhxy/）
 ```
@@ -59,6 +64,38 @@ mhxy/
 
 ## 当前状态
 - 依赖已装好：numpy, opencv-python, mss, pyautogui, pygetwindow, customtkinter, Pillow。
+- **2026-06-22（最新）新增基础特性「目标窗口选择 + 整窗检测」，并在其上实现秒装备多开轮转**。
+  用户诉求：常多开 3 个号（桌面互不重叠、**同尺寸**）；要能轮流照看多个号；并且用「选窗口」直接把
+  **整窗当检测区**省掉框大区域那步。用户拍板：**所有功能都基于这个新特性，作为基础**。
+  关键设计取舍：① 鼠标光标全局唯一 → 多开走**单线程轮转**（每步挨个号做，无需锁）；
+  ② 三个号标题相同、HWND 重启会变 → 窗口身份用**屏幕位置序号**（左→右，见 `window.locate_all` 排序），
+  匹配「号固定摆位」；③ 检测区(`listing`/`scene`)**留空=整窗**，运行时用 `window.rect()`，自动适配尺寸；
+  ④ 操作某号前先 `activate()` 切前台，避免点击穿透/点错号。**单开=选 1 个窗口、多开=选多个**，二者同走轮转(单开列表长度=1)。
+  改了 10 个文件 + 新增 1 个：
+  - `core/window.py`：`rect()` 包 try/except（绑定窗口被关后返 None）；新增 `bind()`、`locate_all()`（枚举+左→右排序）、
+    纯函数 `resolve_targets(title,offset,targets)`（按选择取窗，供任务与 GUI 共用）。
+  - `core/config.py` + `config.example.json`：顶层新增 `targets`（multi/single_index/multi_indices/max_windows/switch_delay_sec）。
+    `build.py` 用 DEFAULT_CONFIG 写发布配置，自动同步，未改 build。
+  - `core/context.py`：`__init__` 加 `window/label`；`log()` 多开加「[号N] 」前缀；`make_child()`（共享鼠标/日志/停止/配置）；
+    `select_windows()`（走 resolve_targets）；`detection_rect(region)`（**整窗检测核心**：region 空→窗口 rect）。
+  - `tasks/base.py`：新增 `_acquire_target_window(ctx)`——把 `ctx.window` 绑到选中目标窗口并保持有效，替代旧的 `ctx.window.locate()`(自动选最大)。
+  - `tasks/sniper.py`：抽出 `_snipe_one_round`；`run` 改单/多开轮转（`_resolve_contexts`/`_ensure_contexts`/`_prepare_window`）；
+    大检测区改 `detection_rect`；`listing` 变可选；preflight 改校验 `select_windows()` 非空。
+  - `tasks/escort.py`、`tasks/treasure_map.py`：run/preflight/dry_run 里 `ctx.window.locate()` → `self._acquire_target_window(ctx)`；
+    `scene` 变可选整窗；多开时日志提示「暂只操作选中的第一个号，多号顺序跑后续支持」。**这俩是有状态状态机，本期不做多号轮跑**。
+  - `gui/window_picker.py`（新）：选择窗口对话框——枚举窗口渲卡片(带**实时缩略图**，截图时透明化避免拍进自己)，
+    单开单选/多开多选，存 `cfg["targets"]`；尺寸不一致会警告。
+  - `gui/app.py`：三页 tools 行加「选择窗口」按钮(走 `App.open_window_picker`)；`update_game_pill(connected, summary)` 显示
+    「● 号N · 单开 / N 号 · 多开」；`_kick_locate` 改用 `locate_all`+`_compute_target_state` 算摘要，`_apply_game_state` 缓存比较元组。
+  - `gui/calibrate_dialog.py`：CALIBRATION region 项支持第4元素 `full_window=True` → 多渲「用整窗」按钮、状态显示「整窗(默认)」；
+    `_grab_roi` 改按 `resolve_targets` 选中的窗口标定(不再自动选最大，去掉末尾会改选的 `win.locate()`)。
+  - 兼容：旧 config 无 `targets` 由 `_deep_merge` 补默认(单开/号1)，等价原行为；DEFAULT 里 listing/scene 本就 None=现整窗。
+  - **已验证**：10 文件 py_compile 过；example.json 合法；纯逻辑模拟全 PASS（locate_all 左→右排序+过滤最小化/异名、
+    resolve_targets 单/多开/越界/截断、rect 失效返 None、make_child「[号N]」前缀+共享鼠标、detection_rect 整窗、
+    任务注册、CALIBRATION full_window 标记、sniper 单/多开上下文构建、App._compute_target_state 摘要）；三 GUI 模块真实 import OK。
+  - **未真机端到端验证**（需用户开 2~3 个同尺寸号自测）：选择窗口看缩略图认号 → 单开选1/多开勾多 → 药丸摘要 →
+    秒装备**不框 listing** 整窗演练看 [号1]/[号2] 轮转 → 单开回归 → 运镖/宝图选窗口+整窗 scene 能跑。
+  - ⚠ 多开各号窗口须**同尺寸**否则共用标定的小按钮点位会点错；`activate()` 每号切前台约 0.3s 故多开节奏天然慢于单开（一只鼠标的物理限制）。
 - **2026-06-21（最新）提速「抢不过暴力脚本」+ 把用户调好的速度固化为标准配置并随包打包**。
   用户痛点：原每轮巡航 ~3.5s（傻等加载 1.2s + 轮间空等 1.0s + 慢贝塞尔进货架）、命中下单 ~2s，抢不过别人。改了 5 个文件，分两块：
   1. **硬提速（不破坏巡航拟人化）**：

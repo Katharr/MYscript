@@ -120,6 +120,9 @@ class SniperPage(ctk.CTkFrame):
 
         tools = ctk.CTkFrame(card, fg_color="transparent")
         tools.grid(row=0, column=2, padx=18)
+        ctk.CTkButton(tools, text="选择窗口", font=self.fonts["body"], height=34, width=120,
+                      corner_radius=T.RADIUS_SM, fg_color=T.SURFACE_2, hover_color=T.BORDER,
+                      command=lambda: self.app.open_window_picker(self.refresh)).pack(pady=(0, 6))
         ctk.CTkButton(tools, text="标定 / 加装备", font=self.fonts["body"], height=34, width=120,
                       corner_radius=T.RADIUS_SM, fg_color=T.SURFACE_2, hover_color=T.BORDER,
                       command=self._open_calibrate).pack(pady=(0, 6))
@@ -330,11 +333,12 @@ class SniperPage(ctk.CTkFrame):
             if not self.runner.is_running() and self.btn_run.cget("text") != "▶  开始秒装备":
                 self._on_runner_finished()
 
-    def update_game_pill(self, connected):
+    def update_game_pill(self, connected, summary=""):
         if connected:
-            self.pill_game.configure(text="● 游戏已连接", fg_color="#15301f", text_color=T.SUCCESS)
+            self.pill_game.configure(text="● " + (summary or "目标窗口已连接"),
+                                     fg_color="#15301f", text_color=T.SUCCESS)
         else:
-            self.pill_game.configure(text="○ 未检测到游戏", fg_color=T.SURFACE_2, text_color=T.TEXT_DIM)
+            self.pill_game.configure(text="○ 未检测到目标窗口", fg_color=T.SURFACE_2, text_color=T.TEXT_DIM)
 
     def _log_line(self, msg, level="info"):
         ts = datetime.datetime.now().strftime("%H:%M:%S")
@@ -406,10 +410,13 @@ class TreasureMapPage(ctk.CTkFrame):
         self.btn_run.grid(row=0, column=0, sticky="w")
         tools = ctk.CTkFrame(top, fg_color="transparent")
         tools.grid(row=0, column=2, sticky="e")
-        ctk.CTkButton(tools, text="标定", font=self.fonts["body"], height=38, width=104,
+        ctk.CTkButton(tools, text="选择窗口", font=self.fonts["body"], height=38, width=92,
+                      corner_radius=T.RADIUS_SM, fg_color=T.SURFACE_2, hover_color=T.BORDER,
+                      command=lambda: self.app.open_window_picker(self.refresh)).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(tools, text="标定", font=self.fonts["body"], height=38, width=92,
                       corner_radius=T.RADIUS_SM, fg_color=T.SURFACE_2, hover_color=T.BORDER,
                       command=self._open_calibrate).pack(side="left", padx=(0, 8))
-        ctk.CTkButton(tools, text="刷新配置", font=self.fonts["body"], height=38, width=104,
+        ctk.CTkButton(tools, text="刷新配置", font=self.fonts["body"], height=38, width=92,
                       corner_radius=T.RADIUS_SM, fg_color=T.SURFACE_2, hover_color=T.BORDER,
                       command=self.refresh).pack(side="left")
 
@@ -537,11 +544,12 @@ class TreasureMapPage(ctk.CTkFrame):
         else:
             self.pill_mode.configure(text="实战", fg_color="#3a1d1d", text_color=T.DANGER)
 
-    def update_game_pill(self, connected):
+    def update_game_pill(self, connected, summary=""):
         if connected:
-            self.pill_game.configure(text="● 游戏已连接", fg_color="#15301f", text_color=T.SUCCESS)
+            self.pill_game.configure(text="● " + (summary or "目标窗口已连接"),
+                                     fg_color="#15301f", text_color=T.SUCCESS)
         else:
-            self.pill_game.configure(text="○ 未检测到游戏", fg_color=T.SURFACE_2, text_color=T.TEXT_DIM)
+            self.pill_game.configure(text="○ 未检测到目标窗口", fg_color=T.SURFACE_2, text_color=T.TEXT_DIM)
 
     # ---- 运行控制 ----
     def _toggle_run(self):
@@ -713,10 +721,13 @@ class EscortPage(ctk.CTkFrame):
         self.btn_run.grid(row=0, column=0, sticky="w")
         tools = ctk.CTkFrame(top, fg_color="transparent")
         tools.grid(row=0, column=2, sticky="e")
-        ctk.CTkButton(tools, text="标定", font=self.fonts["body"], height=38, width=104,
+        ctk.CTkButton(tools, text="选择窗口", font=self.fonts["body"], height=38, width=92,
+                      corner_radius=T.RADIUS_SM, fg_color=T.SURFACE_2, hover_color=T.BORDER,
+                      command=lambda: self.app.open_window_picker(self.refresh)).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(tools, text="标定", font=self.fonts["body"], height=38, width=92,
                       corner_radius=T.RADIUS_SM, fg_color=T.SURFACE_2, hover_color=T.BORDER,
                       command=self._open_calibrate).pack(side="left", padx=(0, 8))
-        ctk.CTkButton(tools, text="刷新配置", font=self.fonts["body"], height=38, width=104,
+        ctk.CTkButton(tools, text="刷新配置", font=self.fonts["body"], height=38, width=92,
                       corner_radius=T.RADIUS_SM, fg_color=T.SURFACE_2, hover_color=T.BORDER,
                       command=self.refresh).pack(side="left")
 
@@ -824,11 +835,12 @@ class EscortPage(ctk.CTkFrame):
         else:
             self.pill_mode.configure(text="实战", fg_color="#3a1d1d", text_color=T.DANGER)
 
-    def update_game_pill(self, connected):
+    def update_game_pill(self, connected, summary=""):
         if connected:
-            self.pill_game.configure(text="● 游戏已连接", fg_color="#15301f", text_color=T.SUCCESS)
+            self.pill_game.configure(text="● " + (summary or "目标窗口已连接"),
+                                     fg_color="#15301f", text_color=T.SUCCESS)
         else:
-            self.pill_game.configure(text="○ 未检测到游戏", fg_color=T.SURFACE_2, text_color=T.TEXT_DIM)
+            self.pill_game.configure(text="○ 未检测到目标窗口", fg_color=T.SURFACE_2, text_color=T.TEXT_DIM)
 
     # ---- 运行控制 ----
     def _toggle_run(self):
@@ -1300,30 +1312,67 @@ class App(ctk.CTk):
             return
         self._locating = True
         title = self.cfg.get("window_title", "梦幻西游")
+        offset = self.cfg.get("window_offset", [0, 0])
+        targets = self.cfg.get("targets", {})
 
         def work():
             try:
-                self.game_win.title_substr = title
-                found = self.game_win.locate()
+                all_wins = win_mod.locate_all(title, offset)
+                found, summary = self._compute_target_state(all_wins, targets)
             except Exception:
-                found = False
+                found, summary = False, ""
             # 回主线程更新（after 由 Tk 在主线程执行，线程安全）
             try:
-                self.after(0, lambda: self._apply_game_state(found))
+                self.after(0, lambda: self._apply_game_state(found, summary))
             except Exception:
                 pass
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _apply_game_state(self, found):
+    @staticmethod
+    def _compute_target_state(all_wins, targets):
+        """据「已枚举的窗口 + targets 选择」算出药丸要显示的 (是否连上, 摘要串)。
+        纯函数，跑在后台线程，不碰 Tk。"""
+        if not all_wins:
+            return False, ""
+        if targets.get("multi"):
+            idxs = targets.get("multi_indices") or list(range(len(all_wins)))
+            sel = [i for i in idxs if 0 <= i < len(all_wins)]
+            n = len(sel) if sel else len(all_wins)
+            return True, f"{n} 号 · 多开"
+        i = targets.get("single_index", 0)
+        if not (isinstance(i, int) and 0 <= i < len(all_wins)):
+            i = 0
+        return True, f"号{i + 1} · 单开"
+
+    def _apply_game_state(self, found, summary=""):
         self._locating = False
-        if found == self._game_connected:
+        state = (found, summary)
+        if state == self._game_connected:
             return  # 状态没变就不动控件，省掉无谓重绘
-        self._game_connected = found
+        self._game_connected = state
         for k in self.RUNNABLE_KEYS:
             p = self.pages.get(k)
             if p:
-                p.update_game_pill(found)
+                p.update_game_pill(found, summary)
+
+    def open_window_picker(self, after=None):
+        """打开「选择窗口」对话框（各任务页共用）。关闭后刷新配置并强制刷新药丸。"""
+        from .window_picker import WindowPickerDialog
+
+        def _done():
+            self.cfg = cfg_mod.load_config()
+            self._game_connected = None   # 选择可能变了，强制下次 tick 刷新药丸
+            if callable(after):
+                try:
+                    after()
+                except Exception:
+                    pass
+
+        try:
+            WindowPickerDialog(self, on_done=_done)
+        except Exception:
+            pass
 
     # ---- 全局快捷键轮询：上升沿触发开始/停止 ----
     def _poll_hotkey(self):

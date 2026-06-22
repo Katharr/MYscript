@@ -55,7 +55,7 @@ class TreasureMapTask(Task):
 
     CALIBRATION = {
         "regions": [
-            ("scene", "主识别区", "整窗或大半屏——战斗/对话/下一张等所有标志都在这里找，框大一点"),
+            ("scene", "主识别区", "留空=整个窗口当识别区(推荐)；战斗/对话/下一张等标志都在这里找", True),
             ("activity_list", "活动列表区域", "「活动」界面里那片列表，滚轮在此翻找「宝图任务」条目"),
             ("bag_list", "背包列表区域", "背包里道具格那片区域，滚轮在此翻找藏宝图"),
         ],
@@ -78,8 +78,8 @@ class TreasureMapTask(Task):
         templates = tc.get("templates", {})
         skip_collect = tc.get("skip_collect", False)   # 已有宝图：跳过阶段A
 
-        # 区域：主识别区+背包区始终要；活动列表区仅阶段A要
-        need_regions = [("scene", "主识别区"), ("bag_list", "背包列表区域")]
+        # scene 留空=整窗检测，不再强制标定；背包区始终要、活动列表区仅阶段A要
+        need_regions = [("bag_list", "背包列表区域")]
         if not skip_collect:
             need_regions.append(("activity_list", "活动列表区域"))
         for rk, label in need_regions:
@@ -102,8 +102,9 @@ class TreasureMapTask(Task):
         if not ctx.hotkeys.get("open_bag"):
             problems.append("打开『背包』缺快捷键：请在 config.hotkeys.open_bag 填上（如 alt+e）")
 
-        if not ctx.window.locate():
-            problems.append(f"没找到游戏窗口（标题含「{ctx.window.title_substr}」），请先打开游戏")
+        if not ctx.select_windows():
+            problems.append(f"没找到/没选中目标窗口（标题含「{ctx.window.title_substr}」）"
+                            "，请先打开游戏并在「选择窗口」里选好")
 
         # 可选模板缺失只提示
         optional = ["flag_battle"]
@@ -130,6 +131,12 @@ class TreasureMapTask(Task):
         if not self._is_admin():
             ctx.log("⚠ 当前非管理员权限：游戏在前台时鼠标/键盘注入可能被 UIPI 拦截。"
                     "请用『以管理员身份运行』重开。", level="warn")
+
+        if not self._acquire_target_window(ctx):
+            ctx.log("没找到/没选中目标窗口，已停止。", level="error")
+            return
+        if ctx.cfg.get("targets", {}).get("multi"):
+            ctx.log("注：宝图暂不支持多号轮跑，本次只操作选中的第一个号；多号请逐个单独跑。", level="warn")
 
         if dry_run:
             if self._skip_collect:
@@ -161,8 +168,8 @@ class TreasureMapTask(Task):
                 break
             if state == S_FINISHED:
                 break
-            if not ctx.window.locate():
-                ctx.log("游戏窗口不见了，2 秒后重试…", level="warn")
+            if not self._acquire_target_window(ctx):
+                ctx.log("目标窗口不见了，2 秒后重试…", level="warn")
                 self._interruptible_sleep(ctx, 2.0)
                 continue
 
@@ -245,7 +252,8 @@ class TreasureMapTask(Task):
         ctx.log(f"找到「宝图任务」条目（相似度 {hit[2]:.3f}），在该行右侧找「参加」按钮…")
 
         # 点该行【右侧的「参加」按钮】，不是点条目本身
-        join = self._find_join_on_row(ctx, regions.get("activity_list"), (hit[0], hit[1]), threshold)
+        join = self._find_join_on_row(ctx, regions.get("activity_list"), (hit[0], hit[1]),
+                                      threshold, loop)
         if join is None:
             ctx.log("找到了「宝图任务」但没认出右侧的「参加」按钮（检查 flag_join 模板/阈值）。", level="warn")
             return "STUCK"
@@ -253,10 +261,11 @@ class TreasureMapTask(Task):
         ctx.log(f"点击「参加」（相似度 {join[2]:.3f}），开始传送找 NPC。", level="hit")
         return S_DIALOG
 
-    def _find_join_on_row(self, ctx, list_region, entry_screen_xy, threshold):
-        """在「宝图任务」条目所在【行】的右侧条带里匹配「参加」按钮(flag_join)。
+    def _find_join_on_row(self, ctx, list_region, entry_screen_xy, threshold, loop):
+        """在「宝图任务」条目所在【那张卡片】的右侧条带里匹配「参加」按钮(flag_join)。
         命中返回 (screen_x, screen_y, score)，否则 None。
-        按行+只取条目右侧，能抗滚动、抗一屏多个「参加」按钮。"""
+        按行+只取条目右侧、且限制在条目所属卡片列内，能抗滚动、抗「一排多张卡片」时
+        扫进右邻卡片点到它的「参加」按钮（活动列表默认两张卡片一排）。"""
         join_tpl = self.flags.get("flag_join")
         entry_tpl = self.flags.get("flag_treasure_entry")
         if join_tpl is None:
@@ -278,10 +287,17 @@ class TreasureMapTask(Task):
         # 换算到 scene 局部坐标：纵向取条带、横向从条目中心到列表右缘（只看右侧）
         ey_local = int(ey - ry)
         ex_local = int(ex - rx)
+        # 活动列表是「每排多张卡片」(默认两张一排)：参加按钮只在【条目所属那张卡片】内。
+        # 若一路扫到列表右缘(x1=sw)，右邻卡片的「参加」按钮会被一并扫进来、甚至胜出，
+        # 导致点到右边卡片的参加。故把列表按列等分，定位条目所在列，x1 收到该列右边界。
+        cols = max(1, int(loop.get("activity_columns", 2)))
+        col_w = sw / cols
+        col_idx = min(cols - 1, max(0, int(ex_local // col_w)))
+        col_right = int(round((col_idx + 1) * col_w))
         y0 = max(0, ey_local - band // 2)
         y1 = min(sh, ey_local + band // 2)
         x0 = max(0, ex_local)
-        x1 = sw
+        x1 = min(sw, col_right)
         if y1 - y0 < 1 or x1 - x0 < 1:
             return None
         crop = scene[y0:y1, x0:x1]
@@ -516,7 +532,7 @@ class TreasureMapTask(Task):
             if deadline and time.time() >= deadline:
                 ctx.log("演练时间上限到，停止。")
                 break
-            if not ctx.window.locate():
+            if not self._acquire_target_window(ctx):
                 self._interruptible_sleep(ctx, 1.5)
                 continue
             scene = self._grab_scene(ctx, regions)

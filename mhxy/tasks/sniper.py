@@ -22,7 +22,7 @@ class SniperTask(Task):
     # 标定向导用：区域项即原 REGION_ITEMS；秒装备有「装备清单」卡片，无标志模板。
     CALIBRATION = {
         "regions": [
-            ("listing", "货架/列表区域", "进货架后要识别的那片区域，框大一点把整列摊位都包进去"),
+            ("listing", "货架/列表区域", "留空=整个窗口当检测区(推荐)；想提速/避免误识可框小一点", True),
             ("category_button", "商品类别按钮", "左侧侧边栏里的类别，如「奇珍异宝」——刷新第①步点它"),
             ("product_entry", "商品条目", "右侧信息框里要进的那个商品——刷新第②步点它进货架"),
             ("buy_button", "购买按钮", "选中摊位后出现的「购买」按钮"),
@@ -36,8 +36,7 @@ class SniperTask(Task):
         tc = ctx.task_cfg(self.name)
         problems = []
         regions = tc.get("regions", {})
-        if not regions.get("listing"):
-            problems.append("『货架/列表区域』未标定 —— 请先做标定")
+        # listing 留空=整窗检测，不再强制标定
         if not regions.get("category_button"):
             problems.append("『商品类别按钮』未标定 —— 刷新要靠它进货架")
         if not regions.get("product_entry"):
@@ -48,8 +47,9 @@ class SniperTask(Task):
         for it in watchlist:
             if vision.load_template(it["template"]) is None:
                 problems.append(f"模板图丢失：{it['template']}（{it.get('name','?')}）")
-        if not ctx.window.locate():
-            problems.append(f"没找到游戏窗口（标题含「{ctx.window.title_substr}」），请先打开游戏")
+        if not ctx.select_windows():
+            problems.append(f"没找到/没选中目标窗口（标题含「{ctx.window.title_substr}」）"
+                            "，请先打开游戏并在「选择窗口」里选好")
         return (len(problems) == 0), problems
 
     def run(self, ctx):
@@ -66,67 +66,123 @@ class SniperTask(Task):
         cooldown = loop["after_buy_cooldown_sec"]
         # 命中后「下单那一下」用更激进的速度倍率（只在抢的瞬间生效，巡航点击仍保持常速拟人化）
         snipe_speed = ctx.cfg.get("humanize", {}).get("snipe_speed", 3.0)
-        listing = regions["listing"]
-        mouse = ctx.mouse
+        listing = regions.get("listing")        # 空=整窗检测
+        # 把每轮要用的参数打包，传给 _snipe_one_round（避免一长串形参）
+        pkg = (loop, regions, listing, templates, threshold, cooldown, snipe_speed, dry_run)
+
+        multi = ctx.cfg.get("targets", {}).get("multi", False)
+        switch_delay = ctx.cfg.get("targets", {}).get("switch_delay_sec", 0.15)
 
         if not self._is_admin():
             ctx.log("⚠ 当前非管理员权限：游戏窗口在前台时鼠标可能无法移动/点击（UIPI 拦截）。"
                     "请用『以管理员身份运行』重开。", level="warn")
 
-        ctx.log(f"启动完成：监控 {len(templates)} 件装备，阈值 {threshold}，每轮重进货架间隔 ~{refresh_interval}s")
+        contexts = self._resolve_contexts(ctx, multi)
+        if not contexts:
+            ctx.log("没找到/没选中目标窗口，已停止。", level="error")
+            return
+
+        ctx.log(f"启动完成：{('多开轮转 ' + str(len(contexts)) + ' 个号') if multi else '单号'}，"
+                f"监控 {len(templates)} 件装备，阈值 {threshold}，检测区："
+                f"{'整窗' if not listing else '手动框选'}")
         ctx.log("演练模式（只识别不下单）" if dry_run else "★ 实战模式：命中会真正下单 ★",
                 level="warn" if not dry_run else "info")
 
         rounds = 0
-
         while not ctx.should_stop():
-            if not ctx.window.locate():
-                ctx.log("游戏窗口不见了，2 秒后重试…", level="warn")
+            # 窗口可能被关/移动：多开时若有窗口失效就重新枚举选择
+            contexts = self._ensure_contexts(ctx, contexts, multi)
+            if not contexts:
                 self._interruptible_sleep(ctx, 2.0)
                 continue
 
-            mouse.maybe_idle()
-
-            # 刷新 = 重新进货架：点左侧类别 → 点右侧商品条目 → 等货架加载。
-            # 货架页面进去后不会自动上新，必须退出重进，所以这一步每轮都做。
-            if not self._enter_shelf(ctx, regions):
-                self._interruptible_sleep(ctx, self._jitter(refresh_interval, ctx))
-                continue
-
-            # 截货架区域并匹配。自适应等加载：画面一静止就识别，不傻等满 shelf_load_wait_sec。
-            list_rect = ctx.window.region_to_screen_rect(listing)
-            if list_rect is None:
-                self._interruptible_sleep(ctx, 0.5)
-                continue
-            scene = self._wait_shelf_loaded(ctx, list_rect, loop)
-            if scene is None:
-                continue
-
-            for it, tpl in templates:
+            for wctx in contexts:
                 if ctx.should_stop():
                     break
-                hit = vision.match(scene, tpl, threshold)
-                if hit is None:
+                if not self._prepare_window(wctx, multi):
                     continue
-                cx, cy, score = hit
-                screen_xy = (list_rect[0] + cx, list_rect[1] + cy)
-                ctx.log(f"★ 命中【{it['name']}】相似度 {score:.3f} @ {screen_xy}", level="hit")
-                shot = self._save_capture(scene, it["name"])
-                ctx.log(f"  已存命中截图 captures/{shot}")
-
-                if dry_run:
-                    ctx.log("  [演练] 不下单。确认无误后到设置里切换为实战。")
-                else:
-                    self._buy_sequence(ctx, regions, screen_xy, snipe_speed)
-                    ctx.log("  已执行购买动作序列（极速）。")
-                    self._interruptible_sleep(ctx, cooldown)
-                break  # 一轮处理一件即可
+                wctx.mouse.maybe_idle()
+                self._snipe_one_round(wctx, pkg, refresh_interval)
+                # 多开：号与号之间留个小间隔，别太机械
+                if multi and len(contexts) > 1:
+                    self._interruptible_sleep(ctx, self._jitter(switch_delay, ctx))
 
             rounds += 1
-            # 两轮之间留间隔（带抖动），避免点得太快太机械
+            # 一整轮（所有号过一遍）之间留间隔（带抖动）
             self._interruptible_sleep(ctx, self._jitter(refresh_interval, ctx))
 
         ctx.log(f"已停止。共循环 {rounds} 轮。")
+
+    # ---- 多开轮转：窗口上下文的构建与维护 ----
+    def _resolve_contexts(self, ctx, multi):
+        """按选择把目标窗口包成「要轮转的上下文」列表。
+        单开→复用主 ctx 并把它绑到选中的那个窗口；多开→每个号一个子上下文(带「号N」标签)。"""
+        wins = ctx.select_windows()
+        if not wins:
+            return []
+        if multi:
+            return [ctx.make_child(w, f"号{i + 1}") for i, w in enumerate(wins)]
+        ctx.window = wins[0]        # 单开：直接操作选中的那个窗口（不再每轮 locate 选最大）
+        return [ctx]
+
+    def _ensure_contexts(self, ctx, contexts, multi):
+        """每轮开头校验窗口是否还在；任一失效（被关/最小化）就重新枚举选择。"""
+        if contexts and all(c.window.rect() is not None for c in contexts):
+            return contexts
+        fresh = self._resolve_contexts(ctx, multi)
+        if not fresh:
+            ctx.log("暂时没检测到目标窗口，等待…", level="warn")
+        elif len(fresh) != len(contexts):
+            ctx.log(f"目标窗口数变化：现 {len(fresh)} 个。", level="info")
+        return fresh
+
+    def _prepare_window(self, wctx, multi):
+        """操作某个号前的准备：校验窗口有效，并把它切到前台，确保点击落在这个号身上。"""
+        if wctx.window.rect() is None:
+            return False
+        if multi:
+            wctx.window.activate()      # 多开必须切前台，避免点击穿透/点错号
+            if wctx.should_stop():
+                return False
+        return True
+
+    def _snipe_one_round(self, ctx, pkg, refresh_interval):
+        """对单个号跑「一轮」：重进货架 → 等加载 → 识别 → 命中下单。"""
+        loop, regions, listing, templates, threshold, cooldown, snipe_speed, dry_run = pkg
+        # 刷新 = 重新进货架：点左侧类别 → 点右侧商品条目 → 等货架加载。
+        # 货架页面进去后不会自动上新，必须退出重进，所以这一步每轮都做。
+        if not self._enter_shelf(ctx, regions):
+            self._interruptible_sleep(ctx, self._jitter(refresh_interval, ctx))
+            return
+
+        # 截检测区并匹配（listing 空=整窗）。自适应等加载：画面一静止就识别。
+        list_rect = ctx.detection_rect(listing)
+        if list_rect is None:
+            self._interruptible_sleep(ctx, 0.5)
+            return
+        scene = self._wait_shelf_loaded(ctx, list_rect, loop)
+        if scene is None:
+            return
+
+        for it, tpl in templates:
+            if ctx.should_stop():
+                break
+            hit = vision.match(scene, tpl, threshold)
+            if hit is None:
+                continue
+            cx, cy, score = hit
+            screen_xy = (list_rect[0] + cx, list_rect[1] + cy)
+            ctx.log(f"★ 命中【{it['name']}】相似度 {score:.3f} @ {screen_xy}", level="hit")
+            shot = self._save_capture(scene, it["name"])
+            ctx.log(f"  已存命中截图 captures/{shot}")
+
+            if dry_run:
+                ctx.log("  [演练] 不下单。确认无误后到设置里切换为实战。")
+            else:
+                self._buy_sequence(ctx, regions, screen_xy, snipe_speed)
+                ctx.log("  已执行购买动作序列（极速）。")
+                self._interruptible_sleep(ctx, cooldown)
+            break  # 一轮处理一件即可
 
     # ---- 内部小工具（_is_admin/_jitter/_frame_diff/_click_region/_save_capture/_interruptible_sleep 已上移 Task 基类）----
     def _enter_shelf(self, ctx, regions):

@@ -3,6 +3,13 @@
   "input_backend": "sendinput",
   "window_offset": [0, 0],
   "hotkey_toggle": "F5",
+  "targets": {
+    "multi": false,
+    "single_index": 0,
+    "multi_indices": [],
+    "max_windows": 3,
+    "switch_delay_sec": 0.15
+  },
   "humanize": {
     "speed": 2.0,
     "snipe_speed": 5.0,
@@ -99,6 +106,7 @@
         "dig_timeout_sec": 120,
         "scroll_step": -3,
         "scroll_max_tries": 8,
+        "activity_columns": 2,
         "max_stuck_recover": 3
       },
       "regions": {
@@ -129,6 +137,7 @@
         "still_wait_sec": 2.0,
         "scroll_step": -3,
         "scroll_max_tries": 8,
+        "activity_columns": 2,
         "max_stuck_recover": 3
       },
       "regions": {
