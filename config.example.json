@@ -152,6 +152,43 @@
         "escort_ongoing": "templates/tm_escort_ongoing.png",
         "escort_battle": "templates/tm_escort_battle.png"
       }
+    },
+    "secret_realm": {
+      "dry_run": true,
+      "loop": {
+        "time_limit_min": 30,
+        "match_threshold": 0.85,
+        "max_runs": 1,
+        "tick_interval_sec": 0.5,
+        "dialog_timeout_sec": 30,
+        "dungeon_select_wait_sec": 6,
+        "step_timeout_sec": 20,
+        "battle_timeout_sec": 1800,
+        "dungeon_enter_box": [0.0, 0.5, 0.55, 1.0],
+        "still_min_sec": 0.3,
+        "still_wait_sec": 2.0,
+        "scroll_step": -3,
+        "scroll_max_tries": 8,
+        "activity_columns": 2,
+        "max_stuck_recover": 3
+      },
+      "regions": {
+        "scene": [0, 0, 1024, 768],
+        "activity_list": [600, 200, 360, 420]
+      },
+      "templates": {
+        "sr_entry": "templates/tm_sr_entry.png",
+        "sr_join": "templates/tm_sr_join.png",
+        "sr_select": "templates/tm_sr_select.png",
+        "sr_dungeon_enter": "templates/tm_sr_dungeon_enter.png",
+        "sr_confirm": "templates/tm_sr_confirm.png",
+        "sr_continue": "templates/tm_sr_continue.png",
+        "sr_challenge": "templates/tm_sr_challenge.png",
+        "sr_enter_battle": "templates/tm_sr_enter_battle.png",
+        "sr_leave": "templates/tm_sr_leave.png",
+        "sr_fail": "templates/tm_sr_fail.png",
+        "sr_battle": "templates/tm_sr_battle.png"
+      }
     }
   }
 }

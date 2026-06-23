@@ -208,6 +208,47 @@ DEFAULT_CONFIG = {
                 "escort_ongoing": None,  # 运镖途中常驻的「运镖中」标志（在=还在运镖、不停）
                 "escort_battle": None    # 战斗界面独有标志（监控用，避免误判结束）
             }
+        },
+
+        # ---- 秘境降妖（一次性状态机；游戏自带自动战斗，脚本只导航+监控+关键点击）----
+        "secret_realm": {
+            "dry_run": True,             # true=演练：只识别+打日志，不发快捷键/不点关键操作
+            "loop": {
+                "time_limit_min": 30,        # 时间上限（分钟）安全网，0=不限；每轮主终止是 失败/离开 或 时长判超时
+                "match_threshold": 0.85,     # 标志模板匹配阈值
+                "max_runs": 1,               # 每个号连跑几轮秘境（每轮=开活动→挑战→直到 失败/超时离开）
+                "tick_interval_sec": 0.5,    # 多开轮转节拍：所有号各推进一步后的间隔（带抖动）
+                "dialog_timeout_sec": 30,    # 点「参加」后等「秘境降妖」对话框出现的超时
+                "dungeon_select_wait_sec": 6,  # 等「选择副本-进入」出现的短超时；没出现=本次无需选副本，跳过
+                "step_timeout_sec": 20,      # 确定/继续挑战/挑战/离开 等每步按钮出现的超时（容错继续）
+                "battle_timeout_sec": 1800,  # 单轮秘境「超时判定」时长：挂够这么久仍没结束就视为超时、点离开（按真实关卡时限调）
+                "dungeon_enter_box": [0.0, 0.5, 0.55, 1.0],  # 「进入」按钮限定的左下角比例框 [x0,y0,x1,y1]（0~1）
+                                             #   同款「进入」靠位置区分：只在 scene 这个左下角比例框里找
+                "still_min_sec": 0.3,        # 帧差判静止：最短先等
+                "still_wait_sec": 2.0,       # 帧差判静止：单次最长等/超时
+                "scroll_step": -3,           # 每次滚轮格数（负=向下翻）
+                "scroll_max_tries": 8,       # 滑动找卡片最多翻几屏
+                "activity_columns": 2,       # 活动列表每排几张卡片：找「参加」只在条目所属那一列内，
+                                             #   避免两张卡片一排时扫到右邻卡片、点错右边的「参加」
+                "max_stuck_recover": 3       # 连续卡死多少次就主动停
+            },
+            "regions": {                 # 相对游戏窗口 [x,y,w,h]，标定向导写入
+                "scene": None,           # 主识别区（整窗或大半屏，所有 flag 都在这里找）
+                "activity_list": None    # 活动列表区域（滚轮在此找秘境降妖卡片）
+            },
+            "templates": {               # 状态标志模板路径（标定向导裁图写入，tm_ 前缀）
+                "sr_entry": None,            # 活动列表里要点「参加」的那张卡片
+                "sr_join": None,             # 那张卡片右侧的「参加」按钮（按行匹配点它）
+                "sr_select": None,           # 对话框里「秘境降妖」选项
+                "sr_dungeon_enter": None,    # 「选择副本」界面左下角的「进入」按钮（可选）
+                "sr_confirm": None,          # 「确定」按钮
+                "sr_continue": None,         # 「继续挑战」按钮
+                "sr_challenge": None,        # 「挑战」按钮（点它开始自动战斗）
+                "sr_enter_battle": None,     # 难度关卡的「进入战斗」按钮（监控期一出现就点）
+                "sr_leave": None,            # 「离开」按钮（失败/超时/结束后点它退出秘境）
+                "sr_fail": None,             # 「失败」标志（可选，判定该退出）
+                "sr_battle": None            # 战斗界面独有标志（可选，仅日志诊断）
+            }
         }
     }
 }

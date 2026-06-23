@@ -46,6 +46,10 @@ mhxy/
     base.py     Task 基类 + 注册表（register/get_task/all_tasks）
     sniper.py   SniperTask（秒装备）：preflight() 自检 + run(ctx) 主循环
                  刷新=每轮重进货架：_enter_shelf() 点类别→点商品→等加载，再截货架识别
+    escort.py        EscortTask（运镖）：开活动→参加→押送普通镖银→循环押满次数
+    treasure_map.py  TreasureMapTask（宝图）：开活动→收图→挖宝→领奖 两阶段状态机
+    secret_realm.py  SecretRealmTask（秘境降妖）：开活动→参加→点秘境降妖→(选副本点左下角「进入」)→
+                      确定→继续挑战→挑战→盯「进入战斗」续战→失败/超时/出现「离开」收尾，可连跑 max_runs 轮
   tools/
     calibrate.py 旧的命令行标定（cv2.selectROI，已不被 GUI 调用，仅留作 CLI 备用）
   gui/
@@ -64,6 +68,38 @@ mhxy/
 
 ## 当前状态
 - 依赖已装好：numpy, opencv-python, mss, pyautogui, pygetwindow, customtkinter, Pillow。
+- **2026-06-23（最新）新增第四个任务「秘境降妖」**（`secret_realm`）。用户描述的真实流程：
+  开活动→点活动卡片右侧「参加」→弹框点「秘境降妖」→**(可选)若有选副本界面，点屏幕左下角的「进入」**
+  →「确定」→「继续挑战」→「挑战」→开始自动战斗→**到难度关卡不再自动，实时盯「进入战斗」按钮一出现就点续战**
+  →出现 失败/「离开」按钮 → 点「离开」退出秘境收尾。**「超时」不是屏幕标志、是按时长判定**
+  （挂够 `battle_timeout_sec` 仍没结束就视为超时、点离开——用户拍板：超时怎么会有标定物）。可连跑 `max_runs` 轮（默认 1）。
+  - 关键设计：① 几个副本的「进入」按钮**长得一样，只能靠位置**区分 → `_match_subregion` 只在 scene 的
+    左下角比例框 `loop.dungeon_enter_box`（默认 [0,0.5,0.55,1.0]）里匹配；选副本是**可选环节**，没标
+    `sr_dungeon_enter` 模板或短超时(`dungeon_select_wait_sec`)内没出现就跳过。
+    ② 确定/继续挑战/挑战 容错点击：超时仅 warn 继续，靠战斗监控兜底，避免流程微变就死卡。
+    ③ 战斗监控 `_do_battle`：每访问扫一遍，**只在【判定失败 sr_fail】或【时长超时】后才点「离开」**
+    (用户拍板：不设"看到离开就点"的旁路，避免误判提前退出；秘境打到失败/超时为止)；失败要**先点掉失败结算
+    再点离开**(用户实测：不先点失败，离开点不到)；否则有「进入战斗」(`sr_enter_battle`)就点续战；否则等。
+    **「超时」无模板，纯按时长**：挂够 `battle_timeout_sec` 仍没结束就判超时、点离开（用户拍板去掉了 sr_timeout 标定项）。
+    ④ 复用运镖/宝图的 `_find_join_on_row`(按列定位避免点到右邻卡片)、整窗检测。
+    ⑤ **支持多开轮转**（2026-06-23 用户要求「多号每一步都轮转」重做）：见下。
+  - 必备模板：sr_entry/sr_join/sr_select/sr_continue/sr_challenge/sr_enter_battle/sr_leave；
+    可选：sr_dungeon_enter(选副本进入)/sr_confirm(确定)/sr_fail/sr_battle(仅诊断)。（无 sr_timeout——超时是时长判定）
+  - **「确定」只在选了副本后才弹**（用户实测：不选副本没有确认键）→ `S_CONFIRM` 用 `picked_dungeon`
+    gate 住，没点过副本「进入」就跳过(`S_DUNGEON` 超时直接转 `S_CONTINUE`)，不再空等 step_timeout；故 sr_confirm 也降为可选模板。
+  - **多开轮转（2026-06-23 重做：从阻塞状态机改成非阻塞逐号轮转）**：原来是阻塞式状态机，多开只能操作第一个号。
+    现重构为：每个号一份 record(`_new_record`：state/计时/runs/picked_dungeon/entered_battle/recover)，主循环对每个号
+    `_step_once` 各推进**一小步**(非阻塞)，号与号之间逐步轮转(操作前先 `window.activate()`，switch_delay 间隔)。
+    状态：OPEN_ACTIVITY→FIND_CARD(每访问滚一屏找卡片点参加)→SELECT(点秘境降妖)→DUNGEON(可选选副本)→
+    CONFIRM(选副本才有)→CONTINUE→CHALLENGE→BATTLE(扫一遍:失败/超时去 LEAVE，进入战斗就续点)→LEAVE(点离开收尾)→
+    `_finish_run`(轮数+1，没满回 OPEN_ACTIVITY，满了该号 done)。所有号 done 或时间上限则整体停。`tick_interval_sec`
+    控制每整轮间隔。单开=列表只 1 个号、同走这套。⚠ 各号须**同尺寸**(共用标定点位)；一只鼠标物理限制故多开节奏慢。
+  - 改了 4 文件：`tasks/secret_realm.py`(新)、`tasks/__init__.py`(注册)、`core/config.py`(加 secret_realm 配置块含 tick_interval_sec)、
+    `config.example.json`(同步)、`gui/app.py`(新增 `SecretRealmPage` 仿 EscortPage + NAV/PAGES/RUNNABLE_KEYS 接线)。
+  - **已验证**：py_compile 全过；example.json 合法；注册/配置合并/CALIBRATION 规格(scene 带 full_window 标记)/
+    模板键一致/关键方法齐全 全 PASS；GUI 模块真实 import + 接线确认 OK。
+  - **未真机端到端验证**（需用户开游戏自测）：标定(活动列表区 + 各按钮模板)→演练看各标志识别→实战走完整流程，
+    重点核对：左下角「进入」比例框是否框对那个进入、「进入战斗」按钮模板是否够独特、失败/超时能否触发离开。
 - **2026-06-22（最新）新增基础特性「目标窗口选择 + 整窗检测」，并在其上实现秒装备多开轮转**。
   用户诉求：常多开 3 个号（桌面互不重叠、**同尺寸**）；要能轮流照看多个号；并且用「选窗口」直接把
   **整窗当检测区**省掉框大区域那步。用户拍板：**所有功能都基于这个新特性，作为基础**。
