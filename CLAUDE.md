@@ -68,7 +68,21 @@ mhxy/
 
 ## 当前状态
 - 依赖已装好：numpy, opencv-python, mss, pyautogui, pygetwindow, customtkinter, Pillow。
-- **2026-06-23（最新）新增第四个任务「秘境降妖」**（`secret_realm`）。用户描述的真实流程：
+- **2026-06-23（最新）运镖任务改成多开逐号轮转**（用户反馈「运镖多开没有生效」）。原 `escort.py` 是
+  阻塞式状态机、只操作选中的第一个号（还主动打印「暂不支持多号轮跑」）。现**仿「秘境降妖」重构成非阻塞逐号轮转**：
+  每个号一份 record(`_new_record`：state/escorts/seen_ongoing/gone_since/t_trip/recover/done)，主循环对每个号
+  `_step_once` 各推进一小步，号间逐步轮转(操作前先 `window.activate()`，switch_delay 间隔)。
+  状态：OPEN_ACTIVITY→FIND_CARD(每访问滚一屏找运镖入口点参加)→DIALOG(点「押送普通镖银」,escorts+1)→
+  CONFIRM(点「确认」/超时容错)→ESCORTING(监控运镖中标志/对话框复现：又弹框且未满次数就续点回 CONFIRM,
+  满次数或运镖中标志消失够 done_idle_sec 就 `_finish_escort` 收尾该号)。所有号 done 或时间上限则整体停。
+  续趟统一走「点押送银→escorts+1→CONFIRM」，首趟与续趟共用一套。卡死兜底 `_recover_window`：仅
+  `escorts==0`(还没开始任何一趟)时回开活动重试，否则放弃该号(避免「已参加」后重开活动连环卡死)。
+  改了 2 文件：`tasks/escort.py`(重写 run 及状态机)、`core/config.py`+`config.example.json`(escort.loop 加 `tick_interval_sec`)。
+  GUI 无需改（运镖页+「选择窗口」按钮+多开开关 `targets.multi` 早已就位，run 直接读 `ctx.cfg["targets"]["multi"]`）。
+  - **已验证**：py_compile 过；example.json 合法；注册/配置合并(含 tick_interval_sec)/旧config补默认/关键方法齐全/
+    record 字段齐全 全 PASS。**未真机端到端验证**（需用户开 2~3 个同尺寸号自测：选窗口勾多开→演练看 [号1]/[号2] 轮转识别→
+    实战看多号逐个开活动/参加/押镖/续趟）。⚠ 各号须同尺寸(共用标定点位)；一只鼠标故多开节奏天然慢于单开。
+- **2026-06-23 新增第四个任务「秘境降妖」**（`secret_realm`）。用户描述的真实流程：
   开活动→点活动卡片右侧「参加」→弹框点「秘境降妖」→**(可选)若有选副本界面，点屏幕左下角的「进入」**
   →「确定」→「继续挑战」→「挑战」→开始自动战斗→**到难度关卡不再自动，实时盯「进入战斗」按钮一出现就点续战**
   →出现 失败/「离开」按钮 → 点「离开」退出秘境收尾。**「超时」不是屏幕标志、是按时长判定**

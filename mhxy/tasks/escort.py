@@ -1,23 +1,27 @@
 # -*- coding: utf-8 -*-
 """
-运镖任务（一次性、循环押镖状态机）。
+运镖任务（循环押镖；游戏自带自动寻路+自动战斗，脚本只做导航 + 监控 + 关键点击）。
 
-游戏自带「自动战斗 + 自动寻路」全托管，脚本只做导航 + 监控 + 关键点击：
+用户描述的真实流程（每个号一批）：
 
   开「活动」(快捷键 Alt+C) → 滚轮找「运镖」条目 → 点该行【右侧的「参加」按钮】(按行匹配，不是点条目本身)
-  → 弹出对话框 → 点「押送普通镖银」→ 开始运镖(自动寻路+自动战斗)
-  → 一趟运镖结束后，若还有次数，会【再次弹出同一个对话框】→ 再点「押送普通镖银」
-  → 循环到不再弹出对话框(默认 3 趟用完) → 停止。
+  → 弹出对话框 → 点「押送普通镖银」→ 点「确认」→ 开始运镖(自动寻路+自动战斗)
+  → 一趟运镖结束后，若还有次数，会【再次弹出同一个对话框】→ 再点「押送普通镖银」→「确认」
+  → 循环到不再弹出对话框(默认 3 趟用完) → 本号结束。
 
-与「宝图」共用同一套导航思路（开活动/按行点参加/帧差判静止），但更短：
-没有挖宝阶段，主循环就是「监控运镖 → 对话框复现就续点」。
+★ 多开轮转（用户要求「多号都要生效」，2026-06-23 重做）：
+  原来是阻塞式状态机、只操作选中的第一个号。现仿「秘境降妖」改成非阻塞逐号轮转——
+  每个号各持一份状态(record)，主循环对每个号【各推进一小步】(非阻塞)，号与号之间逐步轮转：
+  号1 在自动运镖时，可以去把 号2/号3 也开起来押镖，再回头照看 号1。鼠标光标全局唯一，
+  故单线程轮转、操作某号前先 activate() 切前台。单开=列表只有一个号、同走这套轮转。
+  ⚠ 各号须【同尺寸】（共用标定点位）；一只鼠标的物理限制故多开节奏天然比单开慢。
 
 导航靠 ctx.send_hotkey(动作名)（键位在 config.hotkeys，用户可按游戏「系统设置-快捷键」核对）。
 滑动用鼠标滚轮。
 
-停止：①对话框不再弹出(运镖次数用完，主)②做满 max_escorts 趟(保险)③时间上限分钟(安全网)
-④手动停止/鼠标甩左上角 failsafe。
-安全默认 dry_run=true：不发快捷键/不点关键操作，只对当前屏幕做识别自检，便于先验证模板。
+停止：①所有号都押满 max_escorts 趟（或对话框不再弹出）②时间上限分钟(安全网)
+③手动停止/鼠标甩左上角 failsafe。
+安全默认 dry_run=true：不发快捷键/不点关键操作，只对各号当前屏幕做识别自检，便于先验证模板。
 """
 
 import time
@@ -26,15 +30,12 @@ from ..core import vision
 from ..core import window as win_mod
 from .base import Task, register
 
-# 状态机状态
-S_OPEN_ACTIVITY = "OPEN_ACTIVITY"
-S_DIALOG = "DIALOG"          # 点「参加」后等首个「押送普通镖银」对话框
-S_ESCORTING = "ESCORTING"    # 运镖中（自动寻路+自动战斗），监控对话框复现/全部结束
-S_FINISHED = "FINISHED"
-
-_STILL_DIFF = 8.0   # 帧差低于此视为画面静止（人物不动）的默认阈值——可被 loop.still_diff 覆盖。
-#   太小→人物待机动画/周围NPC玩家走动/特效会让整屏帧差长期偏高，永远判不到「静止」→误判运镖没完成。
-#   运行时日志会实时打印真实帧差，照着把阈值设到「静止时帧差」之上、「走动时帧差」之下即可。
+# 每个号的状态机状态（非阻塞：每访问一次只推进一步）
+S_OPEN_ACTIVITY = "OPEN_ACTIVITY"   # 发活动快捷键
+S_FIND_CARD = "FIND_CARD"           # 活动列表里滚轮找「运镖」条目 → 点「参加」
+S_DIALOG = "DIALOG"                 # 等首个「押送普通镖银」对话框 → 点它
+S_CONFIRM = "CONFIRM"               # 点完押送后等「确认」按钮（容错超时）
+S_ESCORTING = "ESCORTING"           # 运镖中：监控运镖中标志/对话框复现，续点下一趟或收尾
 
 # 模板键（用 escort_ 前缀，避免和「宝图」任务的同名模板在磁盘上互相覆盖——
 #   标定存盘按 templates/tm_<key>.png 命名，只按 key 区分，不区分任务）。
@@ -48,7 +49,7 @@ _REQUIRED_FLAGS = ["escort_entry", "escort_join", "escort_silver", "escort_confi
 class EscortTask(Task):
     name = "escort"
     title = "运镖"
-    description = "自动开活动→参加运镖→押送普通镖银→循环押满次数（战斗/寻路交给游戏自动）"
+    description = "自动开活动→参加运镖→押送普通镖银→循环押满次数（战斗/寻路交给游戏自动，支持多开轮转）"
 
     CALIBRATION = {
         "regions": [
@@ -107,6 +108,10 @@ class EscortTask(Task):
         self.flags = self._load_flags(tc)
         self.max_escorts = max(1, int(loop.get("max_escorts", 3)))
 
+        multi = ctx.cfg.get("targets", {}).get("multi", False)
+        switch_delay = ctx.cfg.get("targets", {}).get("switch_delay_sec", 0.15)
+        tick = loop.get("tick_interval_sec", 0.5)
+
         time_limit = loop.get("time_limit_min", 0) or 0
         start_ts = time.time()
         deadline = start_ts + time_limit * 60 if time_limit > 0 else None
@@ -115,77 +120,292 @@ class EscortTask(Task):
             ctx.log("⚠ 当前非管理员权限：游戏在前台时鼠标/键盘注入可能被 UIPI 拦截。"
                     "请用『以管理员身份运行』重开。", level="warn")
 
-        if not self._acquire_target_window(ctx):
+        contexts = self._resolve_contexts(ctx, multi)
+        if not contexts:
             ctx.log("没找到/没选中目标窗口，已停止。", level="error")
             return
-        if ctx.cfg.get("targets", {}).get("multi"):
-            ctx.log("注：运镖暂不支持多号轮跑，本次只操作选中的第一个号；多号请逐个单独跑。", level="warn")
 
         if dry_run:
-            ctx.log("演练模式：不会真正参加运镖，仅对当前屏幕循环做『各标志识别自检』。"
-                    "手动打开对应界面，看日志能否认出 运镖入口/参加按钮/押送普通镖银/战斗。", level="warn")
-            self._dry_run_selfcheck(ctx, regions, threshold, deadline)
+            ctx.log("演练模式：只对各号当前屏幕做『各标志识别自检』，不发快捷键/不点关键操作。"
+                    + ("多号逐个扫描。" if multi else "")
+                    + "手动打开对应界面，看日志能否认出 运镖入口/参加按钮/押送普通镖银/战斗。", level="warn")
+            self._dry_run_selfcheck(ctx, contexts, multi, regions, threshold, switch_delay, deadline)
             return
 
-        ctx.log(f"★ 实战模式：会真开活动、真参加运镖、循环押满 {self.max_escorts} 趟 ★", level="warn")
+        ctx.log(f"★ 实战模式：{('多开轮转 ' + str(len(contexts)) + ' 个号' if multi else '单号')}，"
+                f"每号循环押满 {self.max_escorts} 趟，号与号之间逐步轮转 ★", level="warn")
         if time_limit > 0:
-            ctx.log(f"时间上限 {time_limit} 分钟（到点自停）。主终止条件是对话框不再弹出（次数用完）。")
+            ctx.log(f"时间上限 {time_limit} 分钟（到点自停）。每号主终止条件是对话框不再弹出（次数用完）。")
 
-        self._escorts = 0
-        state = S_OPEN_ACTIVITY
-        state_enter = time.time()
-        recover = 0
-
+        records = [self._new_record(c) for c in contexts]
         while not ctx.should_stop():
             if deadline and time.time() >= deadline:
                 ctx.log(f"已达时间上限 {time_limit} 分钟，停止。")
                 break
-            if state == S_FINISHED:
+            if all(r["done"] for r in records):
+                ctx.log("所有号都已押满次数/结束。")
                 break
-            if not self._acquire_target_window(ctx):
-                ctx.log("目标窗口不见了，2 秒后重试…", level="warn")
-                self._interruptible_sleep(ctx, 2.0)
-                continue
 
-            nxt = self._dispatch(ctx, state, loop, regions, threshold)
-
-            if nxt == "STOP":
-                break
-            if nxt == "STUCK":
-                recover += 1
-                ctx.log(f"状态 {state} 卡住（第 {recover}/{loop.get('max_stuck_recover',3)} 次），尝试恢复…",
-                        level="warn")
-                self._save_capture(self._grab_scene(ctx, regions), f"stuck_{state}")
-                if recover >= loop.get("max_stuck_recover", 3):
-                    ctx.log("多次卡死仍无进展，主动停止。", level="error")
+            active = [r for r in records if not r["done"]]
+            for rec in records:
+                if ctx.should_stop():
                     break
-                # 卡死兜底：只在「还没开始任何一趟运镖」时回开活动重试；已经在押镖途中卡死则直接收尾，
-                # 避免活动已参加、按钮变「已参加」后重开活动连环卡死。
-                if self._escorts == 0:
-                    self._recover(ctx)
-                    state, state_enter = S_OPEN_ACTIVITY, time.time()
+                if rec["done"]:
                     continue
-                ctx.log("已在押镖途中卡死，按已完成处理并停止。", level="warn")
-                break
+                wctx = rec["ctx"]
+                if wctx.window.rect() is None:
+                    if not rec["dead_logged"]:
+                        wctx.log("目标窗口不见了，跳过该号（其余号继续）。", level="warn")
+                        rec["dead_logged"] = True
+                    continue
+                rec["dead_logged"] = False
+                # 操作某号前先切前台，确保点击/快捷键落在这个号身上（多开必须；单开也无害）
+                if multi:
+                    wctx.window.activate()
+                    if wctx.should_stop():
+                        break
+                # 推进这个号一小步
+                self._step_once(wctx, rec, loop, regions, threshold)
+                # 号与号之间留个小间隔，别太机械
+                if multi and len(active) > 1:
+                    self._interruptible_sleep(ctx, self._jitter(switch_delay, ctx))
 
-            if nxt == S_ESCORTING:
-                recover = 0
-            if nxt != state:
-                state, state_enter = nxt, time.time()
+            # 一整轮（所有号各推进一步）之间留间隔（带抖动）
+            self._interruptible_sleep(ctx, self._jitter(tick, ctx))
 
-        ctx.log(f"已停止。共完成 {getattr(self,'_escorts',0)} 趟运镖，"
-                f"用时 {(time.time()-start_ts)/60:.1f} 分钟。")
+        total = sum(r["escorts"] for r in records)
+        ctx.log(f"已停止。共完成 {total} 趟运镖，用时 {(time.time() - start_ts) / 60:.1f} 分钟。")
 
     # ------------------------------------------------------------------
-    def _dispatch(self, ctx, state, loop, regions, threshold):
-        if state == S_OPEN_ACTIVITY:
-            return self._st_open_activity(ctx, loop, regions, threshold)
-        if state == S_DIALOG:
-            return self._st_dialog(ctx, loop, regions, threshold)
-        if state == S_ESCORTING:
-            return self._st_escorting(ctx, loop, regions, threshold)
-        return S_FINISHED
+    # 多开轮转：上下文与每号状态记录
+    # ------------------------------------------------------------------
+    def _resolve_contexts(self, ctx, multi):
+        """按选择把目标窗口包成「要轮转的上下文」列表。
+        单开→复用主 ctx 并绑到选中的那个窗口；多开→每号一个子上下文(带「号N」标签，日志自动加前缀)。"""
+        wins = ctx.select_windows()
+        if not wins:
+            return []
+        if multi:
+            return [ctx.make_child(w, f"号{i + 1}") for i, w in enumerate(wins)]
+        ctx.window = wins[0]
+        return [ctx]
 
+    @staticmethod
+    def _new_record(wctx):
+        """每个号一份独立状态。轮转时按 state 各推进一步，互不干扰。"""
+        return {"ctx": wctx, "state": S_OPEN_ACTIVITY, "t_state": 0.0,
+                "escorts": 0,            # 本号已开始/进行中的趟数（首趟点押送银即 1）
+                "seen_ongoing": False,   # 本趟是否出现过「运镖中」标志（出现过才允许靠它消失判结束）
+                "gone_since": None,      # 「运镖中」标志消失起点
+                "t_trip": 0.0,          # 最近一次「明确在运镖/战斗/起步」的时间，用于单趟超时兜底
+                "t_diag": 0.0, "scrolls": 0, "recover": 0,
+                "done": False, "dead_logged": False}
+
+    @staticmethod
+    def _goto(rec, state):
+        rec["state"] = state
+        rec["t_state"] = time.time()
+
+    @staticmethod
+    def _state_elapsed(rec):
+        return time.time() - rec["t_state"]
+
+    # ------------------------------------------------------------------
+    # 单步推进：按这个号的 state 做【一小步】非阻塞动作，然后立刻返回（好轮转到下一个号）
+    # ------------------------------------------------------------------
+    def _step_once(self, ctx, rec, loop, regions, threshold):
+        st = rec["state"]
+        if st == S_OPEN_ACTIVITY:
+            self._do_open_activity(ctx, rec, loop, regions, threshold)
+        elif st == S_FIND_CARD:
+            self._do_find_card(ctx, rec, loop, regions, threshold)
+        elif st == S_DIALOG:
+            self._do_dialog(ctx, rec, loop, regions, threshold)
+        elif st == S_CONFIRM:
+            self._do_confirm(ctx, rec, loop, regions, threshold)
+        elif st == S_ESCORTING:
+            self._do_escorting(ctx, rec, loop, regions, threshold)
+
+    # ---- 开活动 ----
+    def _do_open_activity(self, ctx, rec, loop, regions, threshold):
+        self._focus(ctx)
+        if not ctx.send_hotkey("open_activity"):
+            ctx.log("打不开活动界面（open_activity 快捷键未配置），放弃该号。", level="error")
+            rec["done"] = True
+            return
+        ctx.log("已打开活动，滚轮翻找「运镖」…")
+        self._interruptible_sleep(ctx, self._jitter(0.6, ctx))
+        rec["scrolls"] = 0
+        self._goto(rec, S_FIND_CARD)
+
+    # ---- 找「运镖」条目 → 点「参加」（每访问一次：找不到就滚一屏，超 scroll_max_tries 屏则恢复）----
+    def _do_find_card(self, ctx, rec, loop, regions, threshold):
+        list_region = regions.get("activity_list")
+        rect = (ctx.window.region_to_screen_rect(list_region)
+                if list_region else ctx.window.rect())
+        if rect is None:
+            return
+        scene = win_mod.grab(rect)
+        hit = vision.match(scene, self.flags.get("escort_entry"), threshold) if scene is not None else None
+        if hit is not None:
+            cx, cy, score = hit
+            entry_xy = (rect[0] + cx, rect[1] + cy)
+            join = self._find_join_on_row(ctx, list_region, entry_xy, threshold, loop)
+            if join is not None:
+                ctx.mouse.click(join[0], join[1])
+                ctx.log(f"找到「运镖」（{score:.3f}）→ 点「参加」（{join[2]:.3f}），等对话框。", level="hit")
+                self._goto(rec, S_DIALOG)
+                return
+            ctx.log("认出「运镖」但没找到右侧「参加」（检查 escort_join 模板/阈值）。", level="warn")
+        else:
+            # 没找到：在列表中心向下滚一屏（settle 交给轮转间隔），下次再找
+            cx_c, cy_c = rect[0] + rect[2] // 2, rect[1] + rect[3] // 2
+            ctx.mouse.scroll(loop.get("scroll_step", -3), cx_c, cy_c)
+        rec["scrolls"] += 1
+        if rec["scrolls"] > max(1, loop.get("scroll_max_tries", 8)):
+            ctx.log("活动列表里翻找「运镖」入口多次未果。", level="warn")
+            self._recover_window(ctx, rec, loop, regions)
+
+    # ---- 等首个「押送普通镖银」对话框 → 点它，开始第 1 趟 ----
+    def _do_dialog(self, ctx, rec, loop, regions, threshold):
+        scene_rect = self._scene_rect(ctx, regions)
+        cur = win_mod.grab(scene_rect)
+        hit = self._match_scene(cur, scene_rect, "escort_silver", threshold)
+        if hit is not None:
+            ctx.mouse.click(hit[0], hit[1])
+            rec["escorts"] += 1
+            ctx.log(f"点「押送普通镖银」（{hit[2]:.3f}）开始第 {rec['escorts']} 趟，等确认框…", level="hit")
+            self._interruptible_sleep(ctx, self._jitter(0.4, ctx))
+            self._goto(rec, S_CONFIRM)
+            return
+        if self._state_elapsed(rec) > loop.get("dialog_timeout_sec", 60):
+            ctx.log("等「押送普通镖银」对话框超时。", level="warn")
+            self._recover_window(ctx, rec, loop, regions)
+
+    # ---- 点完押送后等「确认」按钮（超时容错继续）----
+    def _do_confirm(self, ctx, rec, loop, regions, threshold):
+        scene_rect = self._scene_rect(ctx, regions)
+        cur = win_mod.grab(scene_rect)
+        hit = self._match_scene(cur, scene_rect, "escort_confirm", threshold)
+        if hit is not None:
+            ctx.mouse.click(hit[0], hit[1])
+            ctx.log(f"点「确认」（{hit[2]:.3f}），开始监控本趟运镖。", level="hit")
+            self._interruptible_sleep(ctx, self._jitter(0.4, ctx))
+            self._start_trip_monitor(rec)
+            return
+        if self._state_elapsed(rec) > loop.get("confirm_timeout_sec", 10):
+            ctx.log("等运镖「确认」按钮超时（可能本次无需确认），开始监控本趟。", level="warn")
+            self._start_trip_monitor(rec)
+
+    def _start_trip_monitor(self, rec):
+        """进入运镖监控前，重置该趟的「运镖中/结束」计时。"""
+        rec["seen_ongoing"] = False
+        rec["gone_since"] = None
+        rec["t_trip"] = time.time()
+        self._goto(rec, S_ESCORTING)
+
+    # ---- 运镖监控（每访问一次扫一遍，非阻塞）----
+    def _do_escorting(self, ctx, rec, loop, regions, threshold):
+        """监控运镖。靠「运镖中」标志(escort_ongoing)判断在不在运镖途中——
+          · 对话框「押送普通镖银」再次弹出 → 这趟跑完、还有次数，续点开始下一趟（次数+1）；
+          · 只要「运镖中」标志在 或 在战斗中 → 绝不判结束（刷新计时）；
+          · 「运镖中」标志这趟出现过、现在消失了、且没有新对话框、且已押满设定趟数
+            → 持续 done_idle_sec 秒后判定本号运镖全部结束。
+        既不会在「点完确认刚开始、人物还没动」时误停，也不会在两趟之间的空档误停。"""
+        done_grace = loop.get("done_idle_sec", 6.0)
+        per_trip_timeout = loop.get("escort_timeout_sec", 600)
+        scene_rect = self._scene_rect(ctx, regions)
+        cur = win_mod.grab(scene_rect)
+
+        # 对话框又弹出来了 → 这一趟跑完、还有次数，续点开始下一趟
+        hit = self._match_scene(cur, scene_rect, "escort_silver", threshold)
+        if hit is not None:
+            if rec["escorts"] >= self.max_escorts:
+                # 已押满设定趟数仍弹框（异常/识别抖动）→ 不再续点，直接收尾
+                ctx.log(f"已完成设定的 {self.max_escorts} 趟，收尾该号（不再续押）。", level="hit")
+                self._finish_escort(ctx, rec)
+                return
+            ctx.mouse.click(hit[0], hit[1])
+            rec["escorts"] += 1
+            ctx.log(f"上一趟结束，对话框再次弹出 → 点「押送普通镖银」开始第 {rec['escorts']} 趟"
+                    f"（{hit[2]:.3f}），等确认框…", level="hit")
+            self._interruptible_sleep(ctx, self._jitter(0.4, ctx))
+            self._goto(rec, S_CONFIRM)
+            return
+
+        ongoing = self._present(cur, "escort_ongoing", threshold)
+        in_battle = self._present(cur, "escort_battle", threshold)
+
+        if ongoing or in_battle:
+            # 明确在运镖途中/战斗中 → 绝不停，刷新计时
+            if ongoing:
+                rec["seen_ongoing"] = True
+            rec["gone_since"] = None
+            rec["t_trip"] = time.time()
+        else:
+            # 既没在运镖也没在战斗、也没对话框
+            if rec["seen_ongoing"] and rec["escorts"] >= self.max_escorts:
+                # 这趟运镖中标志出现过又消失了 + 已是最后一趟 + 没有新对话框 → 准备收尾
+                if rec["gone_since"] is None:
+                    rec["gone_since"] = time.time()
+                elif time.time() - rec["gone_since"] >= done_grace:
+                    ctx.log("「运镖中」标志已消失且无更多对话框 → 本号运镖全部结束。", level="hit")
+                    self._finish_escort(ctx, rec)
+                    return
+            # 否则：要么还没开始（运镖中标志还没出现），要么还有次数要等下一个对话框 → 继续等
+
+        self._diag_escorting(ctx, rec, ongoing, in_battle, done_grace)
+        if time.time() - rec["t_trip"] > per_trip_timeout:
+            ctx.log("长时间既无『运镖中』也无对话框，按本号结束处理。", level="warn")
+            self._finish_escort(ctx, rec)
+
+    def _diag_escorting(self, ctx, rec, ongoing, in_battle, done_grace):
+        """每 ~5s 打印一次该号运镖状态诊断。"""
+        now = time.time()
+        if now - rec["t_diag"] < 5.0:
+            return
+        if ongoing:
+            st = "运镖中"
+        elif in_battle:
+            st = "战斗中"
+        elif not rec["seen_ongoing"]:
+            st = "等运镖开始/过场"
+        else:
+            held = (now - rec["gone_since"]) if rec["gone_since"] else 0.0
+            st = f"运镖中标志已消失 {held:.1f}/{done_grace}s（等满即判结束）"
+        ctx.log(f"监控…{st}（已完成 {rec['escorts']}/{self.max_escorts} 趟）")
+        rec["t_diag"] = now
+
+    def _finish_escort(self, ctx, rec):
+        """本号押镖收尾：标记该号 done（押满次数/对话框不再弹）。"""
+        rec["done"] = True
+        ctx.log(f"该号已完成 {rec['escorts']} 趟运镖。")
+
+    # ---- 卡死兜底恢复 ----
+    def _recover_window(self, ctx, rec, loop, regions):
+        """某号卡死兜底：截图存证 + 计数；超上限放弃该号。
+        仅在【还没开始任何一趟运镖】时聚焦+Esc 清弹窗后回开活动重试；
+        已经在押镖途中卡死则直接按已完成处理、放弃该号——避免活动已参加、
+        按钮变「已参加」后重开活动连环卡死。"""
+        rec["recover"] += 1
+        ctx.log(f"卡住（第 {rec['recover']}/{loop.get('max_stuck_recover', 3)} 次），尝试恢复…", level="warn")
+        self._save_capture(self._grab_scene(ctx, regions), f"stuck_{rec['state']}")
+        if rec["recover"] >= loop.get("max_stuck_recover", 3):
+            ctx.log("多次卡死仍无进展，放弃该号。", level="error")
+            rec["done"] = True
+            return
+        if rec["escorts"] == 0:
+            self._focus(ctx)
+            ctx.log("卡死恢复：按一次 Esc 关掉可能的异常弹窗…")
+            if ctx.send_hotkey("close_panel"):
+                self._interruptible_sleep(ctx, self._jitter(0.25, ctx))
+            self._goto(rec, S_OPEN_ACTIVITY)
+        else:
+            ctx.log("已在押镖途中卡死，按已完成处理、放弃该号。", level="warn")
+            rec["done"] = True
+
+    # ------------------------------------------------------------------
+    # 工具
     # ------------------------------------------------------------------
     def _focus(self, ctx):
         """把游戏窗口切到前台——键盘快捷键(SendInput)只发给有焦点的窗口，发键前必须先激活。"""
@@ -193,39 +413,6 @@ class EscortTask(Task):
             ctx.window.activate()
         except Exception:
             pass
-
-    def _recover(self, ctx):
-        """卡死兜底恢复（仅 STUCK 且尚未开始运镖时）：聚焦游戏 + 按一次 Esc 清掉异常弹窗。"""
-        self._focus(ctx)
-        ctx.log("卡死恢复：按一次 Esc 关掉可能的异常弹窗…")
-        if ctx.send_hotkey("close_panel"):
-            self._interruptible_sleep(ctx, self._jitter(0.25, ctx))
-
-    def _st_open_activity(self, ctx, loop, regions, threshold):
-        # 打开活动：发 open_activity 快捷键（默认 Alt+C；发键前先激活游戏）
-        self._focus(ctx)
-        if not ctx.send_hotkey("open_activity"):
-            ctx.log("打不开活动界面（open_activity 快捷键未配置）。", level="error")
-            return "STUCK"
-        ctx.log("已打开活动，滚轮翻找「运镖」…")
-        self._interruptible_sleep(ctx, self._jitter(0.6, ctx))
-
-        hit = self._scroll_find(ctx, regions.get("activity_list"),
-                                self.flags.get("escort_entry"), loop, threshold, "运镖入口")
-        if hit is None:
-            ctx.log("活动列表里没找到「运镖」入口。", level="warn")
-            return "STUCK"
-        ctx.log(f"找到「运镖」条目（相似度 {hit[2]:.3f}），在该行右侧找「参加」按钮…")
-
-        # 点该行【右侧的「参加」按钮】，不是点条目本身
-        join = self._find_join_on_row(ctx, regions.get("activity_list"), (hit[0], hit[1]),
-                                      threshold, loop)
-        if join is None:
-            ctx.log("找到了「运镖」但没认出右侧的「参加」按钮（检查 escort_join 模板/阈值）。", level="warn")
-            return "STUCK"
-        ctx.mouse.click(join[0], join[1])
-        ctx.log(f"点击「参加」（相似度 {join[2]:.3f}），等待弹出对话框。", level="hit")
-        return S_DIALOG
 
     def _find_join_on_row(self, ctx, list_region, entry_screen_xy, threshold, loop):
         """在「运镖」条目所在【那张卡片】的右侧条带里匹配「参加」按钮(escort_join)。
@@ -273,141 +460,6 @@ class EscortTask(Task):
         cx, cy, score = m
         return (rx + x0 + cx, ry + y0 + cy, score)
 
-    def _st_dialog(self, ctx, loop, regions, threshold):
-        """点「参加」后等对话框出现，点首个「押送普通镖银」，开始第 1 趟运镖。"""
-        ctx.log("等待传送+寻路到镖头、对话框出现…")
-        timeout = loop.get("dialog_timeout_sec", 60)
-        t0 = time.time()
-        tpl = self.flags.get("escort_silver")
-        while not ctx.should_stop():
-            if time.time() - t0 > timeout:
-                ctx.log("等「押送普通镖银」对话框超时。", level="warn")
-                return "STUCK"
-            scene_rect = self._scene_rect(ctx, regions)
-            cur = win_mod.grab(scene_rect)
-            hit = vision.match(cur, tpl, threshold) if tpl is not None else None
-            if hit is not None:
-                cx, cy, score = hit
-                ctx.mouse.click(scene_rect[0] + cx, scene_rect[1] + cy)
-                self._escorts = 1
-                ctx.log(f"点「押送普通镖银」（相似度 {score:.3f}），等确认框…", level="hit")
-                self._interruptible_sleep(ctx, self._jitter(0.4, ctx))
-                self._click_confirm(ctx, loop, regions, threshold)
-                ctx.log("开始第 1 趟运镖。", level="hit")
-                return S_ESCORTING
-            self._interruptible_sleep(ctx, 0.4)
-        return "STOP"
-
-    def _click_confirm(self, ctx, loop, regions, threshold):
-        """点「押送普通镖银」后弹出的「确认」按钮。等到并点它，返回 True；
-        超时仍没出现则容错返回 False（继续往下走，不卡死）。"""
-        tpl = self.flags.get("escort_confirm")
-        if tpl is None:
-            return False
-        timeout = loop.get("confirm_timeout_sec", 10)
-        t0 = time.time()
-        while not ctx.should_stop():
-            if time.time() - t0 > timeout:
-                ctx.log("等运镖「确认」按钮超时（可能本次无需确认），继续。", level="warn")
-                return False
-            scene_rect = self._scene_rect(ctx, regions)
-            cur = win_mod.grab(scene_rect)
-            hit = vision.match(cur, tpl, threshold) if cur is not None else None
-            if hit is not None:
-                cx, cy, score = hit
-                ctx.mouse.click(scene_rect[0] + cx, scene_rect[1] + cy)
-                ctx.log(f"点「确认」（相似度 {score:.3f}）。", level="hit")
-                return True
-            self._interruptible_sleep(ctx, 0.3)
-        return False
-
-    def _st_escorting(self, ctx, loop, regions, threshold):
-        """监控运镖。靠「运镖中」标志(escort_ongoing)判断在不在运镖途中——
-          · 对话框「押送普通镖银」再次弹出 → 这趟跑完、还有次数，续点开始下一趟（次数+1）；
-          · 只要「运镖中」标志在 或 在战斗中 → 绝不判结束（刷新计时）；
-          · 「运镖中」标志这趟出现过、现在消失了、且没有新对话框、且已押满设定趟数
-            → 持续 done_idle_sec 秒后判定本批运镖全部结束。
-        这样既不会在「点完确认刚开始、人物还没动」时误停，也不会在两趟之间的空档误停。"""
-        ctx.log(f"第 {self._escorts}/{self.max_escorts} 趟运镖中（寻路/战斗交给游戏），监控运镖中/对话框…")
-        done_grace = loop.get("done_idle_sec", 6.0)
-        per_trip_timeout = loop.get("escort_timeout_sec", 600)
-        tpl = self.flags.get("escort_silver")
-        t0 = time.time()              # 最近一次「明确在运镖/战斗/起步」的时间，用于超时兜底
-        seen_ongoing = False          # 这趟是否出现过「运镖中」标志（出现过才允许靠它消失判结束）
-        gone_since = None             # 「运镖中」标志消失起点
-        last_diag = 0.0
-        while not ctx.should_stop():
-            scene_rect = self._scene_rect(ctx, regions)
-            cur = win_mod.grab(scene_rect)
-
-            # 对话框又弹出来了 → 这一趟跑完、还有次数，续点开始下一趟
-            hit = vision.match(cur, tpl, threshold) if tpl is not None else None
-            if hit is not None:
-                if self._escorts >= self.max_escorts:
-                    # 已押满设定趟数仍弹框（异常/识别抖动）→ 不再续点，直接收尾
-                    ctx.log(f"已完成设定的 {self.max_escorts} 趟，停止（不再续押）。", level="hit")
-                    return S_FINISHED
-                cx, cy, score = hit
-                ctx.mouse.click(scene_rect[0] + cx, scene_rect[1] + cy)
-                self._escorts += 1
-                ctx.log(f"上一趟结束，对话框再次弹出 → 点「押送普通镖银」开始第 {self._escorts} 趟"
-                        f"（相似度 {score:.3f}），等确认框…", level="hit")
-                self._interruptible_sleep(ctx, self._jitter(0.4, ctx))
-                self._click_confirm(ctx, loop, regions, threshold)
-                # 新一趟：重置该趟的运镖中/结束计时
-                t0, seen_ongoing, gone_since = time.time(), False, None
-                self._interruptible_sleep(ctx, self._jitter(1.0, ctx))
-                continue
-
-            ongoing = self._present(cur, "escort_ongoing", threshold)
-            in_battle = self._present(cur, "escort_battle", threshold)
-
-            if ongoing or in_battle:
-                # 明确在运镖途中/战斗中 → 绝不停，刷新计时
-                if ongoing:
-                    seen_ongoing = True
-                gone_since = None
-                t0 = time.time()
-            else:
-                # 既没在运镖也没在战斗、也没对话框
-                if seen_ongoing and self._escorts >= self.max_escorts:
-                    # 这趟运镖中标志出现过又消失了 + 已是最后一趟 + 没有新对话框 → 准备收尾
-                    if gone_since is None:
-                        gone_since = time.time()
-                    elif time.time() - gone_since >= done_grace:
-                        ctx.log("「运镖中」标志已消失且无更多对话框 → 本批运镖全部结束。", level="hit")
-                        return S_FINISHED
-                # 否则：要么还没开始（运镖中标志还没出现），要么还有次数要等下一个对话框 → 继续等
-
-            last_diag = self._log_escort_diag(ctx, ongoing, in_battle, seen_ongoing,
-                                              gone_since, done_grace, last_diag)
-            if time.time() - t0 > per_trip_timeout:
-                ctx.log("长时间既无『运镖中』也无对话框，按本批结束处理。", level="warn")
-                return S_FINISHED
-            self._interruptible_sleep(ctx, 0.3)
-        return "STOP"
-
-    def _log_escort_diag(self, ctx, ongoing, in_battle, seen_ongoing,
-                         gone_since, done_grace, last_diag):
-        """每 ~5s 打印一次运镖状态诊断。返回新的 last_diag 时间。"""
-        now = time.time()
-        if now - (last_diag or 0.0) < 5.0:
-            return last_diag
-        if ongoing:
-            st = "运镖中"
-        elif in_battle:
-            st = "战斗中"
-        elif not seen_ongoing:
-            st = "等运镖开始/过场"
-        else:
-            held = (now - gone_since) if gone_since else 0.0
-            st = f"运镖中标志已消失 {held:.1f}/{done_grace}s（等满即判结束）"
-        ctx.log(f"监控…{st}（已完成 {self._escorts}/{self.max_escorts} 趟）")
-        return now
-
-    # ------------------------------------------------------------------
-    # 工具
-    # ------------------------------------------------------------------
     def _load_flags(self, tc):
         templates = tc.get("templates", {})
         return {k: vision.load_template(templates.get(k)) if templates.get(k) else None
@@ -427,36 +479,18 @@ class EscortTask(Task):
             return False
         return vision.match(scene, tpl, threshold) is not None
 
-    def _scroll_find(self, ctx, list_region, tpl, loop, threshold, label):
-        """在 list_region 内滚轮翻找 tpl。命中返回 (screen_x, screen_y, score)；
-        翻完 scroll_max_tries 屏仍无→返回 None。"""
-        if tpl is None:
-            ctx.log(f"找 {label} 失败：模板未标定。", level="warn")
+    def _match_scene(self, cur, scene_rect, flag_key, threshold):
+        """在整张 scene 里匹配 flag_key，命中返回屏幕绝对 (x,y,score)，否则 None。"""
+        tpl = self.flags.get(flag_key)
+        if cur is None or tpl is None or scene_rect is None:
             return None
-        tries = max(1, loop.get("scroll_max_tries", 8))
-        step = loop.get("scroll_step", -3)
-        for i in range(tries):
-            if ctx.should_stop():
-                return None
-            rect = (ctx.window.region_to_screen_rect(list_region)
-                    if list_region else ctx.window.rect())
-            if rect is None:
-                return None
-            scene = self._wait_still(ctx, rect, loop.get("still_min_sec", 0.3),
-                                     loop.get("still_wait_sec", 2.0))
-            if scene is None:
-                return None
-            hit = vision.match(scene, tpl, threshold)
-            if hit is not None:
-                cx, cy, score = hit
-                return (rect[0] + cx, rect[1] + cy, score)
-            # 没找到→在列表中心向下滚一屏再找
-            cx_c, cy_c = rect[0] + rect[2] // 2, rect[1] + rect[3] // 2
-            ctx.mouse.scroll(step, cx_c, cy_c)
-        return None
+        m = vision.match(cur, tpl, threshold)
+        if m is None:
+            return None
+        return (scene_rect[0] + m[0], scene_rect[1] + m[1], m[2])
 
-    def _dry_run_selfcheck(self, ctx, regions, threshold, deadline):
-        """演练：周期性对当前屏幕识别各标志，报告命中，便于用户验证模板/阈值。"""
+    def _dry_run_selfcheck(self, ctx, contexts, multi, regions, threshold, switch_delay, deadline):
+        """演练：周期性对【每个号】当前屏幕识别各标志，报告命中，便于用户验证模板/阈值。"""
         keys = [("escort_entry", "运镖入口"), ("escort_join", "参加按钮"),
                 ("escort_silver", "押送普通镖银"), ("escort_confirm", "确认"),
                 ("escort_ongoing", "运镖中"), ("escort_battle", "战斗")]
@@ -464,20 +498,26 @@ class EscortTask(Task):
             if deadline and time.time() >= deadline:
                 ctx.log("演练时间上限到，停止。")
                 break
-            if not self._acquire_target_window(ctx):
-                self._interruptible_sleep(ctx, 1.5)
-                continue
-            scene = self._grab_scene(ctx, regions)
-            found = []
-            for key, label in keys:
-                tpl = self.flags.get(key)
-                if tpl is None:
+            for wctx in contexts:
+                if ctx.should_stop():
+                    break
+                if wctx.window.rect() is None:
                     continue
-                hit = vision.match(scene, tpl, threshold) if scene is not None else None
-                if hit is not None:
-                    found.append(f"{label}({hit[2]:.2f})")
-            if found:
-                ctx.log("识别到：" + "、".join(found), level="hit")
-            else:
-                ctx.log("当前屏幕未识别到任何已标定标志（请打开对应界面再看）。")
+                if multi:
+                    wctx.window.activate()
+                scene = self._grab_scene(wctx, regions)
+                found = []
+                for key, label in keys:
+                    tpl = self.flags.get(key)
+                    if tpl is None:
+                        continue
+                    hit = vision.match(scene, tpl, threshold) if scene is not None else None
+                    if hit is not None:
+                        found.append(f"{label}({hit[2]:.2f})")
+                if found:
+                    wctx.log("识别到：" + "、".join(found), level="hit")
+                else:
+                    wctx.log("当前屏幕未识别到任何已标定标志（请打开对应界面再看）。")
+                if multi and len(contexts) > 1:
+                    self._interruptible_sleep(ctx, self._jitter(switch_delay, ctx))
             self._interruptible_sleep(ctx, self._jitter(1.5, ctx))

@@ -128,6 +128,7 @@
       "loop": {
         "time_limit_min": 30,
         "match_threshold": 0.85,
+        "tick_interval_sec": 0.5,
         "max_escorts": 3,
         "done_idle_sec": 6.0,
         "dialog_timeout_sec": 60,
