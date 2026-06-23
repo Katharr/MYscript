@@ -21,6 +21,8 @@ import numpy as np
 import cv2
 from PIL import Image, ImageTk
 
+from . import theme as T
+
 
 def _pick_monitor(sct, point):
     """返回包含 point(x,y) 的显示器字典；找不到则用主屏。"""
@@ -65,15 +67,20 @@ def select_roi_on_screen(master, title="拖动鼠标框住目标，松开完成"
     canvas.create_image(0, 0, anchor="nw", image=photo)
     canvas.image = photo  # 防 GC
 
+    # 颜色按打开瞬间的外观模式解析成单值（纯 tk Canvas 不吃二元组）
+    c_bg = T.resolve(T.BG)
+    c_text = T.resolve(T.TEXT)
+    c_accent = T.resolve(T.ACCENT)
+
     # 顶部提示条
-    canvas.create_rectangle(0, 0, mon["width"], 44, fill="#0e1014", outline="", stipple="gray50")
+    canvas.create_rectangle(0, 0, mon["width"], 44, fill=c_bg, outline="", stipple="gray50")
     canvas.create_text(mon["width"] // 2, 22,
                        text=f"{title}      （Esc 取消）",
-                       fill="#e7eaf0", font=("Microsoft YaHei UI", 14, "bold"))
+                       fill=c_text, font=("Microsoft YaHei UI", 14, "bold"))
 
-    band = canvas.create_rectangle(0, 0, 0, 0, outline="#4f8cff", width=2)
+    band = canvas.create_rectangle(0, 0, 0, 0, outline=c_accent, width=2)
     dimv = []  # 选区外的遮罩（四块），用于高亮选区
-    sizetip = canvas.create_text(0, 0, text="", fill="#4f8cff",
+    sizetip = canvas.create_text(0, 0, text="", fill=c_accent,
                                  font=("Consolas", 11), anchor="nw")
 
     def _clear_dim():

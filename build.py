@@ -2,7 +2,7 @@
 """
 一键打包脚本。运行：python build.py
 会调用 PyInstaller 按「梦幻秒装备.spec」打包，产出单文件 exe，
-并整理出可直接分发的交付文件夹：发布\梦幻秒装备_v2.0\梦幻秒装备.exe
+并整理出可直接分发的交付文件夹：发布\梦幻秒装备_v2.1\梦幻秒装备.exe
 
 数据（config.json / templates / captures）首次运行 exe 时会自动生成在 exe 同级，
 所以交付文件夹里一开始只有那个 exe —— 用户标定后数据就集中长在这个文件夹里。
@@ -25,7 +25,7 @@ SPEC = os.path.join(BASE, "梦幻秒装备.spec")
 DIST = os.path.join(BASE, "dist")
 BUILD = os.path.join(BASE, "build")
 EXE_NAME = "梦幻秒装备.exe"
-RELEASE_DIR = os.path.join(BASE, "发布", "梦幻秒装备_v2.0")
+RELEASE_DIR = os.path.join(BASE, "发布", "梦幻秒装备_v2.1")
 
 
 def run():
@@ -50,7 +50,7 @@ def run():
         print("\n打包进程结束但没找到 exe：", exe_path)
         return 1
 
-    # 整理交付文件夹：发布\梦幻秒装备_v2.0\梦幻秒装备.exe
+    # 整理交付文件夹：发布\梦幻秒装备_v2.1\梦幻秒装备.exe
     os.makedirs(RELEASE_DIR, exist_ok=True)
     dest = os.path.join(RELEASE_DIR, EXE_NAME)
     shutil.copy2(exe_path, dest)
@@ -63,7 +63,7 @@ def run():
     print("\n[OK] 打包完成！")
     print(f"   exe        : {exe_path}  ({size_mb:.1f} MB)")
     print(f"   交付文件夹 : {RELEASE_DIR}")
-    print("\n把整个『梦幻秒装备_v2.0』文件夹发给用户即可。")
+    print("\n把整个『梦幻秒装备_v2.1』文件夹发给用户即可。")
     print("已附带标准配置 config.json（抢货标准速度档；标定坐标/监控清单留空，首次运行需标定+加装备）。")
     print("首次双击 exe（弹 UAC 点是），同目录还会自动生成 templates / captures。")
     return 0

@@ -85,12 +85,14 @@ class WindowPickerDialog(ctk.CTkToplevel):
         self.seg_mode = ctk.CTkSegmentedButton(
             modebar, values=["单开", "多开"], command=self._on_mode,
             font=self.fonts["body"], fg_color=T.SURFACE_2,
+            text_color=T.TEXT,
             selected_color=T.ACCENT, selected_hover_color=T.ACCENT_HOVER,
-            unselected_color=T.SURFACE_2, unselected_hover_color=T.BORDER)
+            unselected_color=T.BTN, unselected_hover_color=T.BTN_HOVER)
         self.seg_mode.set("多开" if self._multi else "单开")
         self.seg_mode.pack(side="left", padx=(10, 0))
         ctk.CTkButton(modebar, text="刷新", font=self.fonts["body"], width=72, height=30,
-                      corner_radius=T.RADIUS_SM, fg_color=T.SURFACE_2, hover_color=T.BORDER,
+                      corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
+                      border_width=1, border_color=T.BORDER,
                       command=self._enumerate).pack(side="right")
 
         # 窗口卡片列表
@@ -106,10 +108,11 @@ class WindowPickerDialog(ctk.CTkToplevel):
         self.status_lbl = ctk.CTkLabel(bottom, text="", font=self.fonts["small"], text_color=T.TEXT_DIM)
         self.status_lbl.grid(row=0, column=0, sticky="w")
         ctk.CTkButton(bottom, text="取消", font=self.fonts["body"], width=84, height=36,
-                      corner_radius=T.RADIUS_SM, fg_color=T.SURFACE_2, hover_color=T.BORDER,
+                      corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
+                      border_width=1, border_color=T.BORDER,
                       command=self._cancel).grid(row=0, column=1, padx=(0, 8))
         ctk.CTkButton(bottom, text="确定", font=self.fonts["btn"], width=110, height=36,
-                      corner_radius=T.RADIUS_SM, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
+                      corner_radius=T.RADIUS_SM, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER, text_color=T.ON_ACCENT,
                       command=self._confirm).grid(row=0, column=2)
 
     # ------------------------------------------------------------------

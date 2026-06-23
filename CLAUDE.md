@@ -68,7 +68,43 @@ mhxy/
 
 ## 当前状态
 - 依赖已装好：numpy, opencv-python, mss, pyautogui, pygetwindow, customtkinter, Pillow。
-- **2026-06-23（最新）新增「通用 / 工具」页 + 窗口尺寸归一化（方案A：一键还原到标定尺寸）**。
+- **2026-06-23（最新）落地《视觉设计规范》(docs/视觉设计规范.md)：令牌化主题 + 白天/夜间模式 + 组件尺寸统一**。
+  按规范第 9 节 step 1~4 执行（step 5「抽 BaseTaskPage」是单独立项，本次不做）。改了 5 文件：
+  1. **`gui/theme.py`（地基）**：所有颜色常量改成 `(light, dark)` **二元组**（dark 端==历史深色值，故深色观感不变）；
+     新增令牌 `PILL_OK_BG/PILL_DANGER_BG/ON_ACCENT/SUCCESS_HOVER`、`RADIUS_PILL=20`、间距 `SP_1..SP_6`(4/8/12/16/20/24)；
+     新增 `resolve(token)`（按 `ctk.get_appearance_mode()` 从二元组取当前端单值，单值原样返回——给「不吃二元组」的底层 tk 用）
+     和 `apply_log_tags(textbox)`（按 resolve 配置日志各级别前景色，切换明暗后需重跑）；`LEVEL_COLOR` 改存令牌(二元组)。
+     ⚠ 因 LEVEL_COLOR 值变成二元组，旧的 `tag_config(foreground=color)` 直接喂会坏——所以日志上色**必须**走 `apply_log_tags`。
+  2. **`core/config.py` + `config.example.json`**：顶层加 `"appearance":"dark"`（dark/light）；旧 config 由 `_deep_merge` 自动补。
+  3. **`gui/app.py`**：① `App.__init__` 读 `cfg["appearance"]` 调 `set_appearance_mode`（替代写死 "dark"）；
+     ② 侧栏底部(风险提示之上, row=100)加明暗切换按钮 `btn_appearance`，`_toggle_appearance`(切换+写回配置+逐页 `apply_log_tags` 重刷日志色)、
+     `_render_appearance_btn`(夜间显「🌙 夜间模式」/白天显「☀ 白天模式」)；
+     ③ 按迁移表统一：工具按钮 `34/120`(秒装备)与 `38/92`(其它页)→统一 **36×104**；秒装备运行按钮 `180`→**200**(与其它页一致 46 高)；
+     卡片内边距 `18`→**16**(SP_4)；药丸底色内联 `#1d3a2b/#3a1d1d/#15301f`→令牌 `PILL_OK_BG/PILL_DANGER_BG`；
+     Toast `"white"`→`ON_ACCENT`；4 个任务页日志上色循环→`T.apply_log_tags`；`GeneralPage._card` 自建范式→复用 `Card()`。
+  4. **`gui/roi_overlay.py`**：纯 tk 浮层(刻意不用 CTk)的底色/文字/线色改用 `T.resolve(BG/TEXT/ACCENT)` 按打开瞬间外观取单值
+     (规范 §4.3：临时浮层无需热切换；遮罩仍用纯黑)。
+  5. **`gui/calibrate_dialog.py`**：「＋ 框选添加」绿钮的内联 `#34b87c/#0e1014`→`SUCCESS_HOVER/BG` 令牌(两端对比都够)。
+  - 设计取舍：颜色用二元组是规范选定的**低风险路径**——绝大多数 `fg_color=T.X`/`text_color=T.X` 调用点**零改动**即同时支持明暗，
+    CTk 随 `set_appearance_mode` 自动重绘；药丸用二元组令牌后切换明暗也自动跟随，无需手动刷。**唯一要手动补刷的是日志 tag**(底层 tk)。
+  - **已验证**：6 文件 py_compile 过；example.json 合法；运行实测——令牌是二元组(dark 端==现值)、`resolve` 明/暗两端取值正确、
+    单值原样返回、`LEVEL_COLOR['hit'] is SUCCESS`、SP/RADIUS_PILL 值正确、DEFAULT 含 appearance、旧 config 经 `_deep_merge` 自动补；
+    app 真实 import、NAV 首项仍 general、`_toggle_appearance` 含写回；全工程无残留 `width=120/92/180`、无内联药丸色、无旧 tag 循环。
+  - **未真机端到端验证**（需用户开 GUI 自测）：① 启动默认按 `cfg["appearance"]`；② 点侧栏「🌙/☀」来回切——4 任务页+通用/设置/关于+
+    选窗/标定对话框都不应有「读不出的低对比」或「残留深色块」，日志已有行的颜色应跟随切换；③ 工具按钮/运行按钮尺寸是否齐整。
+  - **追加修复（用户反馈白天模式按钮看不清）**：① 次级/工具按钮原用 `SURFACE_2` 填充和卡片底糊在一起→新增专用令牌
+    `BTN/BTN_HOVER`（明显区别于卡片，dark `#2f3744`/light `#e2e6ec`）+ 1px `BORDER` 描边。
+    ② **根因**：CTk 的 `CTkButton/CTkOptionMenu/CTkSegmentedButton` 默认文字色是**不随明暗变的近白色 `#DCE4EE`**——
+    深色填充上没事，但 Secondary(浅底)/Ghost(透明浮浅卡) 在白天模式变「浅底+近白字=看不见」。已给**全部 35 个按钮**
+    + 2 个 OptionMenu(加 `dropdown_text_color`) + 1 个 SegmentedButton 显式设 `text_color`（填充块用 `ON_ACCENT`、浅底/透明用 `TEXT`）。
+    规范 §5.1 已补「必须显式设 text_color」的踩坑说明。改了 `theme.py/app.py/window_picker.py/calibrate_dialog.py`，
+    py_compile + import + 「35 按钮全带 text_color」审计脚本全过。
+  - **追加修复（秒装备控制卡片）**：三个工具按钮原来竖排，和其它任务页不一致→改成三段式（运行按钮+横排工具/分隔线/开关），四页统一。
+  - **追加修复（页眉副标题过长被截断，如秘境降妖）**：CTkLabel **默认不换行**，单行长文本被窗口右缘切掉。
+    新增模块助手 `bind_wraplength(label)`（绑 `<Configure>`，按实际宽度设 `wraplength` 自适应换行）。把 4 个任务页页眉重构成
+    `bar` grid：标题 row0col0 / 药丸 row0col1 / **副标题单独 row1col0 sticky=ew** + `bind_wraplength`；通用页副标题同理。
+    规范 §6 已补「Header 结构」与「长文本必须能自动换行」两条踩坑说明。共 5 处用上 `bind_wraplength`。
+- **2026-06-23 新增「通用 / 工具」页 + 窗口尺寸归一化（方案A：一键还原到标定尺寸）**。
   背景：脚本检测区/按钮点位(`regions`)是按标定那一刻的窗口尺寸记录的**窗口相对像素**，模板又是**单尺度**匹配——
   窗口**移动**没事(每次 `window.rect()` 实时换算)，但被手操**拉大/缩小**后点位全错、模板也认不出。用户常多开 3 个号、
   手操会把某些号拉大，要能一键拉回。**调研过两个方案**：A=把窗口 resize 回标定尺寸(简单可靠,识别/点击逻辑零改动)；

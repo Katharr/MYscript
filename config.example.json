@@ -3,6 +3,7 @@
   "input_backend": "sendinput",
   "window_offset": [0, 0],
   "hotkey_toggle": "F5",
+  "appearance": "dark",
   "targets": {
     "multi": false,
     "single_index": 0,

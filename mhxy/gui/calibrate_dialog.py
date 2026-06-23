@@ -117,7 +117,7 @@ class CalibrateDialog(ctk.CTkToplevel):
         self.status_lbl = ctk.CTkLabel(bottom, text="", font=self.fonts["small"], text_color=T.TEXT_DIM)
         self.status_lbl.grid(row=0, column=0, sticky="w")
         ctk.CTkButton(bottom, text="完成", font=self.fonts["btn"], width=110, height=38,
-                      corner_radius=T.RADIUS_SM, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
+                      corner_radius=T.RADIUS_SM, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER, text_color=T.ON_ACCENT,
                       command=self._close).grid(row=0, column=1, sticky="e")
 
     def _card(self, parent, grid_row):
@@ -140,12 +140,12 @@ class CalibrateDialog(ctk.CTkToplevel):
         # 可整窗的大检测区：多给一个「用整窗」按钮（把该区清空＝整窗检测）
         if full_window:
             ctk.CTkButton(row, text="用整窗", font=self.fonts["small"], width=58, height=30,
-                          corner_radius=T.RADIUS_SM, fg_color="transparent", hover_color=T.BORDER,
+                          corner_radius=T.RADIUS_SM, fg_color="transparent", hover_color=T.BORDER, text_color=T.TEXT,
                           border_width=1, border_color=T.BORDER,
                           command=lambda k=key, n=name: self._use_full_window(k, n)).grid(
                               row=0, column=2, padx=(0, 4))
         ctk.CTkButton(row, text="框选", font=self.fonts["body"], width=72, height=30,
-                      corner_radius=T.RADIUS_SM, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
+                      corner_radius=T.RADIUS_SM, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER, text_color=T.ON_ACCENT,
                       command=command).grid(row=0, column=3, padx=(6, 12))
         store[key] = status
 
@@ -164,8 +164,8 @@ class CalibrateDialog(ctk.CTkToplevel):
         ctk.CTkLabel(head, text="③ 要抢的装备", font=self.fonts["h2"], text_color=T.TEXT).grid(
             row=0, column=0, sticky="w")
         ctk.CTkButton(head, text="＋ 框选添加", font=self.fonts["body"], width=110, height=32,
-                      corner_radius=T.RADIUS_SM, fg_color=T.SUCCESS, hover_color="#34b87c",
-                      text_color="#0e1014", command=self._add_item).grid(row=0, column=1, sticky="e")
+                      corner_radius=T.RADIUS_SM, fg_color=T.SUCCESS, hover_color=T.SUCCESS_HOVER,
+                      text_color=T.BG, command=self._add_item).grid(row=0, column=1, sticky="e")
         ctk.CTkLabel(icard, text="提示：连「图标 + 名字」一起框，别框价格（价格会变，框了反而认不出）。",
                      font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left").grid(
                          row=1, column=0, sticky="w", padx=16, pady=(0, 6))
@@ -334,7 +334,7 @@ class CalibrateDialog(ctk.CTkToplevel):
                     ctk.CTkLabel(row, text=f"🗡  {it.get('name', '?')}", font=self.fonts["body"],
                                  text_color=T.TEXT).grid(row=0, column=0, sticky="w", padx=12, pady=8)
                     ctk.CTkButton(row, text="删除", font=self.fonts["small"], width=52, height=28,
-                                  corner_radius=T.RADIUS_SM, fg_color="transparent", hover_color=T.DANGER,
+                                  corner_radius=T.RADIUS_SM, fg_color="transparent", hover_color=T.DANGER, text_color=T.TEXT,
                                   border_width=1, border_color=T.BORDER,
                                   command=lambda idx=i: self._delete_item(idx)).grid(
                                       row=0, column=1, padx=10)

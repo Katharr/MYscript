@@ -33,6 +33,7 @@ DEFAULT_CONFIG = {
     "input_backend": "sendinput",        # sendinput(底层+拟人化, 推荐) / pyautogui / pydirectinput
     "window_offset": [0, 0],             # 整体点击偏移修正 [dx, dy]
     "hotkey_toggle": "F5",               # 全局快捷键：开始/停止 秒装备（鼠标失控时随时叫停）
+    "appearance": "dark",                # 界面外观：dark(夜间) / light(白天)，侧栏可切换
 
     # ---- 目标窗口选择（基础特性，跨任务共享）----
     #   所有任务都基于它确定「操作哪个号」：单开=选 1 个窗口，多开=选多个号轮流操作。
