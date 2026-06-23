@@ -385,7 +385,7 @@ class TreasureMapPage(ctk.CTkFrame):
         left = ctk.CTkFrame(bar, fg_color="transparent")
         left.grid(row=0, column=0, sticky="w")
         ctk.CTkLabel(left, text="刷副本 · 宝图", font=self.fonts["title"], text_color=T.TEXT).pack(anchor="w")
-        ctk.CTkLabel(left, text="自动开活动→收藏宝图→挖宝→领奖，战斗交给游戏自动",
+        ctk.CTkLabel(left, text="自动开活动→收藏宝图→挖宝→领奖，战斗交给游戏自动（支持多开逐号轮转）",
                      font=self.fonts["small"], text_color=T.TEXT_DIM).pack(anchor="w", pady=(2, 0))
         right = ctk.CTkFrame(bar, fg_color="transparent")
         right.grid(row=0, column=1, sticky="e")
