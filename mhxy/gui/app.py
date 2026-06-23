@@ -1483,7 +1483,7 @@ class AboutPage(ctk.CTkFrame):
 # ----------------------------------------------------------------------
 class GeneralPage(ctk.CTkFrame):
     """通用页：集中放与具体任务无关的功能。
-    目前：① 选择操作的目标窗口；② 标定基准尺寸（点某个窗口把它尺寸设为基准）；③ 一键还原尺寸。"""
+    目前：窗口尺寸归一化——列出所有游戏窗口、把某个尺寸设为基准、一键还原被拉大的号。"""
 
     def __init__(self, parent, app):
         super().__init__(parent, fg_color="transparent")
@@ -1498,7 +1498,7 @@ class GeneralPage(ctk.CTkFrame):
         head = ctk.CTkFrame(self, fg_color="transparent")
         head.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         ctk.CTkLabel(head, text="通用 / 工具", font=self.fonts["title"], text_color=T.TEXT).pack(anchor="w")
-        ctk.CTkLabel(head, text="跨任务的通用功能：选择要操作的窗口、标定 / 还原窗口尺寸。各任务专属的标定仍在对应任务页。",
+        ctk.CTkLabel(head, text="跨任务的通用功能：标定 / 还原窗口尺寸。各任务专属的标定与「选择窗口」仍在对应任务页。",
                      font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left").pack(anchor="w", pady=(4, 0))
 
         self.body = ctk.CTkScrollableFrame(self, fg_color="transparent")
@@ -1531,37 +1531,7 @@ class GeneralPage(ctk.CTkFrame):
         except Exception:
             wins = []
 
-        # 目标摘要（内联算，避免依赖 App 定义顺序）
-        if not wins:
-            summary = "未检测到窗口"
-        elif targets.get("multi"):
-            idxs = targets.get("multi_indices") or list(range(len(wins)))
-            sel = [i for i in idxs if 0 <= i < len(wins)]
-            n = len(sel) if sel else len(wins)
-            summary = f"● {n} 号 · 多开"
-        else:
-            i = targets.get("single_index", 0)
-            if not (isinstance(i, int) and 0 <= i < len(wins)):
-                i = 0
-            summary = f"● 号{i + 1} · 单开"
-
-        # ── 卡片1：目标窗口 ──
-        c1 = self._card()
-        inner1 = ctk.CTkFrame(c1, fg_color="transparent")
-        inner1.pack(fill="x", padx=16, pady=14)
-        inner1.grid_columnconfigure(0, weight=1)
-        txt1 = ctk.CTkFrame(inner1, fg_color="transparent")
-        txt1.grid(row=0, column=0, sticky="w")
-        ctk.CTkLabel(txt1, text="目标窗口", font=self.fonts["h2"], text_color=T.TEXT).pack(anchor="w")
-        ctk.CTkLabel(txt1, text=summary, font=self.fonts["body"],
-                     text_color=T.SUCCESS if wins else T.TEXT_DIM).pack(anchor="w", pady=(4, 0))
-        ctk.CTkLabel(txt1, text="单开选 1 个号，多开勾多个号轮流操作。",
-                     font=self.fonts["small"], text_color=T.TEXT_DIM).pack(anchor="w", pady=(2, 0))
-        ctk.CTkButton(inner1, text="选择窗口", font=self.fonts["body"], height=36, width=110,
-                      corner_radius=T.RADIUS_SM, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
-                      command=lambda: self.app.open_window_picker(self.refresh)).grid(row=0, column=1, padx=(12, 0))
-
-        # ── 卡片2：窗口尺寸归一化 ──
+        # ── 窗口尺寸归一化 ──
         c2 = self._card()
         head2 = ctk.CTkFrame(c2, fg_color="transparent")
         head2.pack(fill="x", padx=16, pady=(14, 4))
