@@ -223,6 +223,10 @@ class CalibrateDialog(ctk.CTkToplevel):
         if wr is None:
             self._toast("目标窗口已失效，请重新「选择窗口」。", T.WARN)
             return None, None
+        # 记录基准尺寸：标定时的窗口尺寸即「还原尺寸」按钮要拉回的目标（与模板/点位天然一致）。
+        # base_size 在顶层 targets，单独存 self.cfg（_save() 只存 task_config）。
+        self.cfg.setdefault("targets", {})["base_size"] = [wr[2], wr[3]]
+        cfg_mod.save_config(self.cfg)
         rel = [roi_abs[0] - wr[0], roi_abs[1] - wr[1], roi_abs[2], roi_abs[3]]
         return rel, crop
 

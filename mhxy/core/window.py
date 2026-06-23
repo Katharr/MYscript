@@ -86,6 +86,33 @@ class GameWindow:
         except Exception:
             pass
 
+    def resize_to(self, w, h, move_to=None):
+        """把窗口尺寸还原到 [w, h]（可选 move_to=(left,top) 一并复位位置）。
+        成功(尺寸误差≤4px)返回 True；否则返回 False（游戏锁分辨率档位时 resize 会被忽略）。
+        窗口失效/异常也返回 False。"""
+        if not self._win:
+            return False
+        try:
+            if self._win.isMinimized:
+                self._win.restore()
+            self._win.resizeTo(int(w), int(h))
+            if move_to is not None:
+                self._win.moveTo(int(move_to[0]), int(move_to[1]))
+            time.sleep(0.12)
+            r = self.rect()
+            if r is None:
+                return False
+            if abs(r[2] - int(w)) > 4 or abs(r[3] - int(h)) > 4:
+                # 差太多再试一次（个别窗口首帧未跟上）
+                self._win.resizeTo(int(w), int(h))
+                time.sleep(0.12)
+                r = self.rect()
+                if r is None:
+                    return False
+            return abs(r[2] - int(w)) <= 4 and abs(r[3] - int(h)) <= 4
+        except Exception:
+            return False
+
     # ---- 坐标换算 ----
     def region_to_screen_rect(self, region):
         """窗口内 [x,y,w,h] -> 屏幕绝对 [left,top,w,h]。"""
@@ -149,6 +176,32 @@ def resolve_targets(title_substr, offset, targets):
     if not (isinstance(i, int) and 0 <= i < len(wins)):
         i = 0
     return [wins[i]]
+
+
+def restore_targets_size(title_substr, offset, targets, base_size):
+    """把当前选中的目标窗口（单开1个/多开多个）逐个还原到 base_size=[w,h]。
+
+    复用 resolve_targets 选窗，保证和任务实际操作的是同一批号。操作每个号前先 activate()
+    切前台再 resize。返回 (ok_count, total, actual_sizes)：
+      - ok_count : 成功还原(尺寸误差≤4px)的号数
+      - total    : 选中的号数
+      - actual_sizes : 各号 resize 后的实际 [w,h]（窗口失效为 None），供上层判断是否真生效。
+    base_size 非法(空/非两元素)时返回 (0, 0, [])。
+    """
+    if not base_size or len(base_size) < 2:
+        return (0, 0, [])
+    w, h = int(base_size[0]), int(base_size[1])
+    wins = resolve_targets(title_substr, offset, targets)
+    ok = 0
+    actual = []
+    for win in wins:
+        win.activate()
+        success = win.resize_to(w, h)
+        r = win.rect()
+        actual.append([r[2], r[3]] if r else None)
+        if success:
+            ok += 1
+    return (ok, len(wins), actual)
 
 
 # ---- 截图 ----

@@ -43,7 +43,8 @@ DEFAULT_CONFIG = {
         "single_index": 0,         # 单开：选中窗口的序号(左→右,从0起)；越界自动回退0
         "multi_indices": [],       # 多开：选中的序号列表；空=检测到的全部
         "max_windows": 3,          # 多开最多同时操作几个号(0=不限)
-        "switch_delay_sec": 0.15   # 号与号之间切换的停顿(秒,带抖动)，别太机械
+        "switch_delay_sec": 0.15,  # 号与号之间切换的停顿(秒,带抖动)，别太机械
+        "base_size": None          # 标定时记录的窗口尺寸[w,h]；「还原尺寸」按钮把被拉大的号拉回它。None=尚未标定
     },
 
     "humanize": {

@@ -54,7 +54,7 @@ mhxy/
     calibrate.py 旧的命令行标定（cv2.selectROI，已不被 GUI 调用，仅留作 CLI 备用）
   gui/
     theme.py            配色/字体/圆角常量（改这里整体换肤；深色现代风）
-    app.py              主窗口：侧边导航 + SniperPage/SettingsPage/AboutPage
+    app.py              主窗口：侧边导航 + GeneralPage(通用页,置顶,默认页)/各任务Page/SettingsPage/AboutPage
     roi_overlay.py      全屏框选组件（纯 tk，冻结截图上拖框，返回屏幕绝对 ROI）
     calibrate_dialog.py GUI 内标定对话框（区域 + 加装备，全程无黑窗）
 ```
@@ -68,7 +68,33 @@ mhxy/
 
 ## 当前状态
 - 依赖已装好：numpy, opencv-python, mss, pyautogui, pygetwindow, customtkinter, Pillow。
-- **2026-06-23（最新）运镖任务改成多开逐号轮转**（用户反馈「运镖多开没有生效」）。原 `escort.py` 是
+- **2026-06-23（最新）新增「通用 / 工具」页 + 窗口尺寸归一化（方案A：一键还原到标定尺寸）**。
+  背景：脚本检测区/按钮点位(`regions`)是按标定那一刻的窗口尺寸记录的**窗口相对像素**，模板又是**单尺度**匹配——
+  窗口**移动**没事(每次 `window.rect()` 实时换算)，但被手操**拉大/缩小**后点位全错、模板也认不出。用户常多开 3 个号、
+  手操会把某些号拉大，要能一键拉回。**调研过两个方案**：A=把窗口 resize 回标定尺寸(简单可靠,识别/点击逻辑零改动)；
+  B=多尺度匹配+坐标层缩放归一化(改动大、风险高，且单纯多尺度匹配不完整——大量固定相对点位[购买/确认/活动列表区/参加列定位]
+  不靠模板，缩放后照样点偏)。**用户拍板只做方案A**，基准尺寸=标定时的窗口尺寸。pygetwindow 的窗口对象**确实支持
+  `resizeTo/moveTo`**(实测 `dir(gw.Window)` 有)，故可行。⚠ 唯一不确定点：游戏若锁分辨率档位，`resizeTo` 可能被忽略
+  (按钮会提示「部分窗口可能不支持自由缩放」，那方案A对该游戏不成立，需回头评估方案B)——**需用户真机点按钮确认窗口真能被 resize**。
+  - 核心实现：`core/window.py` 加 `GameWindow.resize_to(w,h,move_to=None)`(resizeTo+读回校验,误差>4px 重试1次,成功返 True)
+    和模块函数 `restore_targets_size(title,offset,targets,base_size)`(复用 `resolve_targets` 选窗,逐个 activate+resize,
+    返回 `(成功数,总数,各号实际尺寸)`)。`core/config.py`+`config.example.json`：`targets` 加 `base_size:None`(标定时记录的[w,h])。
+  - **基准尺寸有两条录入路径**：① `gui/calibrate_dialog.py` 的 `_grab_roi` 每次框选成功后**自动**把当前窗口[w,h]写入
+    `targets.base_size`(兜底)；② 通用页里**显式**点某个窗口「设为基准」。两者都是"某个窗口的尺寸"，行为一致。
+  - **用户要求把跨任务/任务流程之外的功能集中**，故新增 `GeneralPage`(`gui/app.py`)——**侧边栏置顶 + 启动默认页**
+    (`NAV` 第一项 + `__init__` `_show("general")`)。两张卡片：①目标窗口(摘要+「选择窗口」)；②窗口尺寸归一化
+    (显示**当前基准尺寸**+「还原尺寸」「刷新」+**列出检测到的所有窗口**[号N/尺寸/位置]每行「设为基准」,当前基准行标✓)。
+    `GeneralPage` **不在 RUNNABLE_KEYS**(无 runner/pump/update_game_pill；`_show` 切入时调 `refresh()` 才枚举窗口,省启动开销；
+    热键作用于当前页时它没 `_toggle_run` 会被跳过)。摘要算法在页内内联(不依赖 App 定义顺序)。
+  - 任务页按钮取舍(用户拍板)：**任务页保留「选择窗口」**(高频就近)，**「还原尺寸」只放通用页**(低频集中,已从4个任务页移除)。
+    `App.restore_window_size(after)` 读 `targets.base_size`(空则 toast 提示去标定)→`restore_targets_size`→按结果 toast(全成功/部分不支持)。
+  - 改了 4 文件：`core/window.py`、`core/config.py`、`config.example.json`、`gui/calibrate_dialog.py`、`gui/app.py`(新增 GeneralPage+接线)。
+  - **已验证**：5 文件 py_compile 过；example.json 合法；DEFAULT 含 base_size + 旧 config 经 `_deep_merge` 自动补默认；
+    `restore_targets_size` 四分支(多开都还原/锁档位 ok=0/空 base_size/无窗口)全 PASS；app 真实 import、NAV 含 general、
+    GeneralPage 方法齐全且非 runnable、还原按钮全工程仅通用页 1 处。
+  - **未真机端到端验证**(需用户开 2~3 个号自测)：通用页看窗口列表→点「设为基准」看基准尺寸更新+标✓→手操拉大某号→
+    「还原尺寸」**看窗口是否真缩回基准**(锁档位则提示不支持)→还原后跑演练看识别/点击恢复正常。
+- **2026-06-23 运镖任务改成多开逐号轮转**（用户反馈「运镖多开没有生效」）。原 `escort.py` 是
   阻塞式状态机、只操作选中的第一个号（还主动打印「暂不支持多号轮跑」）。现**仿「秘境降妖」重构成非阻塞逐号轮转**：
   每个号一份 record(`_new_record`：state/escorts/seen_ongoing/gone_since/t_trip/recover/done)，主循环对每个号
   `_step_once` 各推进一小步，号间逐步轮转(操作前先 `window.activate()`，switch_delay 间隔)。

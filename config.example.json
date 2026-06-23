@@ -8,7 +8,8 @@
     "single_index": 0,
     "multi_indices": [],
     "max_windows": 3,
-    "switch_delay_sec": 0.15
+    "switch_delay_sec": 0.15,
+    "base_size": null
   },
   "humanize": {
     "speed": 2.0,

@@ -1479,10 +1479,155 @@ class AboutPage(ctk.CTkFrame):
 
 
 # ----------------------------------------------------------------------
+# 通用 / 工具页：跨任务、任务流程之外的功能（选窗口 / 标定尺寸 / 还原尺寸）
+# ----------------------------------------------------------------------
+class GeneralPage(ctk.CTkFrame):
+    """通用页：集中放与具体任务无关的功能。
+    目前：① 选择操作的目标窗口；② 标定基准尺寸（点某个窗口把它尺寸设为基准）；③ 一键还原尺寸。"""
+
+    def __init__(self, parent, app):
+        super().__init__(parent, fg_color="transparent")
+        self.app = app
+        self.fonts = app.fonts
+        self.cfg = app.cfg
+        self._build()
+
+    def _build(self):
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
+        head = ctk.CTkFrame(self, fg_color="transparent")
+        head.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        ctk.CTkLabel(head, text="通用 / 工具", font=self.fonts["title"], text_color=T.TEXT).pack(anchor="w")
+        ctk.CTkLabel(head, text="跨任务的通用功能：选择要操作的窗口、标定 / 还原窗口尺寸。各任务专属的标定仍在对应任务页。",
+                     font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left").pack(anchor="w", pady=(4, 0))
+
+        self.body = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        self.body.grid(row=1, column=0, sticky="nsew")
+        self.body.grid_columnconfigure(0, weight=1)
+        T.tune_scroll_speed(self.body)
+        # 不在构建时枚举窗口（省启动开销）；首次切到本页时 _show 会调 refresh() 填充。
+
+    def _card(self):
+        c = ctk.CTkFrame(self.body, fg_color=T.SURFACE, corner_radius=T.RADIUS,
+                         border_width=1, border_color=T.BORDER)
+        c.pack(fill="x", pady=(0, 12), padx=2)
+        return c
+
+    # 切到本页或操作后都会调
+    def refresh(self):
+        self.cfg = cfg_mod.load_config()
+        self.app.cfg = self.cfg
+        self._refresh_body()
+
+    def _refresh_body(self):
+        for w in self.body.winfo_children():
+            w.destroy()
+        cfg = self.cfg
+        targets = cfg.get("targets", {})
+        title = cfg.get("window_title", "梦幻西游")
+        offset = cfg.get("window_offset", [0, 0])
+        try:
+            wins = win_mod.locate_all(title, offset)
+        except Exception:
+            wins = []
+
+        # 目标摘要（内联算，避免依赖 App 定义顺序）
+        if not wins:
+            summary = "未检测到窗口"
+        elif targets.get("multi"):
+            idxs = targets.get("multi_indices") or list(range(len(wins)))
+            sel = [i for i in idxs if 0 <= i < len(wins)]
+            n = len(sel) if sel else len(wins)
+            summary = f"● {n} 号 · 多开"
+        else:
+            i = targets.get("single_index", 0)
+            if not (isinstance(i, int) and 0 <= i < len(wins)):
+                i = 0
+            summary = f"● 号{i + 1} · 单开"
+
+        # ── 卡片1：目标窗口 ──
+        c1 = self._card()
+        inner1 = ctk.CTkFrame(c1, fg_color="transparent")
+        inner1.pack(fill="x", padx=16, pady=14)
+        inner1.grid_columnconfigure(0, weight=1)
+        txt1 = ctk.CTkFrame(inner1, fg_color="transparent")
+        txt1.grid(row=0, column=0, sticky="w")
+        ctk.CTkLabel(txt1, text="目标窗口", font=self.fonts["h2"], text_color=T.TEXT).pack(anchor="w")
+        ctk.CTkLabel(txt1, text=summary, font=self.fonts["body"],
+                     text_color=T.SUCCESS if wins else T.TEXT_DIM).pack(anchor="w", pady=(4, 0))
+        ctk.CTkLabel(txt1, text="单开选 1 个号，多开勾多个号轮流操作。",
+                     font=self.fonts["small"], text_color=T.TEXT_DIM).pack(anchor="w", pady=(2, 0))
+        ctk.CTkButton(inner1, text="选择窗口", font=self.fonts["body"], height=36, width=110,
+                      corner_radius=T.RADIUS_SM, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
+                      command=lambda: self.app.open_window_picker(self.refresh)).grid(row=0, column=1, padx=(12, 0))
+
+        # ── 卡片2：窗口尺寸归一化 ──
+        c2 = self._card()
+        head2 = ctk.CTkFrame(c2, fg_color="transparent")
+        head2.pack(fill="x", padx=16, pady=(14, 4))
+        head2.grid_columnconfigure(0, weight=1)
+        txt2 = ctk.CTkFrame(head2, fg_color="transparent")
+        txt2.grid(row=0, column=0, sticky="w")
+        ctk.CTkLabel(txt2, text="窗口尺寸归一化", font=self.fonts["h2"], text_color=T.TEXT).pack(anchor="w")
+        base = targets.get("base_size")
+        base_txt = f"{int(base[0])}×{int(base[1])}" if base and len(base) >= 2 else "未设置"
+        ctk.CTkLabel(txt2, text=f"当前基准尺寸：{base_txt}", font=self.fonts["body"],
+                     text_color=T.TEXT if base else T.WARN).pack(anchor="w", pady=(4, 0))
+        ctk.CTkLabel(txt2, text="手操把窗口拉大后，点「还原尺寸」一键拉回基准尺寸（脚本点位按此尺寸标定）。",
+                     font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left").pack(anchor="w", pady=(2, 0))
+        btns2 = ctk.CTkFrame(head2, fg_color="transparent")
+        btns2.grid(row=0, column=1, padx=(12, 0))
+        ctk.CTkButton(btns2, text="还原尺寸", font=self.fonts["body"], height=36, width=100,
+                      corner_radius=T.RADIUS_SM, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
+                      command=lambda: self.app.restore_window_size(self.refresh)).pack(pady=(0, 6))
+        ctk.CTkButton(btns2, text="刷新", font=self.fonts["body"], height=30, width=100,
+                      corner_radius=T.RADIUS_SM, fg_color=T.SURFACE_2, hover_color=T.BORDER,
+                      command=self.refresh).pack()
+
+        # 窗口列表：点某个窗口「设为基准」即把它的尺寸记为基准尺寸
+        ctk.CTkLabel(c2, text="把哪个窗口的尺寸设为基准？（脚本会按它来还原其它被拉大的号）",
+                     font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left").pack(
+                         anchor="w", padx=16, pady=(6, 2))
+        if not wins:
+            ctk.CTkLabel(c2, text="没检测到游戏窗口，请先打开游戏再点「刷新」。",
+                         font=self.fonts["body"], text_color=T.TEXT_DIM).pack(anchor="w", padx=16, pady=(2, 14))
+        else:
+            for i, w in enumerate(wins):
+                r = w.rect()
+                row = ctk.CTkFrame(c2, fg_color=T.SURFACE_2, corner_radius=T.RADIUS_SM)
+                row.pack(fill="x", padx=12, pady=4)
+                row.grid_columnconfigure(0, weight=1)
+                meta = f"号{i + 1}    {r[2]}×{r[3]}    @({r[0]},{r[1]})" if r else f"号{i + 1}    （窗口已失效）"
+                is_base = bool(base and r and int(base[0]) == r[2] and int(base[1]) == r[3])
+                ctk.CTkLabel(row, text=meta + ("   ✓ 当前基准" if is_base else ""),
+                             font=self.fonts["body"],
+                             text_color=T.SUCCESS if is_base else T.TEXT).grid(
+                                 row=0, column=0, sticky="w", padx=12, pady=8)
+                ctk.CTkButton(row, text="设为基准", font=self.fonts["small"], width=84, height=30,
+                              corner_radius=T.RADIUS_SM, fg_color="transparent", hover_color=T.BORDER,
+                              border_width=1, border_color=T.BORDER,
+                              command=lambda w=w: self._set_base_from(w)).grid(row=0, column=1, padx=10)
+            ctk.CTkFrame(c2, fg_color="transparent", height=6).pack()
+
+    def _set_base_from(self, w):
+        r = w.rect()
+        if not r:
+            self.app.toast("该窗口已失效，请点「刷新」")
+            return
+        cfg = cfg_mod.load_config()
+        cfg.setdefault("targets", {})["base_size"] = [r[2], r[3]]
+        cfg_mod.save_config(cfg)
+        self.app.cfg = cfg
+        self.app.toast(f"已设基准尺寸 {r[2]}×{r[3]}（号会还原到这个大小）")
+        self.refresh()
+
+
+# ----------------------------------------------------------------------
 # 主窗口
 # ----------------------------------------------------------------------
 class App(ctk.CTk):
-    NAV = [("sniper", "🗡  秒装备"), ("treasure_map", "🗺  刷副本·宝图"),
+    NAV = [("general", "🧰  通用 / 工具"),
+           ("sniper", "🗡  秒装备"), ("treasure_map", "🗺  刷副本·宝图"),
            ("escort", "🚚  运镖"), ("secret_realm", "👹  秘境降妖"),
            ("settings", "⚙  设置"), ("about", "ⓘ  关于")]
     # 可运行任务页（有 runner/pump/update_game_pill），App 的定时器/热键/关闭钩子按此遍历
@@ -1507,7 +1652,7 @@ class App(ctk.CTk):
         self.grid_rowconfigure(0, weight=1)
         self._build_sidebar()
         self._build_pages()
-        self._show("sniper")
+        self._show("general")
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(150, self._tick)
@@ -1549,6 +1694,7 @@ class App(ctk.CTk):
             "treasure_map": TreasureMapPage(self.container, self),
             "escort": EscortPage(self.container, self),
             "secret_realm": SecretRealmPage(self.container, self),
+            "general": GeneralPage(self.container, self),
             "settings": SettingsPage(self.container, self),
             "about": AboutPage(self.container, self),
         }
@@ -1652,6 +1798,32 @@ class App(ctk.CTk):
             WindowPickerDialog(self, on_done=_done)
         except Exception:
             pass
+
+    def restore_window_size(self, after=None):
+        """把选中的号窗口还原到标定时记录的基准尺寸（被手操拉大后一键复位）。"""
+        targets = self.cfg.get("targets", {})
+        base = targets.get("base_size")
+        if not base or len(base) < 2:
+            self.toast("请先标定一次，标定时会自动记录基准尺寸")
+            return
+        title = self.cfg.get("window_title", "梦幻西游")
+        offset = self.cfg.get("window_offset", [0, 0])
+        ok, total, actual = win_mod.restore_targets_size(title, offset, targets, base)
+        if total == 0:
+            self.toast(f"没找到/没选中目标窗口（标题含「{title}」），请先「选择窗口」")
+            return
+        w, h = int(base[0]), int(base[1])
+        if ok == total:
+            self.toast(f"已还原 {ok}/{total} 个号到 {w}×{h}")
+        else:
+            # 有号没还原成功——多半是游戏锁了分辨率档位，resize 被忽略
+            self.toast(f"还原 {ok}/{total} 个号；部分窗口可能不支持自由缩放")
+        self._game_connected = None   # 尺寸变了，强制下次 tick 刷新药丸
+        if callable(after):
+            try:
+                after()
+            except Exception:
+                pass
 
     # ---- 全局快捷键轮询：上升沿触发开始/停止 ----
     def _poll_hotkey(self):
