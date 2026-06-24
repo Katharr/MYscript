@@ -141,7 +141,9 @@ class SniperTask(Task):
         if wctx.window.rect() is None:
             return False
         if multi:
-            wctx.window.activate()      # 多开必须切前台，避免点击穿透/点错号
+            # 多开必须切前台，避免点击穿透/点错号。切前台失败（被系统拒绝焦点抢占）就跳过该号本轮、下轮重试。
+            if not wctx.window.activate():
+                return False
             if wctx.should_stop():
                 return False
         return True

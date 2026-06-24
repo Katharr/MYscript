@@ -6,12 +6,70 @@
 
 import time
 import ctypes
+import ctypes.wintypes
 import threading
 
 import numpy as np
 import cv2
 import mss
 import pygetwindow as gw
+
+
+# 句柄相关的 user32 函数：必须显式声明 restype/argtypes 为 HWND(=void*)，
+# 否则 64 位 Python 下默认 c_int 会把窗口句柄截断，比较/传参全错。
+_user32 = ctypes.windll.user32
+_user32.GetForegroundWindow.restype = ctypes.wintypes.HWND
+_user32.SetForegroundWindow.argtypes = [ctypes.wintypes.HWND]
+_user32.SetForegroundWindow.restype = ctypes.wintypes.BOOL
+_user32.BringWindowToTop.argtypes = [ctypes.wintypes.HWND]
+_user32.SetActiveWindow.argtypes = [ctypes.wintypes.HWND]
+_user32.ShowWindow.argtypes = [ctypes.wintypes.HWND, ctypes.c_int]
+_user32.GetWindowThreadProcessId.argtypes = [ctypes.wintypes.HWND, ctypes.wintypes.LPDWORD]
+_user32.GetWindowThreadProcessId.restype = ctypes.wintypes.DWORD
+
+
+def _force_foreground(hwnd, tries=3):
+    """把 hwnd 强制切到前台并校验。成功返回 True。
+
+    为什么不直接用 pygetwindow.activate()：它只是 `SetForegroundWindow(hwnd)`，而 Windows 的
+    『防焦点抢占』会在前台属于别的窗口/进程时【拒绝】这次调用(返回0)——多开轮转里这极常见，
+    结果目标号没真正到前台，随后的点击落在后台号上被吞/点歪（曾导致秘境点「挑战」点到聊天）。
+    这里用业界通行的解法：先 ShowWindow+BringWindowToTop，再 AttachThreadInput 把本线程附到
+    当前前台线程后 SetForegroundWindow（绕过抢占锁），最后用 GetForegroundWindow 校验、失败重试。"""
+    if not hwnd:
+        return False
+    hwnd = int(hwnd)
+    SW_SHOW = 5
+    kernel32 = ctypes.windll.kernel32
+    cur_tid = kernel32.GetCurrentThreadId()
+    for _ in range(max(1, tries)):
+        try:
+            if int(_user32.GetForegroundWindow() or 0) == hwnd:
+                return True
+        except Exception:
+            pass
+        try:
+            _user32.ShowWindow(hwnd, SW_SHOW)
+            _user32.BringWindowToTop(hwnd)
+            fg = _user32.GetForegroundWindow()
+            fg_tid = _user32.GetWindowThreadProcessId(fg, None) if fg else 0
+            tgt_tid = _user32.GetWindowThreadProcessId(hwnd, None)
+            attached = []
+            for tid in (fg_tid, tgt_tid):
+                if tid and tid != cur_tid:
+                    _user32.AttachThreadInput(cur_tid, tid, True)
+                    attached.append(tid)
+            _user32.SetForegroundWindow(hwnd)
+            _user32.SetActiveWindow(hwnd)
+            for tid in attached:
+                _user32.AttachThreadInput(cur_tid, tid, False)
+        except Exception:
+            pass
+        time.sleep(0.12)
+    try:
+        return int(_user32.GetForegroundWindow() or 0) == hwnd
+    except Exception:
+        return False
 
 
 def set_dpi_aware():
@@ -76,15 +134,33 @@ class GameWindow:
             return None
 
     def activate(self):
+        """把本窗口切到前台并【校验确实成功】，成功返回 True、失败返回 False。
+
+        关键：多开时若没真正切到前台就点击，点击会落在后台号上被吞/点歪。故这里用 _force_foreground
+        （AttachThreadInput 绕过焦点抢占锁 + GetForegroundWindow 校验 + 重试），调用方据返回值决定是否点击。"""
         if not self._win:
-            return
+            return False
         try:
             if self._win.isMinimized:
                 self._win.restore()
-            self._win.activate()
-            time.sleep(0.3)
+                time.sleep(0.15)
         except Exception:
             pass
+        try:
+            hwnd = self._win._hWnd
+        except Exception:
+            hwnd = None
+        if not hwnd:
+            # 拿不到句柄时退回 pygetwindow 的 activate（尽力而为）
+            try:
+                self._win.activate()
+                time.sleep(0.2)
+                return True
+            except Exception:
+                return False
+        ok = _force_foreground(hwnd)
+        time.sleep(0.15 if ok else 0.05)
+        return ok
 
     def resize_to(self, w, h, move_to=None):
         """把窗口尺寸还原到 [w, h]（可选 move_to=(left,top) 一并复位位置）。

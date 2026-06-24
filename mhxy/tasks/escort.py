@@ -159,9 +159,15 @@ class EscortTask(Task):
                         rec["dead_logged"] = True
                     continue
                 rec["dead_logged"] = False
-                # 操作某号前先切前台，确保点击/快捷键落在这个号身上（多开必须；单开也无害）
+                # 操作某号前先切前台，确保点击/快捷键落在这个号身上（多开必须）。
+                # 切前台失败（被系统拒绝焦点抢占）就跳过该号、下轮重试——绝不在后台号上瞎点（会点歪）。
                 if multi:
-                    wctx.window.activate()
+                    if not wctx.window.activate():
+                        if not rec.get("fg_warned"):
+                            wctx.log("未能切到前台（系统拒绝焦点抢占），本轮跳过、下轮重试。", level="warn")
+                            rec["fg_warned"] = True
+                        continue
+                    rec["fg_warned"] = False
                     if wctx.should_stop():
                         break
                 # 推进这个号一小步
@@ -238,33 +244,42 @@ class EscortTask(Task):
         rec["scrolls"] = 0
         self._goto(rec, S_FIND_CARD)
 
-    # ---- 找「运镖」条目 → 点「参加」（每访问一次：找不到就滚一屏，超 scroll_max_tries 屏则恢复）----
+    # ---- 找「运镖」条目 → 点「参加」----
+    #   用户要求：滚轮查找要在【同一个号】上一气呵成跑完（找到/翻完都没找到才轮转下个号），
+    #   不在滚动中途返回去轮转别的号。故这里用内部 while 循环把整段查找做完再返回；
+    #   每滚一屏后自等 scroll_settle_sec 让画面落定（原先靠轮转间隔 settle）。全程仍勤查 should_stop。
     def _do_find_card(self, ctx, rec, loop, regions, threshold):
         list_region = regions.get("activity_list")
-        rect = (ctx.window.region_to_screen_rect(list_region)
-                if list_region else ctx.window.rect())
-        if rect is None:
-            return
-        scene = win_mod.grab(rect)
-        hit = vision.match(scene, self.flags.get("escort_entry"), threshold) if scene is not None else None
-        if hit is not None:
-            cx, cy, score = hit
-            entry_xy = (rect[0] + cx, rect[1] + cy)
-            join = self._find_join_on_row(ctx, list_region, entry_xy, threshold, loop)
-            if join is not None:
-                ctx.mouse.click(join[0], join[1])
-                ctx.log(f"找到「运镖」（{score:.3f}）→ 点「参加」（{join[2]:.3f}），等对话框。", level="hit")
-                self._goto(rec, S_DIALOG)
+        max_tries = max(1, loop.get("scroll_max_tries", 8))
+        settle = loop.get("scroll_settle_sec", 0.35)
+        while not ctx.should_stop():
+            rect = (ctx.window.region_to_screen_rect(list_region)
+                    if list_region else ctx.window.rect())
+            if rect is None:
                 return
-            ctx.log("认出「运镖」但没找到右侧「参加」（检查 escort_join 模板/阈值）。", level="warn")
-        else:
-            # 没找到：在列表中心向下滚一屏（settle 交给轮转间隔），下次再找
-            cx_c, cy_c = rect[0] + rect[2] // 2, rect[1] + rect[3] // 2
-            ctx.mouse.scroll(loop.get("scroll_step", -3), cx_c, cy_c)
-        rec["scrolls"] += 1
-        if rec["scrolls"] > max(1, loop.get("scroll_max_tries", 8)):
-            ctx.log("活动列表里翻找「运镖」入口多次未果。", level="warn")
-            self._recover_window(ctx, rec, loop, regions)
+            scene = win_mod.grab(rect)
+            hit = vision.match(scene, self.flags.get("escort_entry"), threshold) if scene is not None else None
+            if hit is not None:
+                cx, cy, score = hit
+                entry_xy = (rect[0] + cx, rect[1] + cy)
+                join = self._find_join_on_row(ctx, list_region, entry_xy, threshold, loop)
+                if join is not None:
+                    ctx.mouse.click(join[0], join[1])
+                    ctx.log(f"找到「运镖」（{score:.3f}）→ 点「参加」（{join[2]:.3f}），等对话框。", level="hit")
+                    self._goto(rec, S_DIALOG)
+                    return
+                ctx.log("认出「运镖」但没找到右侧「参加」（检查 escort_join 模板/阈值）。", level="warn")
+                # 认出条目但没找到参加：不滚动（会滚走目标），原地重试，超次数交给恢复
+            else:
+                # 没找到：在列表中心向下滚一屏
+                cx_c, cy_c = rect[0] + rect[2] // 2, rect[1] + rect[3] // 2
+                ctx.mouse.scroll(loop.get("scroll_step", -3), cx_c, cy_c)
+            rec["scrolls"] += 1
+            if rec["scrolls"] > max_tries:
+                ctx.log("活动列表里翻找「运镖」入口多次未果。", level="warn")
+                self._recover_window(ctx, rec, loop, regions)
+                return
+            self._interruptible_sleep(ctx, self._jitter(settle, ctx))
 
     # ---- 等首个「押送普通镖银」对话框 → 点它，开始第 1 趟 ----
     def _do_dialog(self, ctx, rec, loop, regions, threshold):

@@ -16,6 +16,7 @@ from ..core import config as cfg_mod
 from ..core import window as win_mod
 from ..core.runner import TaskRunner
 from ..tasks import get_task
+from ..tasks.daily import CHAINABLE
 
 
 # ----------------------------------------------------------------------
@@ -1624,15 +1625,333 @@ class GeneralPage(ctk.CTkFrame):
 
 
 # ----------------------------------------------------------------------
+# 日常一条龙 页面：勾选已有任务 + 调序，一次按顺序跑完
+# ----------------------------------------------------------------------
+class DailyPage(ctk.CTkFrame):
+    """日常一条龙：只做串联——勾选哪些任务、按什么顺序跑，存 tasks.daily.steps。
+    多开/单开与各任务的演练/实战、标定、参数全部沿用各自任务页，本页不另设这些开关。"""
+
+    TASK_NAME = "daily"
+    RUN_LABEL = "▶  开始一条龙"
+
+    # 各子任务「就绪」所需的区域/模板（与各任务页保持一致；仅用于状态显示）
+    _READY = {
+        "escort": (["activity_list"],
+                   ["escort_entry", "escort_join", "escort_silver", "escort_confirm", "escort_ongoing"]),
+        "secret_realm": (["activity_list"],
+                         ["sr_entry", "sr_join", "sr_select", "sr_continue",
+                          "sr_challenge", "sr_enter_battle", "sr_leave"]),
+    }
+
+    def __init__(self, master, app):
+        super().__init__(master, fg_color="transparent")
+        self.app = app
+        self.fonts = app.fonts
+        self.runner = None
+        self._steps = []          # [{"task","enabled"}]，有序
+
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(2, weight=1)
+
+        self._build_header()
+        self._build_control()
+        self._build_body()
+        self.refresh()
+
+    # ---- 头部 ----
+    def _build_header(self):
+        bar = ctk.CTkFrame(self, fg_color="transparent")
+        bar.grid(row=0, column=0, sticky="ew", padx=4, pady=(2, 14))
+        bar.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(bar, text="日常一条龙", font=self.fonts["title"], text_color=T.TEXT).grid(
+            row=0, column=0, sticky="w")
+        right = ctk.CTkFrame(bar, fg_color="transparent")
+        right.grid(row=0, column=1, sticky="e")
+        self.pill_game = Pill(right, self.fonts)
+        self.pill_game.pack(side="left")
+        sub = ctk.CTkLabel(bar, text="勾选要串起来跑的任务并调序，一次按顺序跑完；多开/单开与各任务的演练/实战、"
+                                     "标定、参数全部沿用各自任务页设置",
+                           font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left", anchor="w")
+        sub.grid(row=1, column=0, sticky="ew", pady=(2, 0))
+        bind_wraplength(sub)
+
+    # ---- 控制区：运行按钮 + 工具（选择窗口/刷新），无标定/无模式开关 ----
+    def _build_control(self):
+        card = Card(self)
+        card.grid(row=1, column=0, sticky="ew", padx=4, pady=(0, 14))
+        card.grid_columnconfigure(0, weight=1)
+
+        top = ctk.CTkFrame(card, fg_color="transparent")
+        top.grid(row=0, column=0, sticky="ew", padx=16, pady=(16, 10))
+        top.grid_columnconfigure(1, weight=1)
+        self.btn_run = ctk.CTkButton(top, text=self.RUN_LABEL, font=self.fonts["btn"],
+                                     height=46, width=200, corner_radius=T.RADIUS_SM,
+                                     fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER, text_color=T.ON_ACCENT,
+                                     command=self._toggle_run)
+        self.btn_run.grid(row=0, column=0, sticky="w")
+        tools = ctk.CTkFrame(top, fg_color="transparent")
+        tools.grid(row=0, column=2, sticky="e")
+        ctk.CTkButton(tools, text="选择窗口", font=self.fonts["body"], height=36, width=104,
+                      corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
+                      border_width=1, border_color=T.BORDER,
+                      command=lambda: self.app.open_window_picker(self.refresh)).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(tools, text="刷新配置", font=self.fonts["body"], height=36, width=104,
+                      corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
+                      border_width=1, border_color=T.BORDER,
+                      command=self.refresh).pack(side="left")
+
+        ctk.CTkFrame(card, fg_color=T.BORDER, height=1).grid(
+            row=1, column=0, sticky="ew", padx=16, pady=(0, 4))
+
+        # 时间上限（整条龙的安全网）
+        opts = ctk.CTkFrame(card, fg_color="transparent")
+        opts.grid(row=2, column=0, sticky="ew", padx=16, pady=(8, 16))
+        lim = ctk.CTkFrame(opts, fg_color="transparent")
+        lim.pack(anchor="w")
+        ctk.CTkLabel(lim, text="整体时间上限(分钟，0=不限)", font=self.fonts["body"],
+                     text_color=T.TEXT).pack(side="left")
+        self.var_limit = ctk.StringVar(value="0")
+        ctk.CTkEntry(lim, textvariable=self.var_limit, width=70, font=self.fonts["body"],
+                     fg_color=T.SURFACE_2, border_color=T.BORDER).pack(side="left", padx=(8, 0))
+        ctk.CTkLabel(opts, text="只是安全网：正常会按各子任务自身条件跑完。未就绪（缺标定/缺窗口）的任务会自动跳过。",
+                     font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left").pack(anchor="w", pady=(5, 0))
+
+    # ---- 主体：左任务清单 + 右日志 ----
+    def _build_body(self):
+        body = ctk.CTkFrame(self, fg_color="transparent")
+        body.grid(row=2, column=0, sticky="nsew", padx=4)
+        body.grid_columnconfigure(0, weight=2, uniform="b")
+        body.grid_columnconfigure(1, weight=3, uniform="b")
+        body.grid_rowconfigure(0, weight=1)
+
+        # 左：任务清单（勾选 + 调序）
+        left = Card(body)
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 7))
+        left.grid_rowconfigure(1, weight=1)
+        left.grid_columnconfigure(0, weight=1)
+        head = ctk.CTkFrame(left, fg_color="transparent")
+        head.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 8))
+        head.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(head, text="任务清单（勾选 + 调序）", font=self.fonts["h2"],
+                     text_color=T.TEXT).grid(row=0, column=0, sticky="w")
+        self.lbl_count = ctk.CTkLabel(head, text="", font=self.fonts["small"], text_color=T.TEXT_DIM)
+        self.lbl_count.grid(row=0, column=1, sticky="e")
+        self.list_frame = ctk.CTkScrollableFrame(left, fg_color="transparent")
+        self.list_frame.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 12))
+        self.list_frame.grid_columnconfigure(0, weight=1)
+        T.tune_scroll_speed(self.list_frame)
+
+        # 右：日志
+        right = Card(body)
+        right.grid(row=0, column=1, sticky="nsew", padx=(7, 0))
+        right.grid_rowconfigure(1, weight=1)
+        right.grid_columnconfigure(0, weight=1)
+        rhead = ctk.CTkFrame(right, fg_color="transparent")
+        rhead.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 8))
+        rhead.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(rhead, text="运行日志", font=self.fonts["h2"], text_color=T.TEXT).grid(row=0, column=0, sticky="w")
+        ctk.CTkButton(rhead, text="清空", font=self.fonts["small"], height=26, width=56,
+                      corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
+                      border_width=1, border_color=T.BORDER,
+                      command=self._clear_log).grid(row=0, column=1, sticky="e")
+        self.log = ctk.CTkTextbox(right, font=self.fonts["mono"], fg_color=T.SURFACE_2,
+                                  text_color=T.TEXT, corner_radius=T.RADIUS_SM, wrap="word")
+        self.log.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 12))
+        T.apply_log_tags(self.log._textbox)
+        self.log.configure(state="disabled")
+        self._log_line("界面就绪。勾选要串的任务并调序；各任务的标定/演练实战请到对应任务页设置。", "info")
+
+    # ------------------------------------------------------------------
+    # 刷新 / 渲染
+    # ------------------------------------------------------------------
+    def refresh(self):
+        self.app.cfg = cfg_mod.load_config()
+        tc = cfg_mod.task_config(self.app.cfg, self.TASK_NAME)
+        self._steps = self._normalize(tc.get("steps", []))
+        self.var_limit.set(str(tc.get("loop", {}).get("time_limit_min", 0)))
+        self._render_steps()
+
+    @staticmethod
+    def _normalize(stored):
+        """把存储的 steps 规整成「含全部可串联任务、保留已存顺序、缺的补到末尾」。"""
+        out, seen = [], []
+        for s in stored or []:
+            if isinstance(s, dict) and s.get("task") in CHAINABLE and s["task"] not in seen:
+                out.append({"task": s["task"], "enabled": bool(s.get("enabled", True))})
+                seen.append(s["task"])
+        for t in CHAINABLE:
+            if t not in seen:
+                out.append({"task": t, "enabled": True})
+                seen.append(t)
+        return out
+
+    def _task_title(self, name):
+        cls = get_task(name)
+        return cls.title if cls else name
+
+    def _task_status(self, name):
+        """返回 (模式串, 是否已就绪)。模式=演练/实战；就绪=必要区域+模板都已标定。"""
+        sub = cfg_mod.task_config(self.app.cfg, name)
+        mode = "演练" if sub.get("dry_run", True) else "实战"
+        if name == "treasure_map":
+            skip = sub.get("skip_collect", False)
+            need_r = ["bag_list"] if skip else ["activity_list", "bag_list"]
+            need_t = (["flag_next_map", "treasure_item"] if skip else
+                      ["flag_treasure_entry", "flag_join", "flag_tingting", "flag_next_map", "treasure_item"])
+        else:
+            need_r, need_t = self._READY.get(name, ([], []))
+        regions = sub.get("regions", {})
+        templates = sub.get("templates", {})
+        ready = all(regions.get(k) for k in need_r) and all(templates.get(k) for k in need_t)
+        return mode, ready
+
+    def _render_steps(self):
+        for w in self.list_frame.winfo_children():
+            w.destroy()
+        n_on = sum(1 for s in self._steps if s["enabled"])
+        self.lbl_count.configure(text=f"已勾选 {n_on}/{len(self._steps)}")
+
+        order = 0
+        for i, step in enumerate(self._steps):
+            name = step["task"]
+            row = ctk.CTkFrame(self.list_frame, fg_color=T.SURFACE_2, corner_radius=T.RADIUS_SM)
+            row.grid(row=i, column=0, sticky="ew", pady=4, padx=4)
+            row.grid_columnconfigure(1, weight=1)
+
+            var = ctk.BooleanVar(value=step["enabled"])
+            seq = ""
+            if step["enabled"]:
+                order += 1
+                seq = f"{order}. "
+            # 第一行：勾选框（左，撑开） + ↑↓ 调序（右）
+            cb = ctk.CTkCheckBox(row, text=seq + self._task_title(name), font=self.fonts["body_b"],
+                                 variable=var, text_color=T.TEXT,
+                                 fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
+                                 command=lambda idx=i, v=var: self._toggle_step(idx, v))
+            cb.grid(row=0, column=0, sticky="w", padx=(12, 8), pady=(10, 0))
+
+            up = ctk.CTkButton(row, text="↑", font=self.fonts["body"], width=30, height=28,
+                               corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER,
+                               text_color=T.TEXT, border_width=1, border_color=T.BORDER,
+                               command=lambda idx=i: self._move(idx, -1))
+            up.grid(row=0, column=1, padx=(0, 4), pady=(8, 0))
+            down = ctk.CTkButton(row, text="↓", font=self.fonts["body"], width=30, height=28,
+                                 corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER,
+                                 text_color=T.TEXT, border_width=1, border_color=T.BORDER,
+                                 command=lambda idx=i: self._move(idx, 1))
+            down.grid(row=0, column=2, padx=(0, 10), pady=(8, 0))
+            if i == 0:
+                up.configure(state="disabled")
+            if i == len(self._steps) - 1:
+                down.configure(state="disabled")
+
+            # 第二行：状态单独占整行（sticky=ew + 自动换行），避免被窗口右缘/调序按钮挤窄切掉
+            mode, ready = self._task_status(name)
+            status = f"{mode} · " + ("✓ 已就绪" if ready else "⚠ 还需标定")
+            slbl = ctk.CTkLabel(row, text=status, font=self.fonts["small"], anchor="w", justify="left",
+                                text_color=T.SUCCESS if ready else T.WARN)
+            slbl.grid(row=1, column=0, columnspan=3, sticky="ew", padx=(14, 10), pady=(2, 10))
+            bind_wraplength(slbl)
+
+    # ------------------------------------------------------------------
+    # 勾选 / 调序 / 保存
+    # ------------------------------------------------------------------
+    def _toggle_step(self, idx, var):
+        if 0 <= idx < len(self._steps):
+            self._steps[idx]["enabled"] = bool(var.get())
+            self._save()
+            self._render_steps()
+
+    def _move(self, idx, delta):
+        j = idx + delta
+        if 0 <= idx < len(self._steps) and 0 <= j < len(self._steps):
+            self._steps[idx], self._steps[j] = self._steps[j], self._steps[idx]
+            self._save()
+            self._render_steps()
+
+    def _save(self):
+        """把当前勾选/顺序/时间上限写回配置（读盘再改，避免覆盖别处刚写入的配置）。"""
+        cfg = cfg_mod.load_config()
+        tc = cfg_mod.task_config(cfg, self.TASK_NAME)
+        tc["steps"] = [{"task": s["task"], "enabled": bool(s["enabled"])} for s in self._steps]
+        loopc = tc.setdefault("loop", {})
+        try:
+            loopc["time_limit_min"] = max(0.0, round(float(self.var_limit.get()), 1))
+        except (TypeError, ValueError):
+            pass
+        cfg_mod.set_task_config(cfg, self.TASK_NAME, tc)
+        cfg_mod.save_config(cfg)
+        self.app.cfg = cfg
+
+    # ------------------------------------------------------------------
+    # 运行控制
+    # ------------------------------------------------------------------
+    def _toggle_run(self):
+        if self.runner and self.runner.is_running():
+            self.runner.stop()
+            self._log_line("正在停止…", "warn")
+            self.btn_run.configure(text="停止中…", state="disabled")
+            return
+        self._save()
+        self.app.cfg = cfg_mod.load_config()
+        task_cls = get_task(self.TASK_NAME)
+        self.runner = TaskRunner(task_cls(), self.app.cfg)
+        ok, problems = self.runner.start()
+        if not ok:
+            for p in problems:
+                self._log_line("无法启动：" + p, "error")
+            self.runner = None
+            return
+        self.btn_run.configure(text="■  停止", fg_color=T.DANGER, hover_color=T.DANGER_HOVER, state="normal")
+
+    def _on_runner_finished(self):
+        self.btn_run.configure(text=self.RUN_LABEL, fg_color=T.ACCENT,
+                               hover_color=T.ACCENT_HOVER, state="normal")
+
+    def update_game_pill(self, connected, summary=""):
+        if connected:
+            self.pill_game.configure(text="● " + (summary or "目标窗口已连接"),
+                                     fg_color=T.PILL_OK_BG, text_color=T.SUCCESS)
+        else:
+            self.pill_game.configure(text="○ 未检测到目标窗口", fg_color=T.SURFACE_2, text_color=T.TEXT_DIM)
+
+    # ---- 日志（由 App._tick 驱动）----
+    def pump(self):
+        if self.runner:
+            q = self.runner.log_queue
+            while not q.empty():
+                level, msg = q.get()
+                self._log_line(msg, level)
+            if not self.runner.is_running() and self.btn_run.cget("text") != self.RUN_LABEL:
+                self._on_runner_finished()
+
+    def _log_line(self, msg, level="info"):
+        ts = datetime.datetime.now().strftime("%H:%M:%S")
+        self.log.configure(state="normal")
+        try:
+            self.log._textbox.insert("end", f"[{ts}] {msg}\n", level)
+        except Exception:
+            self.log.insert("end", f"[{ts}] {msg}\n")
+        self.log.see("end")
+        self.log.configure(state="disabled")
+
+    def _clear_log(self):
+        self.log.configure(state="normal")
+        self.log.delete("1.0", "end")
+        self.log.configure(state="disabled")
+
+
+# ----------------------------------------------------------------------
 # 主窗口
 # ----------------------------------------------------------------------
 class App(ctk.CTk):
     NAV = [("general", "🧰  通用 / 工具"),
+           ("daily", "🐉  日常一条龙"),
            ("sniper", "🗡  秒装备"), ("treasure_map", "🗺  刷副本·宝图"),
            ("escort", "🚚  运镖"), ("secret_realm", "👹  秘境降妖"),
            ("settings", "⚙  设置"), ("about", "ⓘ  关于")]
     # 可运行任务页（有 runner/pump/update_game_pill），App 的定时器/热键/关闭钩子按此遍历
-    RUNNABLE_KEYS = ("sniper", "treasure_map", "escort", "secret_realm")
+    RUNNABLE_KEYS = ("daily", "sniper", "treasure_map", "escort", "secret_realm")
 
     def __init__(self):
         super().__init__()
@@ -1700,6 +2019,7 @@ class App(ctk.CTk):
         self.container.grid_columnconfigure(0, weight=1)
 
         self.pages = {
+            "daily": DailyPage(self.container, self),
             "sniper": SniperPage(self.container, self),
             "treasure_map": TreasureMapPage(self.container, self),
             "escort": EscortPage(self.container, self),

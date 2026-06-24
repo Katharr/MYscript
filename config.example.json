@@ -108,6 +108,7 @@
         "dig_timeout_sec": 120,
         "scroll_step": -3,
         "scroll_max_tries": 8,
+        "scroll_settle_sec": 0.35,
         "activity_columns": 2,
         "max_stuck_recover": 3
       },
@@ -140,6 +141,7 @@
         "still_wait_sec": 2.0,
         "scroll_step": -3,
         "scroll_max_tries": 8,
+        "scroll_settle_sec": 0.35,
         "activity_columns": 2,
         "max_stuck_recover": 3
       },
@@ -172,6 +174,7 @@
         "still_wait_sec": 2.0,
         "scroll_step": -3,
         "scroll_max_tries": 8,
+        "scroll_settle_sec": 0.35,
         "activity_columns": 2,
         "max_stuck_recover": 3
       },
@@ -191,6 +194,16 @@
         "sr_leave": "templates/tm_sr_leave.png",
         "sr_fail": "templates/tm_sr_fail.png",
         "sr_battle": "templates/tm_sr_battle.png"
+      }
+    },
+    "daily": {
+      "steps": [
+        { "task": "treasure_map", "enabled": true },
+        { "task": "escort", "enabled": true },
+        { "task": "secret_realm", "enabled": true }
+      ],
+      "loop": {
+        "time_limit_min": 0
       }
     }
   }

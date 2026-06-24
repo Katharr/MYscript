@@ -68,6 +68,46 @@ mhxy/
 
 ## 当前状态
 - 依赖已装好：numpy, opencv-python, mss, pyautogui, pygetwindow, customtkinter, Pillow。
+- **2026-06-23（最新）修复多开「点歪/点到聊天」根因：切前台不可靠 + 滚轮查找不再中途轮转**。
+  - **① 滚轮查找一气呵成（用户要求）**：原来「滚一屏→返回→轮转下个号」把滚动切碎、夹在号之间。
+    改成在【同一个号】上内部 `while` 循环把查找做完（找到点参加/双击用图、或翻完都没找到才恢复/判挖空），
+    再轮转下一个号。每滚一屏后自等 `loop.scroll_settle_sec`(默认0.35,带抖动)让画面落定（原先靠轮转间隔 settle）。
+    改了 4 处：`escort/secret_realm/treasure_map._do_find_card` + `treasure_map._do_dig_find`；
+    新增配置 `tasks.<t>.loop.scroll_settle_sec`（三任务 + example.json，旧 config 缺它自动取 0.35）。全程仍勤查 should_stop。
+  - **② 多开点歪/点到聊天的真正根因 = 切前台不可靠**（用户报「秘境轮到号2 点挑战点歪、把聊天点出来」）。
+    排查结论：坐标管线没问题（`vision.match` 返回命中中心、`_match_scene` 加的是**该号自己** `rect()` 原点）。
+    根子是 `GameWindow.activate()` 原本只是 pygetwindow 的裸 `SetForegroundWindow(hwnd)`——Windows「防焦点抢占」
+    常拒绝(返回0→pygetwindow 抛错→被我们 `except:pass` 静默吞)，于是**号2 根本没真正到前台**：后续点击落在后台号上
+    被吞/画面与状态机不同步→`sr_challenge` 命中**假阳性**→点到聊天区。
+    修复：`core/window.py` 新增 `_force_foreground(hwnd)`（`ShowWindow`+`BringWindowToTop`+`AttachThreadInput` 绕过抢占锁后
+    `SetForegroundWindow`，再用 `GetForegroundWindow` **校验**、失败重试3次；句柄函数显式设 `restype/argtypes=HWND` 防 64 位截断）；
+    `GameWindow.activate()` 改用它、**返回是否成功**。四个任务多开循环（escort/secret_realm/treasure_map 的主循环 +
+    sniper `_prepare_window`）改为：**切前台失败就跳过该号、下轮重试，绝不在后台号上瞎点**（每号首次失败 warn 一次）。
+  - **已验证**：5 文件 py_compile 过；example.json 合法；三任务 `scroll_settle_sec` 默认 0.35、旧 config 自动补；
+    `_force_foreground` 对空句柄/未绑定窗口安全返 False、对当前真实前台句柄返 True（证明校验不被 64 位截断）。
+    **未真机端到端验证**（需用户开 2~3 个号自测）：多开秘境/运镖/宝图轮转时，号2/号3 是否真切到前台再点、不再点歪到聊天；
+    滚轮找卡片是否在同一个号上找完才轮转；个别系统若仍频繁「切前台失败」会看到该号被跳过、下轮重试。
+- **2026-06-23（最新）新增「日常一条龙」（`daily`）：勾选已有任务按顺序一次跑完，只做串联**。
+  用户要求：勾选现有任务流程加入一条龙、一次性跑通，**流程完全套用已做好的，仅做串联**；同样支持多开/单开。
+  关键设计取舍（用户拍板）：**秒装备不纳入**——它是无限盯市场抢货、不会自己跑完，串进去会卡死整条龙；
+  其余三个（宝图/运镖/秘境降妖）都有明确完成条件、会自动结束，故可串联。**顺序可手动调整**（界面 ↑↓）。
+  - 实现原理：`DailyTask.run(ctx)` 依次实例化每个被勾选任务、在**同一个 ctx** 上调它的 `run(ctx)`，跑完一个再下一个。
+    多开/单开、演练/实战、各自标定与参数**全部沿用各子任务自身配置**（每个 task.run 开头都自己 `select_windows`/读 `task_cfg`），
+    本任务不另设这些开关。每步先跑该子任务 `preflight`：不通过（缺标定/缺窗口）就**跳过该步**、其余照跑；
+    子任务抛异常也只跳过它、不带垮整条龙；全程勤查 `should_stop`（停止/热键/甩左上角都能整条龙叫停）。
+  - 配置：`tasks.daily.steps`（**有序**列表，每项 `{task, enabled}`，界面勾选+调序写回）+ `loop.time_limit_min`（整体安全网，0=不限）。
+    `steps` 是 list，`_deep_merge` 时用户存的整列表替换默认，故勾选/顺序持久；旧 config 无 daily 由 merge 自动补全默认三项。
+    可串联任务白名单在 `tasks/daily.py:CHAINABLE`（不含 sniper）；以后加新的会自动结束的任务，加进它即可被一条龙勾选。
+  - 改了 5 文件：`tasks/daily.py`(新)、`tasks/__init__.py`(注册)、`core/config.py`(加 daily 配置块)、
+    `config.example.json`(同步)、`gui/app.py`(新增 `DailyPage` + NAV[置 general 之后]/pages/RUNNABLE_KEYS 接线，顶部 import CHAINABLE)。
+    `DailyPage`：左「任务清单」每行=勾选框(显示「序号. 标题」)+状态(演练/实战·✓已就绪/⚠还需标定)+↑↓调序，右日志；
+    控制区只有运行按钮+选择窗口+刷新+整体时间上限（**无标定、无模式开关**，因全沿用子任务）。就绪判定按各页同款必备区域/模板清单。
+  - **已验证**：4 文件 py_compile 过；example.json 合法；注册(all_tasks 含 daily)/DEFAULT 含 daily/旧 config 经 merge 自动补/
+    task_config 取 daily/CHAINABLE 不含 sniper 全 PASS；`_enabled_steps`(保序+跳未勾+过滤非法/重复)与 `DailyPage._normalize`(保序+补缺+过滤)
+    逻辑测试 PASS；GUI 真实 import、NAV daily 在 general 之后、在 RUNNABLE_KEYS、DailyPage 方法齐全、空配置状态判定为「未就绪」全 PASS。
+  - **未真机端到端验证**（需用户开游戏自测）：① 各子任务先在其任务页标定好+设好演练/实战；② 一条龙页勾选/调序看顺序号刷新、
+    看每行「已就绪/还需标定」是否准；③ 选窗口(单/多开)→开始→看日志按「[1/3] 开始宝图…完成→[2/3]…」依次推进，
+    未就绪的任务被自动跳过、多开是否每个子任务都逐号轮转。
 - **2026-06-23（最新）落地《视觉设计规范》(docs/视觉设计规范.md)：令牌化主题 + 白天/夜间模式 + 组件尺寸统一**。
   按规范第 9 节 step 1~4 执行（step 5「抽 BaseTaskPage」是单独立项，本次不做）。改了 5 文件：
   1. **`gui/theme.py`（地基）**：所有颜色常量改成 `(light, dark)` **二元组**（dark 端==历史深色值，故深色观感不变）；
