@@ -11,4 +11,5 @@ from . import sniper         # noqa: F401,E402
 from . import treasure_map   # noqa: F401,E402
 from . import escort         # noqa: F401,E402
 from . import secret_realm   # noqa: F401,E402
+from . import dungeon        # noqa: F401,E402
 from . import daily          # noqa: F401,E402

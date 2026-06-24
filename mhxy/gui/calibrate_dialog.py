@@ -19,7 +19,12 @@ from .roi_overlay import select_roi_on_screen
 from ..core import config as cfg_mod
 from ..core import window as win_mod
 from ..core import vision
+from ..core.teaming import TEAM_CALIBRATION
 from ..tasks import get_task
+
+# 非注册的「共享命名空间」标定 spec（key = 写入 cfg.tasks.<key>）。
+# 组队是跨任务共享资产、不是可运行任务，故 get_task("teaming") 拿不到，走这里。
+_VIRTUAL_SPECS = {"teaming": ("组队（全局共享）", TEAM_CALIBRATION)}
 
 
 class CalibrateDialog(ctk.CTkToplevel):
@@ -31,8 +36,15 @@ class CalibrateDialog(ctk.CTkToplevel):
         self.task_name = task_name
 
         task_cls = get_task(task_name)
-        self.spec = getattr(task_cls, "CALIBRATION", {"regions": [], "templates": [], "watchlist": False})
-        title_name = getattr(task_cls, "title", task_name)
+        if task_cls is not None:
+            self.spec = getattr(task_cls, "CALIBRATION",
+                                {"regions": [], "templates": [], "watchlist": False})
+            title_name = getattr(task_cls, "title", task_name)
+        elif task_name in _VIRTUAL_SPECS:
+            title_name, self.spec = _VIRTUAL_SPECS[task_name]
+        else:
+            self.spec = {"regions": [], "templates": [], "watchlist": False}
+            title_name = task_name
 
         self.title(f"标定 · {title_name}")
         self.geometry("680x640")
@@ -185,22 +197,17 @@ class CalibrateDialog(ctk.CTkToplevel):
 
     def _grab_roi(self, prompt, with_crop=False):
         title = self.cfg.get("window_title", "梦幻西游")
-        # 按「选择窗口」选中的目标窗口来标定（单开=选中那个；多开=第一个），
-        # 保证坐标相对将来真正操作的那个号——而不是自动选最大的那个。
-        wins = win_mod.resolve_targets(title, self.cfg.get("window_offset", [0, 0]),
-                                       self.cfg.get("targets", {}))
-        if not wins:
-            self._toast(f"没找到/没选中目标窗口（标题含「{title}」），"
-                        "请先打开游戏并在「选择窗口」里选好。", T.WARN)
+        offset = self.cfg.get("window_offset", [0, 0])
+        # 不激活/不切前台：标定只在【当前屏幕】上框选——之前强制 activate 会把配置选中的那个号顶到
+        # 前面、盖住你真正想标的窗口（“老是和想标的不一样”）。这里不动窗口层级，框完再按
+        # “框选区域落在哪个游戏窗口”反查参照窗口来算相对坐标，所以你把哪个号摆在前面、就标到哪个。
+        hint_wins = win_mod.locate_all(title, offset)
+        if not hint_wins:
+            self._toast(f"没找到游戏窗口（标题含「{title}」），请先打开游戏。", T.WARN)
             return None, None
-        win = wins[0]
-        win.activate()
-
-        wr = win.rect()
-        if wr is None:
-            self._toast("目标窗口已失效，请重新「选择窗口」。", T.WARN)
-            return None, None
-        center = (wr[0] + wr[2] // 2, wr[1] + wr[3] // 2)
+        # around_point 仅用于决定在哪块显示器弹出框选层（不改变前后层级），取任一游戏窗口中心即可。
+        hr = hint_wins[0].rect()
+        center = (hr[0] + hr[2] // 2, hr[1] + hr[3] // 2) if hr else None
 
         self._set_alpha(0.0)
         self.update_idletasks()
@@ -219,9 +226,15 @@ class CalibrateDialog(ctk.CTkToplevel):
             roi_abs, crop = result, None
         if roi_abs is None:
             return None, None
-        wr = win.rect()        # win 已绑定到选中窗口，直接取它当前矩形（勿再 locate，否则会改选最大）
+
+        # 用「框选区域中心落在哪个游戏窗口」定参照窗口（= 你实际标的那个号），相对坐标/基准尺寸都按它算。
+        # 多开各号同尺寸共用标定（项目约定），故框任意一个号都通用。
+        cx = roi_abs[0] + roi_abs[2] // 2
+        cy = roi_abs[1] + roi_abs[3] // 2
+        ref = win_mod.window_at_point(title, offset, cx, cy)
+        wr = ref.rect() if ref else None
         if wr is None:
-            self._toast("目标窗口已失效，请重新「选择窗口」。", T.WARN)
+            self._toast("框选区域不在任何游戏窗口内：请把要标的窗口移到前面，框在它的画面里。", T.WARN)
             return None, None
         # 记录基准尺寸：标定时的窗口尺寸即「还原尺寸」按钮要拉回的目标（与模板/点位天然一致）。
         # base_size 在顶层 targets，单独存 self.cfg（_save() 只存 task_config）。

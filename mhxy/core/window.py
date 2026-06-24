@@ -254,6 +254,31 @@ def resolve_targets(title_substr, offset, targets):
     return [wins[i]]
 
 
+def window_at_point(title_substr, offset, x, y):
+    """返回屏幕坐标 (x,y) 落在其内的游戏窗口（标定时按「框在哪个号上」定位参照窗口，不必激活）。
+    多个窗口重叠都含该点时，优先当前前台窗口，否则取面积最小（最贴合）的那个。找不到返回 None。"""
+    cands = []
+    for w in locate_all(title_substr, offset):
+        r = w.rect()
+        if r and r[0] <= x <= r[0] + r[2] and r[1] <= y <= r[1] + r[3]:
+            cands.append((w, r))
+    if not cands:
+        return None
+    try:
+        fg = int(_user32.GetForegroundWindow() or 0)
+    except Exception:
+        fg = 0
+    if fg:
+        for w, _r in cands:
+            try:
+                if int(w._win._hWnd) == fg:
+                    return w
+            except Exception:
+                pass
+    cands.sort(key=lambda wr: wr[1][2] * wr[1][3])   # 面积最小=最贴合
+    return cands[0][0]
+
+
 def restore_targets_size(title_substr, offset, targets, base_size):
     """把当前选中的目标窗口（单开1个/多开多个）逐个还原到 base_size=[w,h]。
 

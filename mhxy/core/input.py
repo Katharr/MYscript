@@ -23,6 +23,8 @@ ULONG_PTR = ctypes.POINTER(ctypes.c_ulong)
 MOUSEEVENTF_MOVE = 0x0001
 MOUSEEVENTF_LEFTDOWN = 0x0002
 MOUSEEVENTF_LEFTUP = 0x0004
+MOUSEEVENTF_RIGHTDOWN = 0x0008      # 右键按下（关弹窗用）
+MOUSEEVENTF_RIGHTUP = 0x0010        # 右键抬起
 MOUSEEVENTF_WHEEL = 0x0800          # 滚轮：mouseData 为正向上、负向下，120=一格
 MOUSEEVENTF_ABSOLUTE = 0x8000
 WHEEL_DELTA = 120                   # 一“格”滚轮的标准增量
@@ -230,6 +232,28 @@ class Mouse:
         self._down()
         time.sleep(random.uniform(0.04, 0.13) / spd)
         self._up()
+        time.sleep(random.uniform(0.02, 0.08) / spd)
+
+    def _rdown(self):
+        if self.backend == "sendinput":
+            _send(MOUSEEVENTF_RIGHTDOWN)
+        else:
+            self._clk().mouseDown(button="right")
+
+    def _rup(self):
+        if self.backend == "sendinput":
+            _send(MOUSEEVENTF_RIGHTUP)
+        else:
+            self._clk().mouseUp(button="right")
+
+    def right_click(self, x, y, speed=None):
+        """拟人化移动并右键单击（关弹窗/取消用）。节奏同 click。"""
+        spd = self._speed(speed)
+        self.human_move(x, y, speed=speed)
+        time.sleep(random.uniform(0.03, 0.10) / spd)
+        self._rdown()
+        time.sleep(random.uniform(0.04, 0.13) / spd)
+        self._rup()
         time.sleep(random.uniform(0.02, 0.08) / spd)
 
     def double_click(self, x, y, speed=None):

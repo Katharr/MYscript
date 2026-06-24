@@ -196,6 +196,42 @@
         "sr_battle": "templates/tm_sr_battle.png"
       }
     },
+    "teaming": {
+      "loop": {
+        "match_threshold": 0.85,
+        "tick_interval_sec": 0.5,
+        "form_timeout_sec": 180,
+        "create_timeout_sec": 15,
+        "accept_timeout_sec": 90,
+        "find_leader_timeout_sec": 60,
+        "apply_timeout_sec": 15,
+        "scroll_step": -3,
+        "scroll_max_tries": 10,
+        "scroll_settle_sec": 0.35,
+        "arrow_band_w": 80,
+        "arrow_offset_x": 28,
+        "max_stuck_recover": 3
+      },
+      "regions": {
+        "team_panel": [600, 120, 380, 460],
+        "friend_list": [600, 160, 360, 420]
+      },
+      "templates": {
+        "team_create": "templates/tm_team_create.png",
+        "team_apply": "templates/tm_team_apply.png",
+        "team_accept": "templates/tm_team_accept.png",
+        "team_apply_join": "templates/tm_team_apply_join.png",
+        "team_arrow": "templates/tm_team_arrow.png",
+        "leader_id": "templates/tm_leader_id.png"
+      }
+    },
+    "dungeon": {
+      "dry_run": true,
+      "captain_index": 0,
+      "loop": {
+        "time_limit_min": 0
+      }
+    },
     "daily": {
       "steps": [
         { "task": "treasure_map", "enabled": true },
