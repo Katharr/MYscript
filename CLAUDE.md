@@ -48,6 +48,9 @@ mhxy/
     input.py    Mouse 类：SendInput 底层 + human_move/click/sleep/maybe_idle
     context.py  TaskContext：打包 window/mouse/cfg/log/stop_event 给任务
     runner.py   TaskRunner：后台线程跑 Task + 线程安全日志队列
+    rotation.py 多开轮转推进器：通用 while/for 骨架 +「连续推进到等待点才让出」
+                （切一次前台把本号能自主做完的步连做完，state 不变=在等待才切下一号，少切前台）
+    teaming.py  TeamFormation：跨窗口组队握手编排（已接入 rotation；其余任务待接入）
   tasks/  可插拔任务
     base.py     Task 基类 + 注册表（register/get_task/all_tasks）
     sniper.py   SniperTask（秒装备）：preflight() 自检 + run(ctx) 主循环
@@ -69,6 +72,13 @@ mhxy/
 - 任务在**后台线程**跑，通过 `ctx.log(msg, level)` 输出（level: info/hit/warn/error），
   循环里**勤查 `ctx.should_stop()`**，绝不直接碰 GUI。
 - config 用 `tasks.<name>.*` 存各任务配置（regions/watchlist/dry_run/loop 都在 tasks.sniper 下）。
+- **多开轮转走 `core/rotation.py`（统一底层，新任务照此接入）**：每号一份 record（含 `state/ctx/done`），
+  用非阻塞状态机——每个 `_do_*/_cap_*/_mem_*` 处理方法只推进一小步，能往下做就 `_goto` 改 `state`、
+  在等待（门控未就绪/没找到目标/监控态盯帧差）就**不改 state**。推进器据此「**连续推进到等待点才让出**」：
+  切一次前台后把本号能自主做完的步连做完，`state` 不变=在等待才让出切下一号，省掉无谓的反复切前台。
+  接入只需构造 `RotationConfig(records, step_once, should_stop, log, …回调)` 调 `run_rotation()`，
+  任务特有语义（dry_run/窗口消失差异/成功判据）经回调留在调用方。**铁律：监控态未触发转移时绝不 `_goto`**，
+  否则会在一个号上空转盯屏、饿死别的号。（详见 memory: rotation-engine）
 - 加“自动师门”示例：新建 `mhxy/tasks/shimen.py` 写 `@register class ShimenTask(Task)`；
   在 `tasks/__init__.py` `from . import shimen`；在 `gui/app.py` 仿 `SniperPage` 加页面 + 在 `App.NAV` 加项。
 

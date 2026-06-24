@@ -29,6 +29,7 @@ import random
 
 from . import vision
 from . import window as win_mod
+from . import rotation
 
 
 # 组队标定 spec（单一真相源；calibrate_dialog 与 DungeonTask 都引用，避免漂移）
@@ -136,55 +137,52 @@ class TeamFormation:
     # 主循环
     # ------------------------------------------------------------------
     def run_until_formed(self):
-        """逐号 activate + 各推进一小步，直到组队成功/超时/停止。返回 (ok: bool, reason: str)。"""
+        """逐号 activate + 连续推进到等待点才让出，直到组队成功/超时/停止。返回 (ok, reason)。
+
+        轮转骨架走 core/rotation.py 的通用推进器（切一次前台后把本号能自主做完的步连续做完，
+        撞到等待点——门控未就绪/没找到目标/已 done——才让出切下一号），组队特有的语义
+        （dry_run 自检、队长 vs 队员窗口消失差异、joined 成功判据）经回调留在本方法里。"""
         multi = self.cfg.get("targets", {}).get("multi", False)
         switch_delay = self.cfg.get("targets", {}).get("switch_delay_sec", 0.15)
         tick = self.loop.get("tick_interval_sec", 0.5)
         overall = self.loop.get("form_timeout_sec", 180) or 0
-        start = time.time()
 
         if self.dry_run:
             return self._dry_run_selfcheck(multi, switch_delay)
 
-        while not self.lead.should_stop():
-            if overall and time.time() - start > overall:
-                self.lead.log(f"组队总超时 {overall}s 未成形 → 降级结束。", level="warn")
-                break
-            if all(r["done"] for r in self.records):
-                break
+        self._captain_gone = False
 
-            active = [r for r in self.records if not r["done"]]
-            for rec in self.records:
-                if self.lead.should_stop():
-                    break
-                if rec["done"]:
-                    continue
-                wctx = rec["ctx"]
-                if wctx.window.rect() is None:
-                    if rec["role"] == self.ROLE_CAPTAIN:
-                        self.lead.log("队长窗口不见了，组队无法继续。", level="error")
-                        return False, "captain_window_gone"
-                    if not rec["dead_logged"]:
-                        wctx.log("队员窗口不见了，跳过该号（其余继续）。", level="warn")
-                        rec["dead_logged"] = True
-                    rec["done"] = True
-                    continue
-                rec["dead_logged"] = False
-                # 操作某号前先切前台（多开必须）；失败本轮跳过、下轮重试，绝不在后台号瞎点。
-                if multi:
-                    if not wctx.window.activate():
-                        if not rec["fg_warned"]:
-                            wctx.log("未能切到前台（系统拒绝焦点抢占），本轮跳过、下轮重试。", level="warn")
-                            rec["fg_warned"] = True
-                        continue
-                    rec["fg_warned"] = False
-                    if wctx.should_stop():
-                        break
-                self._step_once(rec)
-                if multi and len(active) > 1:
-                    self._sleep(self._jitter(switch_delay))
-            self._sleep(self._jitter(tick))
+        def on_window_gone(rec):
+            # 队长窗口没了 → 整体中止；队员窗口没了 → 节流打一次日志、标记 done、其余继续。
+            if rec["role"] == self.ROLE_CAPTAIN:
+                self.lead.log("队长窗口不见了，组队无法继续。", level="error")
+                self._captain_gone = True
+                return "abort"
+            if not rec["dead_logged"]:
+                rec["ctx"].log("队员窗口不见了，跳过该号（其余继续）。", level="warn")
+                rec["dead_logged"] = True
+            rec["done"] = True
+            return "done"
 
+        def on_activate_fail(rec):
+            if not rec["fg_warned"]:
+                rec["ctx"].log("未能切到前台（系统拒绝焦点抢占），本轮跳过、下轮重试。", level="warn")
+                rec["fg_warned"] = True
+
+        def step_once(rec):
+            rec["fg_warned"] = False   # 能进到这里说明 activate 成功了，重置节流标志
+            self._step_once(rec)
+
+        rc = rotation.RotationConfig(
+            records=self.records, step_once=step_once,
+            should_stop=self.lead.should_stop, log=self.lead.log,
+            on_window_gone=on_window_gone, on_activate_fail=on_activate_fail,
+            multi=multi, switch_delay=switch_delay, tick=tick, overall_timeout=overall,
+            jitter_ratio=self.cfg.get("humanize", {}).get("interval_jitter", 0.4))
+        result = rotation.run_rotation(rc)
+
+        if result == "aborted" and self._captain_gone:
+            return False, "captain_window_gone"
         if self.lead.should_stop():
             return False, "stopped"
         if self.joined >= self.member_count:
