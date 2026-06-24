@@ -1550,6 +1550,47 @@ class GeneralPage(ctk.CTkFrame):
         self.app.cfg = self.cfg
         self._refresh_body()
 
+    def _normalize_now(self):
+        """点「还原尺寸」时触发：把所有尺寸≠基准的游戏窗口拉回基准尺寸。
+        基准未设置时提示；没有窗口时提示。只对尺寸不符的窗口动手（已是基准的不碰）。"""
+        cfg = cfg_mod.load_config()
+        self.cfg = cfg
+        self.app.cfg = cfg
+        base = (cfg.get("targets") or {}).get("base_size")
+        if not base or len(base) < 2:
+            self.app.toast("请先设置基准尺寸（填上面两个框或在窗口列表点「设为基准」）")
+            return
+        bw, bh = int(base[0]), int(base[1])
+        title = cfg.get("window_title", "梦幻西游")
+        offset = cfg.get("window_offset", [0, 0])
+        try:
+            wins = win_mod.locate_all(title, offset)
+        except Exception:
+            wins = []
+        if not wins:
+            self.app.toast(f"没检测到游戏窗口（标题含「{title}」），请先打开游戏")
+            return
+        todo = []
+        for w in wins:
+            r = w.rect()
+            if r and (abs(r[2] - bw) > 4 or abs(r[3] - bh) > 4):
+                todo.append(w)
+        if not todo:
+            self.app.toast(f"所有窗口已是基准尺寸 {bw}×{bh}，无需还原")
+            self.refresh()
+            return
+        ok = 0
+        for w in todo:
+            w.activate()
+            if w.resize_to(bw, bh):
+                ok += 1
+        self.app._game_connected = None    # 尺寸变了，强制下次 tick 刷新药丸
+        if ok < len(todo):
+            self.app.toast(f"已还原 {ok}/{len(todo)} 个号到 {bw}×{bh}；部分窗口可能锁了分辨率档位")
+        else:
+            self.app.toast(f"已把 {ok} 个号还原到基准尺寸 {bw}×{bh}")
+        self.refresh()
+
     def _refresh_body(self):
         for w in self.body.winfo_children():
             w.destroy()
@@ -1561,6 +1602,7 @@ class GeneralPage(ctk.CTkFrame):
             wins = win_mod.locate_all(title, offset)
         except Exception:
             wins = []
+        base = targets.get("base_size")
 
         # ── 窗口尺寸归一化 ──
         c2 = self._card()
@@ -1570,26 +1612,33 @@ class GeneralPage(ctk.CTkFrame):
         txt2 = ctk.CTkFrame(head2, fg_color="transparent")
         txt2.grid(row=0, column=0, sticky="w")
         ctk.CTkLabel(txt2, text="窗口尺寸归一化", font=self.fonts["h2"], text_color=T.TEXT).pack(anchor="w")
-        base = targets.get("base_size")
         base_txt = f"{int(base[0])}×{int(base[1])}" if base and len(base) >= 2 else "未设置"
         ctk.CTkLabel(txt2, text=f"当前基准尺寸：{base_txt}", font=self.fonts["body"],
                      text_color=T.TEXT if base else T.WARN).pack(anchor="w", pady=(4, 0))
-        ctk.CTkLabel(txt2, text="手操把窗口拉大后，点「还原尺寸」一键拉回基准尺寸（脚本点位按此尺寸标定）。",
-                     font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left").pack(anchor="w", pady=(2, 0))
+        sub2 = ctk.CTkLabel(txt2, text="点「还原尺寸」把所有窗口拉回基准尺寸（脚本点位按此尺寸标定）。"
+                                       "在下面窗口列表点「设为基准」来设定基准尺寸。",
+                            font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
+        sub2.pack(anchor="w", pady=(2, 0))
+        bind_wraplength(sub2)
         btns2 = ctk.CTkFrame(head2, fg_color="transparent")
         btns2.grid(row=0, column=1, padx=(12, 0))
         ctk.CTkButton(btns2, text="还原尺寸", font=self.fonts["body"], height=36, width=100,
                       corner_radius=T.RADIUS_SM, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER, text_color=T.ON_ACCENT,
-                      command=lambda: self.app.restore_window_size(self.refresh)).pack(pady=(0, 6))
+                      command=self._normalize_now).pack(pady=(0, 6))
         ctk.CTkButton(btns2, text="刷新", font=self.fonts["body"], height=30, width=100,
                       corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
                       border_width=1, border_color=T.BORDER,
                       command=self.refresh).pack()
 
-        # 窗口列表：点某个窗口「设为基准」即把它的尺寸记为基准尺寸
-        ctk.CTkLabel(c2, text="把哪个窗口的尺寸设为基准？（脚本会按它来还原其它被拉大的号）",
+        if not (base and len(base) >= 2):
+            ctk.CTkLabel(c2, text="基准尺寸尚未设置：在下方窗口列表点「设为基准」即可。",
+                         font=self.fonts["small"], text_color=T.WARN, justify="left").pack(
+                             anchor="w", padx=16, pady=(2, 0))
+
+        # 窗口列表（信息 + 快捷把某个窗口尺寸设为基准）
+        ctk.CTkLabel(c2, text="检测到的窗口（点「设为基准」用该窗口的当前尺寸作为基准）：",
                      font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left").pack(
-                         anchor="w", padx=16, pady=(6, 2))
+                         anchor="w", padx=16, pady=(8, 2))
         if not wins:
             ctk.CTkLabel(c2, text="没检测到游戏窗口，请先打开游戏再点「刷新」。",
                          font=self.fonts["body"], text_color=T.TEXT_DIM).pack(anchor="w", padx=16, pady=(2, 14))
@@ -1620,7 +1669,7 @@ class GeneralPage(ctk.CTkFrame):
         cfg.setdefault("targets", {})["base_size"] = [r[2], r[3]]
         cfg_mod.save_config(cfg)
         self.app.cfg = cfg
-        self.app.toast(f"已设基准尺寸 {r[2]}×{r[3]}（号会还原到这个大小）")
+        self.app.toast(f"已设基准尺寸 {r[2]}×{r[3]}（点「还原尺寸」时其它号会归一化到这个大小）")
         self.refresh()
 
 
