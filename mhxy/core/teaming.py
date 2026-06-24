@@ -3,13 +3,21 @@
 组队（可复用的跨窗口握手编排）。
 
 组队不是「每个号各跑同一条独立状态机」，而是几个号有时序依赖的握手：
-  队长：开队伍 → 创建队伍 → 申请(设为可申请加入) → 见「接受」就点、点够人数 → 右键关队伍弹窗
+  队长：开队伍 → 创建队伍 → 点「申请」标签页(切到入队申请列表) → 在申请页见「同意」就点、点够人数 → 右键关队伍弹窗
   队员：开好友 → 滚轮找队长ID → 点其右侧箭头 → 申请入队 → 右键关好友弹窗
+
+注意（用户拍板的真实流程）：建好队伍后队员默认就能申请，「申请」不是「开放入队」按钮，
+而是队长队伍面板里的一个**标签页**——必须点它切过去才能看到队员的入队申请、才能逐个同意。
+关键时序：队长要「创建队伍 → 立刻切「申请」标签页」一气呵成，期间队员被门控不动，
+**点完「申请」（或等不到「申请」超时兜底）才置 team_ready=True** 放队员去申请。
+这样队长切前台做这两步时不会被队员抢去前台/鼠标打断（踩过的坑：建队即置 team_ready，
+队员马上抢前台、队长迟迟点不到「申请」；更早的坑则是只在点到「申请」后才置位、
+一旦找不到「申请」队员就永远不动——故现在超时也兜底置位）。
 
 但它仍融入项目「非阻塞轮转 + activate 切前台」框架：每个号各持一份 record、按角色走不同状态分支，
 编排器（本类）持有共享标志 team_ready / joined 作为号间信号量来协调时序——
-队长把队建好并点「申请」后置 team_ready=True，队员在此之前被门控空转（不抢鼠标、不开界面）；
-队员申请后队长在 C_ACCEPT 见「接受」就点、joined++，直到点够人数（队员数）。
+队长把「创建+申请」做完才置 team_ready=True，队员在此之前被门控空转（不抢鼠标、不开界面）；
+队员申请后队长在 C_ACCEPT 见「同意」就点、joined++，直到点够人数（队员数）。
 
 本类与具体任务、与 GUI 完全解耦，只依赖 ctx（含 window/mouse/cfg/log/stop）。
 未来「师门组队/帮派组队」等任务都可 self.team = TeamFormation(...) 复用。
@@ -31,8 +39,8 @@ TEAM_CALIBRATION = {
     ],
     "templates": [
         ("team_create", "「创建队伍」按钮", "队伍面板里的「创建队伍」按钮，框按钮本身、要独特"),
-        ("team_apply", "「申请」按钮", "把队伍设成可申请加入的那个「申请」按钮"),
-        ("team_accept", "「接受」按钮", "有人申请时出现的「接受」按钮（见即点，不认申请人）"),
+        ("team_apply", "「申请」标签页", "队伍面板里的「申请」标签页——点它切过去才能看到队员的入队申请列表，框这个页签"),
+        ("team_accept", "「同意」按钮", "切到申请标签页后，队员申请那行右侧的「同意」按钮，见即点、不认申请人"),
         ("team_apply_join", "「申请入队」按钮", "队员点队长右侧箭头后弹出的「申请入队」按钮"),
         ("team_arrow", "队长ID右侧箭头(可选)", "好友列表里ID右侧的箭头按钮；在命中右侧小范围内找它。"
                                           "不标则用固定偏移兜底点击"),
@@ -49,9 +57,9 @@ TEAM_REQUIRED_TEMPLATES = ["team_create", "team_apply", "team_accept", "team_app
 
 # 队长状态链
 C_OPEN_TEAM = "C_OPEN_TEAM"   # 发 open_team 开队伍面板
-C_CREATE = "C_CREATE"         # 点「创建队伍」
-C_APPLY = "C_APPLY"           # 点「申请」(开放入队) → 置 team_ready
-C_ACCEPT = "C_ACCEPT"         # 见「接受」就点，点够人数
+C_CREATE = "C_CREATE"         # 点「创建队伍」→ 立刻去切申请页（队员仍门控、不抢前台）
+C_APPLY = "C_APPLY"           # 点「申请」标签页 → 置 team_ready 放队员去申请（超时也兜底置位）
+C_ACCEPT = "C_ACCEPT"         # 在申请页见「同意」就点，点够人数
 C_CLOSE = "C_CLOSE"           # 右键关队伍弹窗
 # 队员状态链
 M_WAIT_READY = "M_WAIT_READY"     # 门控：队长没就绪前不动
@@ -215,26 +223,36 @@ class TeamFormation:
         hit = self._find_in_region(ctx, "team_panel", "team_create")
         if hit is not None:
             ctx.mouse.click(hit[0], hit[1])
-            ctx.log(f"队长：点「创建队伍」（{hit[2]:.2f}）。", level="hit")
+            ctx.log(f"队长：点「创建队伍」（{hit[2]:.2f}），立刻切「申请」标签页。", level="hit")
+            # 注意：此处【不】置 team_ready——队员继续门控，让队长趁前台一气呵成把「申请」也点了，
+            # 不被队员抢前台/鼠标打断。team_ready 改到 _cap_apply 点完「申请」（或超时兜底）才置。
             self._sleep(self._jitter(0.6))
             self._goto(rec, C_APPLY)
             return
         if self._elapsed(rec) > self.loop.get("create_timeout_sec", 15):
-            ctx.log("队长：没找到「创建队伍」（可能已在队中），转去点「申请」。", level="warn")
+            ctx.log("队长：没找到「创建队伍」（可能已在队中），直接去切「申请」标签页。", level="warn")
             self._goto(rec, C_APPLY)
 
     def _cap_apply(self, rec):
         ctx = rec["ctx"]
+        # 「申请」是队伍面板里的标签页，点它切过去才能看到队员的入队申请列表。
+        # 点完（或等不到超时兜底）才置 team_ready 放队员去申请——在此之前队员被门控、不抢前台，
+        # 保证队长「创建→申请」两步一气呵成，不被队员切前台/抢鼠标打断。
         hit = self._find_in_region(ctx, "team_panel", "team_apply")
         if hit is not None:
             ctx.mouse.click(hit[0], hit[1])
-            ctx.log(f"队长：点「申请」开放入队（{hit[2]:.2f}），等队员申请。", level="hit")
+            ctx.log(f"队长：点「申请」标签页（{hit[2]:.2f}），队伍已开放，放队员去申请。", level="hit")
             self.team_ready = True
             self._sleep(self._jitter(0.5))
             self._goto(rec, C_ACCEPT)
             return
+        # 诊断：连找几秒还没「申请」，抓一张 team_panel 区域图 + 报最高匹配分（只抓一次），
+        # 帮判断到底是「申请页根本没出现/被弹窗挡住(分很低)」还是「在画面里但阈值卡太高(分接近阈值)」。
+        if not rec.get("diag_apply") and self._elapsed(rec) > 2.5:
+            rec["diag_apply"] = True
+            self._diag_dump(ctx, "team_panel", "team_apply", "cap_apply")
         if self._elapsed(rec) > self.loop.get("create_timeout_sec", 15):
-            ctx.log("队长：没找到「申请」按钮，仍按已开放处理，开始等申请。", level="warn")
+            ctx.log("队长：没找到「申请」标签页，仍按已开放处理，放队员申请并开始找同意。", level="warn")
             self.team_ready = True
             self._goto(rec, C_ACCEPT)
 
@@ -243,11 +261,12 @@ class TeamFormation:
         if self.joined >= self.member_count:
             self._goto(rec, C_CLOSE)
             return
+        # 「同意」按钮在申请标签页内（队员申请那一行右侧）→ 在 team_panel 区域内找
         hit = self._find_in_region(ctx, "team_panel", "team_accept")
         if hit is not None:
             ctx.mouse.click(hit[0], hit[1])
             self.joined += 1
-            ctx.log(f"队长：点「接受」（{hit[2]:.2f}），已接受 {self.joined}/{self.member_count}。", level="hit")
+            ctx.log(f"队长：点「同意」（{hit[2]:.2f}），已接受 {self.joined}/{self.member_count}。", level="hit")
             self._sleep(self._jitter(0.4))
             rec["t_state"] = time.time()      # 接受到人就刷新计时，防止误超时
             if self.joined >= self.member_count:
@@ -305,14 +324,18 @@ class TeamFormation:
             if hit is not None:
                 lx, ly, score = rect[0] + hit[0], rect[1] + hit[1], hit[2]
                 arrow = self._find_arrow_on_row(ctx, "friend_list", (lx, ly))
-                if arrow is not None:
-                    ctx.mouse.click(arrow[0], arrow[1])
-                    ctx.log(f"队员：找到队长（{score:.2f}）→ 点右侧箭头，准备申请入队。", level="hit")
-                    self._sleep(self._jitter(0.5))
-                    self._goto(rec, M_APPLY_JOIN)
+                if arrow is None:        # 仅当区域取不到（窗口没了）才会是 None
+                    rec["done"] = True
                     return
-                ctx.log("队员：认出队长但没找到右侧箭头（检查 team_arrow/arrow_offset_x）。", level="warn")
-                # 不滚动（会滚走目标），原地交给超时
+                ctx.mouse.click(arrow[0], arrow[1])
+                if arrow[2] > 0:
+                    ctx.log(f"队员：找到队长（{score:.2f}）→ 点右侧箭头（{arrow[2]:.2f}），准备申请入队。", level="hit")
+                else:
+                    ctx.log(f"队员：找到队长（{score:.2f}）→ 行内没匹配到箭头模板，按右侧固定偏移兜底点击。",
+                            level="warn")
+                self._sleep(self._jitter(0.5))
+                self._goto(rec, M_APPLY_JOIN)
+                return
             else:
                 cx_c, cy_c = rect[0] + rect[2] // 2, rect[1] + rect[3] // 2
                 ctx.mouse.scroll(self.loop.get("scroll_step", -3), cx_c, cy_c)
@@ -380,39 +403,65 @@ class TeamFormation:
         return (rect[0] + m[0], rect[1] + m[1], m[2])
 
     def _find_arrow_on_row(self, ctx, region_key, leader_screen_xy):
-        """在队长ID命中处右侧的小条带里找箭头按钮(team_arrow)。命中返回屏幕 (x,y,score)。
-        参照 secret_realm._find_join_on_row 的「按行+只取右侧小范围」思路，抗布局漂移、不串到别人那行。
-        team_arrow 未标定时用固定偏移兜底：直接点命中中心右侧 arrow_offset_x 像素处。"""
+        """在队长ID命中【行】的右侧找箭头按钮(team_arrow)。返回屏幕 (x, y, score)。
+        参照 secret_realm._find_join_on_row 的「按行」思路抗布局漂移、不串到别人那行：
+        - 横向：从队长名字的【右边缘】一直扫到该区域【右缘】（整行右半部分都找）。
+          注意 match() 返回的是模板【中心】，名字模板有几十像素宽，老逻辑从中心起算只取 80px
+          常够不到更靠右的箭头 → 「认出队长却找不到箭头」。改成扫到行尾，彻底消除这个够不着。
+          （arrow_band_w>0 时仍按它当上限裁，便于个别布局收窄；默认 0=扫到区域右缘。）
+        - 纵向：只取约 1.6 行高，不会串到上下相邻好友那一行的箭头。
+        模板未标定、或行内没匹配到，统一退化为「名字右边缘 + arrow_offset_x」固定偏移点击
+        （返回 score=0 表示走了兜底，调用方据此区分日志）。"""
         rect = self._region_rect(ctx, region_key)
         if rect is None:
             return None
         rx, ry = rect[0], rect[1]
         lx, ly = leader_screen_xy
+        leader_tpl = self.tpl.get("leader_id")
+        name_w = leader_tpl.shape[1] if leader_tpl is not None else 64
+        right_edge_x = lx + name_w // 2          # 队长名字的右边缘（屏幕坐标）
+        fallback = (right_edge_x + int(self.loop.get("arrow_offset_x", 28)), ly, 0.0)
         arrow_tpl = self.tpl.get("team_arrow")
         if arrow_tpl is None:
-            off = int(self.loop.get("arrow_offset_x", 28))
-            return (lx + off, ly, 0.0)
+            return fallback
         scene = win_mod.grab(rect)
         if scene is None:
-            return None
+            return fallback
         sh, sw = scene.shape[:2]
-        leader_tpl = self.tpl.get("leader_id")
         row_h = leader_tpl.shape[0] if leader_tpl is not None else 32
         band = max(32, int(row_h * 1.6))
-        band_w = int(self.loop.get("arrow_band_w", 80))
-        lx_local, ly_local = int(lx - rx), int(ly - ry)
+        ly_local = int(ly - ry)
         y0 = max(0, ly_local - band // 2)
         y1 = min(sh, ly_local + band // 2)
-        x0 = max(0, lx_local)
-        x1 = min(sw, lx_local + band_w)
+        x0 = max(0, int(right_edge_x - rx) - 2)            # 从名字右边缘起（留 2px 容差）
+        band_w = int(self.loop.get("arrow_band_w", 0))
+        x1 = min(sw, x0 + band_w) if band_w > 0 else sw    # 0=扫到区域右缘（整行右半部分）
         if y1 - y0 < 1 or x1 - x0 < 1:
-            return None
+            return fallback
         crop = scene[y0:y1, x0:x1]
         m = vision.match(crop, arrow_tpl, self.threshold)
         if m is None:
-            return None
+            return fallback
         cx, cy, score = m
         return (rx + x0 + cx, ry + y0 + cy, score)
+
+    def _diag_dump(self, ctx, region_key, tpl_key, tag):
+        """诊断：抓该区域截图存到 captures/，并打印模板在区域内的最高匹配分（不卡阈值）。
+        分很低(≈0.2~0.5)=模板根本不在这片画面里（区域标错/被弹窗挡/页面没切过去）；
+        分接近阈值(≈0.7~0.84)=在画面里但阈值太严或模板有点漂移。看截图即可定位。"""
+        rect = self._region_rect(ctx, region_key)
+        if rect is None:
+            return
+        scene = win_mod.grab(rect)
+        if scene is None:
+            return
+        tpl = self.tpl.get(tpl_key)
+        score = vision.best_score(scene, tpl)[0] if tpl is not None else 0.0
+        ts = time.strftime("%H%M%S")
+        path = f"captures/diag_{tag}_{ts}.png"
+        vision.save_image(path, scene)
+        ctx.log(f"诊断：『{tpl_key}』在 {region_key} 区域最高匹配分={score:.2f}（阈值 {self.threshold:.2f}）；"
+                f"该区域截图已存 {path}，可打开比对。", level="warn")
 
     def _close_panel(self, ctx, region_key):
         """右键关弹窗：右键点该区域中心；区域未标定则用 close_panel(Esc) 兜底。"""
@@ -428,7 +477,7 @@ class TeamFormation:
     # 演练：只识别各号角色相关标志，不发快捷键/不点
     # ------------------------------------------------------------------
     def _dry_run_selfcheck(self, multi, switch_delay):
-        cap_keys = [("team_create", "创建队伍"), ("team_apply", "申请"), ("team_accept", "接受")]
+        cap_keys = [("team_create", "创建队伍"), ("team_apply", "申请标签页"), ("team_accept", "同意")]
         mem_keys = [("leader_id", "队长ID"), ("team_arrow", "箭头"), ("team_apply_join", "申请入队")]
         self.lead.log("组队演练：对每个号识别其角色相关标志，验证模板/阈值，不发快捷键/不点。", level="warn")
         rounds = 0

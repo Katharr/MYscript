@@ -52,3 +52,16 @@ def match(scene_bgr, template_bgr, threshold):
     if max_val >= threshold:
         return (max_loc[0] + tw // 2, max_loc[1] + th // 2, float(max_val))
     return None
+
+
+def best_score(scene_bgr, template_bgr):
+    """诊断用：返回 template 在 scene 里的【最高匹配分】(不卡阈值)及命中中心 (score, (cx, cy))。
+    尺寸不符/空图返回 (0.0, None)。用来判断「模板根本不在画面里(分很低)」还是「在画面里但阈值太高」。"""
+    if scene_bgr is None or template_bgr is None:
+        return (0.0, None)
+    th, tw = template_bgr.shape[:2]
+    if scene_bgr.shape[0] < th or scene_bgr.shape[1] < tw:
+        return (0.0, None)
+    res = cv2.matchTemplate(scene_bgr, template_bgr, cv2.TM_CCOEFF_NORMED)
+    _, max_val, _, max_loc = cv2.minMaxLoc(res)
+    return (float(max_val), (max_loc[0] + tw // 2, max_loc[1] + th // 2))

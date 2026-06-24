@@ -277,18 +277,18 @@ DEFAULT_CONFIG = {
                 "scroll_step": -3,           # 好友列表每次滚轮格数（负=向下翻）
                 "scroll_max_tries": 10,      # 好友列表最多翻几屏找队长
                 "scroll_settle_sec": 0.35,   # 每滚一屏后等画面落定再重找的间隔（带抖动）
-                "arrow_band_w": 80,          # 队长ID命中后，在其右侧这么宽的小条带内找箭头按钮（主方案）
-                "arrow_offset_x": 28,        # 箭头模板缺失时的兜底：直接点命中中心右侧这么多像素处
+                "arrow_band_w": 0,           # 找箭头的横向范围：从名字右边缘往右多宽；0=扫到该区域右缘(整行右半)
+                "arrow_offset_x": 28,        # 箭头没匹配到时的兜底：点「名字右边缘 + 这么多像素」处
                 "max_stuck_recover": 3       # 连续卡死多少次就放弃该号
             },
             "regions": {                 # 相对游戏窗口 [x,y,w,h]，标定向导写入
-                "team_panel": None,      # 队伍面板区（创建/申请/接受 都在这片找）
+                "team_panel": None,      # 队伍面板区（创建队伍/申请标签页/同意 都在这片找）
                 "friend_list": None      # 好友列表区（滚轮在此翻找队长ID）
             },
             "templates": {               # 组队全局模板（标定向导裁图写入，tm_ 前缀）
                 "team_create": None,         # 「创建队伍」按钮
-                "team_apply": None,          # 「申请」按钮（把队伍设成可申请加入）
-                "team_accept": None,         # 「接受」按钮（有人申请时出现，见即点）
+                "team_apply": None,          # 「申请」标签页（点它切到队员入队申请列表）
+                "team_accept": None,         # 「同意」按钮（切到申请页后，队员申请那行右侧，见即点）
                 "team_apply_join": None,     # 队员点队长右侧箭头后弹出的「申请入队」按钮
                 "team_arrow": None,          # 好友列表里队长ID右侧的箭头按钮（在命中右侧小范围内找，可选）
                 "leader_id": None            # 队长ID（队员据此在好友列表定位队长）
