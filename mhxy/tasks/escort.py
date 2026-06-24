@@ -28,6 +28,7 @@ import time
 
 from ..core import vision
 from ..core import window as win_mod
+from ..core import rotation
 from .base import Task, register
 
 # 每个号的状态机状态（非阻塞：每访问一次只推进一步）
