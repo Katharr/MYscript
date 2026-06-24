@@ -66,9 +66,13 @@ def bind_wraplength(label, padding=8):
     这样 <Configure> 事件里的 e.width 即列/容器宽度；据此设 wraplength，文字随窗口宽度回流。
     凡是「可能比一行还长」的说明性文字（页眉副标题、卡内多行提示）都应套用本助手或显式给 wraplength。
     """
+    # <Configure> 在初始布局/缩放时会连发多次；宽度没变就别再 configure，否则会引起重排连锁、加剧卡顿。
+    state = {"w": -1}
+
     def _on(e):
         w = e.width - padding
-        if w > 1:
+        if w > 1 and w != state["w"]:
+            state["w"] = w
             label.configure(wraplength=w)
     label.bind("<Configure>", _on)
 
@@ -219,6 +223,11 @@ class SniperPage(ctk.CTkFrame):
         self._render_watchlist(tc.get("watchlist", []))
 
     def _render_watchlist(self, items):
+        # 内容没变就别重建：切页时 refresh 会反复调到这里，整段拆了重画是「切页卡顿」的来源之一。
+        sig = [(it.get("name"), it.get("template"), it.get("max_price")) for it in items]
+        if sig == getattr(self, "_wl_sig", None):
+            return
+        self._wl_sig = sig
         for w in self.list_frame.winfo_children():
             w.destroy()
         self._thumbs.clear()
@@ -1114,31 +1123,60 @@ class DungeonPage(ctk.CTkFrame):
         dry = tc.get("dry_run", True)
         (self.switch_mode.select if not dry else self.switch_mode.deselect)()
         self._render_mode_pill(dry)
+        # 先用上次已知的号数即时渲染（窗口枚举很慢，不能每次切页都同步卡住）；再后台枚举刷新号数。
+        self._render_team_status(tc)
+        self._kick_count_windows()
 
-        # 队长下拉项随已选窗口数刷新
-        wins = win_mod.resolve_targets(self.app.cfg.get("window_title", "梦幻西游"),
-                                       self.app.cfg.get("window_offset", [0, 0]),
-                                       self.app.cfg.get("targets", {}))
-        self._win_count = len(wins)
-        opts = [f"号{i + 1}" for i in range(self._win_count)] or ["（未选窗口）"]
+    def _render_team_status(self, tc):
+        """据当前 self._win_count + teaming 标定渲染队长下拉与就绪状态（纯本地数据，秒回）。"""
+        n = self._win_count
+        opts = [f"号{i + 1}" for i in range(n)] or ["（未选窗口）"]
         self.opt_captain.configure(values=opts)
         cap = tc.get("captain_index", 0)
-        if not (0 <= cap < self._win_count):
+        if not (0 <= cap < n):
             cap = 0
-        self.var_captain.set(f"号{cap + 1}" if self._win_count else "（未选窗口）")
+        self.var_captain.set(f"号{cap + 1}" if n else "（未选窗口）")
 
-        # teaming 共享标定完成度
         team_tc = cfg_mod.task_config(self.app.cfg, "teaming")
         treg, ttpl = team_tc.get("regions", {}), team_tc.get("templates", {})
         rdone = sum(1 for k in TEAM_REQUIRED_REGIONS if treg.get(k))
         tdone = sum(1 for k in TEAM_REQUIRED_TEMPLATES if ttpl.get(k))
         ready = (rdone == len(TEAM_REQUIRED_REGIONS) and tdone == len(TEAM_REQUIRED_TEMPLATES)
-                 and self._win_count >= 3)
+                 and n >= 3)
         self.lbl_calib.configure(
             text=f"组队标定：必要区域 {rdone}/{len(TEAM_REQUIRED_REGIONS)}，"
                  f"必要模板 {tdone}/{len(TEAM_REQUIRED_TEMPLATES)}\n"
-                 f"已选 {self._win_count} 个号，队长=号{cap + 1}"
+                 f"已选 {n} 个号，队长=号{cap + 1}"
                  + ("　✓ 可运行" if ready else "　（需多开≥3 且标定齐全）"))
+
+    def _kick_count_windows(self):
+        """后台枚举已选窗口数，变了再回主线程重渲染。token 丢弃过期结果。"""
+        title = self.app.cfg.get("window_title", "梦幻西游")
+        offset = self.app.cfg.get("window_offset", [0, 0])
+        targets = self.app.cfg.get("targets", {})
+        token = object()
+        self._count_token = token
+
+        def work():
+            try:
+                n = len(win_mod.resolve_targets(title, offset, targets))
+            except Exception:
+                n = 0
+
+            def apply():
+                if token is not getattr(self, "_count_token", None):
+                    return
+                if n != self._win_count:
+                    self._win_count = n
+                    tc = cfg_mod.task_config(self.app.cfg, self.TASK_NAME)
+                    self._render_team_status(tc)
+
+            try:
+                self.app.after(0, apply)
+            except Exception:
+                pass
+
+        threading.Thread(target=work, daemon=True).start()
 
     def _on_captain(self, choice):
         if not self._win_count:
@@ -1868,12 +1906,6 @@ class GeneralPage(ctk.CTkFrame):
             w.destroy()
         cfg = self.cfg
         targets = cfg.get("targets", {})
-        title = cfg.get("window_title", "梦幻西游")
-        offset = cfg.get("window_offset", [0, 0])
-        try:
-            wins = win_mod.locate_all(title, offset)
-        except Exception:
-            wins = []
         base = targets.get("base_size")
 
         # ── 组队（跨任务共享：任何用到组队的任务都自动读这份标定）──
@@ -1941,26 +1973,64 @@ class GeneralPage(ctk.CTkFrame):
         ctk.CTkLabel(c2, text="检测到的窗口（点「设为基准」用该窗口的当前尺寸作为基准）：",
                      font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left").pack(
                          anchor="w", padx=16, pady=(8, 2))
-        if not wins:
-            ctk.CTkLabel(c2, text="没检测到游戏窗口，请先打开游戏再点「刷新」。",
+        # 窗口枚举（getAllWindows）很慢、绝不能卡主线程：先放占位、后台线程枚举完再回主线程填。
+        rows_holder = ctk.CTkFrame(c2, fg_color="transparent")
+        rows_holder.pack(fill="x")
+        ctk.CTkLabel(rows_holder, text="正在检测窗口…", font=self.fonts["body"],
+                     text_color=T.TEXT_DIM).pack(anchor="w", padx=16, pady=(2, 14))
+        self._kick_enum_windows(rows_holder, base)
+
+    def _kick_enum_windows(self, holder, base):
+        """后台枚举窗口，完成后回主线程把列表填进 holder。用 token 丢弃过期结果（连续切页/刷新时）。"""
+        cfg = self.cfg
+        title = cfg.get("window_title", "梦幻西游")
+        offset = cfg.get("window_offset", [0, 0])
+        token = object()
+        self._enum_token = token
+
+        def work():
+            try:
+                wins = win_mod.locate_all(title, offset)
+                data = [(w, w.rect()) for w in wins]   # rect() 趁后台一并取好
+            except Exception:
+                data = []
+            try:
+                self.app.after(0, lambda: self._fill_win_rows(holder, data, base, token))
+            except Exception:
+                pass
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _fill_win_rows(self, holder, data, base, token):
+        """在主线程把枚举结果渲染进 holder。过期结果/控件已销毁则丢弃。"""
+        if token is not getattr(self, "_enum_token", None):
+            return
+        try:
+            if not holder.winfo_exists():
+                return
+            for w in holder.winfo_children():
+                w.destroy()
+        except Exception:
+            return
+        if not data:
+            ctk.CTkLabel(holder, text="没检测到游戏窗口，请先打开游戏再点「刷新」。",
                          font=self.fonts["body"], text_color=T.TEXT_DIM).pack(anchor="w", padx=16, pady=(2, 14))
-        else:
-            for i, w in enumerate(wins):
-                r = w.rect()
-                row = ctk.CTkFrame(c2, fg_color=T.SURFACE_2, corner_radius=T.RADIUS_SM)
-                row.pack(fill="x", padx=12, pady=4)
-                row.grid_columnconfigure(0, weight=1)
-                meta = f"号{i + 1}    {r[2]}×{r[3]}    @({r[0]},{r[1]})" if r else f"号{i + 1}    （窗口已失效）"
-                is_base = bool(base and r and int(base[0]) == r[2] and int(base[1]) == r[3])
-                ctk.CTkLabel(row, text=meta + ("   ✓ 当前基准" if is_base else ""),
-                             font=self.fonts["body"],
-                             text_color=T.SUCCESS if is_base else T.TEXT).grid(
-                                 row=0, column=0, sticky="w", padx=12, pady=8)
-                ctk.CTkButton(row, text="设为基准", font=self.fonts["small"], width=84, height=30,
-                              corner_radius=T.RADIUS_SM, fg_color="transparent", hover_color=T.BORDER, text_color=T.TEXT,
-                              border_width=1, border_color=T.BORDER,
-                              command=lambda w=w: self._set_base_from(w)).grid(row=0, column=1, padx=10)
-            ctk.CTkFrame(c2, fg_color="transparent", height=6).pack()
+            return
+        for i, (w, r) in enumerate(data):
+            row = ctk.CTkFrame(holder, fg_color=T.SURFACE_2, corner_radius=T.RADIUS_SM)
+            row.pack(fill="x", padx=12, pady=4)
+            row.grid_columnconfigure(0, weight=1)
+            meta = f"号{i + 1}    {r[2]}×{r[3]}    @({r[0]},{r[1]})" if r else f"号{i + 1}    （窗口已失效）"
+            is_base = bool(base and r and int(base[0]) == r[2] and int(base[1]) == r[3])
+            ctk.CTkLabel(row, text=meta + ("   ✓ 当前基准" if is_base else ""),
+                         font=self.fonts["body"],
+                         text_color=T.SUCCESS if is_base else T.TEXT).grid(
+                             row=0, column=0, sticky="w", padx=12, pady=8)
+            ctk.CTkButton(row, text="设为基准", font=self.fonts["small"], width=84, height=30,
+                          corner_radius=T.RADIUS_SM, fg_color="transparent", hover_color=T.BORDER, text_color=T.TEXT,
+                          border_width=1, border_color=T.BORDER,
+                          command=lambda w=w: self._set_base_from(w)).grid(row=0, column=1, padx=10)
+        ctk.CTkFrame(holder, fg_color="transparent", height=6).pack()
 
     def _set_base_from(self, w):
         r = w.rect()
@@ -2165,6 +2235,12 @@ class DailyPage(ctk.CTkFrame):
         return mode, ready
 
     def _render_steps(self):
+        # 内容/各任务就绪状态没变就别重建：切页时 refresh 反复调到这里，整段重画是「切页卡顿」来源之一。
+        # 状态串纳入签名——别处页面刚标定/切换演练实战，切回来时这里要能反映出最新状态。
+        sig = [(s["task"], s["enabled"], self._task_status(s["task"])) for s in self._steps]
+        if sig == getattr(self, "_steps_sig", None):
+            return
+        self._steps_sig = sig
         for w in self.list_frame.winfo_children():
             w.destroy()
         n_on = sum(1 for s in self._steps if s["enabled"])
@@ -2339,6 +2415,8 @@ class App(ctk.CTk):
         self.after(150, self._tick)
         self._hotkey_down = False
         self.after(60, self._poll_hotkey)
+        # 界面显示后趁空闲把其余页面逐个预建好，首次切过去即秒开（每个间隔开，单帧不卡）。
+        self.after(800, self._prebuild_idle)
 
     def _build_sidebar(self):
         bar = ctk.CTkFrame(self, fg_color=T.SIDEBAR, corner_radius=0, width=210)
@@ -2372,31 +2450,119 @@ class App(ctk.CTk):
                      text_color=T.WARN, justify="left").grid(row=101, column=0, sticky="sw",
                                                              padx=22, pady=18)
 
+    # 各页面对应的类。懒加载：启动只建默认页，其余等第一次切到才建——
+    # 一次性建全部 9 个页面会瞬间绘制几百个 CTk 画布控件，正是启动「一块块慢慢刷出来」的根因。
+    PAGE_CLASSES = {
+        "daily": DailyPage,
+        "sniper": SniperPage,
+        "treasure_map": TreasureMapPage,
+        "escort": EscortPage,
+        "secret_realm": SecretRealmPage,
+        "dungeon": DungeonPage,
+        "general": GeneralPage,
+        "settings": SettingsPage,
+        "about": AboutPage,
+    }
+
     def _build_pages(self):
         self.container = ctk.CTkFrame(self, fg_color="transparent")
         self.container.grid(row=0, column=1, sticky="nsew", padx=24, pady=20)
         self.container.grid_rowconfigure(0, weight=1)
         self.container.grid_columnconfigure(0, weight=1)
+        self.pages = {}   # 懒加载：key -> 页面实例，按需创建
 
-        self.pages = {
-            "daily": DailyPage(self.container, self),
-            "sniper": SniperPage(self.container, self),
-            "treasure_map": TreasureMapPage(self.container, self),
-            "escort": EscortPage(self.container, self),
-            "secret_realm": SecretRealmPage(self.container, self),
-            "dungeon": DungeonPage(self.container, self),
-            "general": GeneralPage(self.container, self),
-            "settings": SettingsPage(self.container, self),
-            "about": AboutPage(self.container, self),
-        }
-        for p in self.pages.values():
-            p.grid(row=0, column=0, sticky="nsew")
+    def _ensure_page(self, key):
+        """返回页面实例，不存在则即时创建（懒加载）。返回 (page, just_created)。"""
+        p = self.pages.get(key)
+        if p is not None:
+            return p, False
+        p = self.PAGE_CLASSES[key](self.container, self)
+        p.grid(row=0, column=0, sticky="nsew")
+        self.pages[key] = p
+        # 新建的可运行页要补一次游戏连接状态（药丸初值为空，否则要等下一轮 tick 才更新）
+        if self._game_connected and hasattr(p, "update_game_pill"):
+            found, summary = self._game_connected
+            p.update_game_pill(found, summary)
+        return p, True
+
+    def build_all_pages(self, on_step=None):
+        """一次性把所有页面都建好（建完再亮窗口，杜绝「出现后才逐页卡」）。
+        每建好一页回调一次 on_step——用它驱动遮罩上的进度条转动，让构建期也有动画。"""
+        for key in self.PAGE_CLASSES:
+            if key not in self.pages:
+                self._ensure_page(key)
+                if callable(on_step):
+                    try:
+                        on_step()
+                    except Exception:
+                        pass
+        cur = getattr(self, "_current_key", None)
+        if cur in self.pages:
+            self.pages[cur].tkraise()
+
+    def _safe_update(self):
+        try:
+            self.update()
+        except Exception:
+            pass
+
+    def reveal_with_overlay(self):
+        """在本窗口上盖一层全屏「正在准备界面…」遮罩，遮罩后把其余页面全部建好，再撤遮罩。
+        全程只用本窗口这一个 Tk 根（不再开第二个根），既避免双根崩溃，又盖住建页面的卡顿。
+
+        遮罩是 App 的直接子组件、最后创建，叠在 container（含所有页面）与侧栏之上；各页面建在
+        container 里，层级在遮罩之下，故新建页面不会盖穿遮罩。建页期间用 update() 让进度条转动。"""
+        import tkinter as tk
+        from tkinter import ttk
+
+        bg, fg, dim, acc, trough = (T.resolve(T.BG), T.resolve(T.TEXT), T.resolve(T.TEXT_DIM),
+                                    T.resolve(T.ACCENT), T.resolve(T.SURFACE_2))
+        ov = tk.Frame(self, bg=bg)
+        ov.place(x=0, y=0, relwidth=1, relheight=1)
+        tk.Label(ov, text="梦幻 · 时空 助手", bg=bg, fg=fg,
+                 font=("Microsoft YaHei UI", 16, "bold")).place(relx=0.5, rely=0.43, anchor="center")
+        tk.Label(ov, text="正在准备界面…", bg=bg, fg=dim,
+                 font=("Microsoft YaHei UI", 11)).place(relx=0.5, rely=0.51, anchor="center")
+        try:
+            style = ttk.Style(self)
+            style.theme_use("default")
+            style.configure("Ovl.Horizontal.TProgressbar", troughcolor=trough,
+                            background=acc, bordercolor=bg, lightcolor=acc, darkcolor=acc)
+            pb = ttk.Progressbar(ov, mode="indeterminate", length=240,
+                                 style="Ovl.Horizontal.TProgressbar")
+            pb.place(relx=0.5, rely=0.59, anchor="center")
+            pb.start(12)
+        except Exception:
+            pass
+        self._safe_update()                 # 先把遮罩画出来（盖住未完成的界面）
+        self.build_all_pages(on_step=self._safe_update)
+        try:
+            ov.destroy()                    # 撤遮罩，露出已就绪的界面
+        except Exception:
+            pass
+        self._safe_update()
+
+    def _prebuild_idle(self):
+        """启动后趁空闲逐个把尚未创建的页面建好；每次只建一个并重排一次调度，避免单帧卡顿。"""
+        for key in self.PAGE_CLASSES:
+            if key not in self.pages:
+                self._ensure_page(key)
+                # 新建的页默认叠在最上、会盖住当前可见页，立刻把当前页重新置顶。
+                cur = getattr(self, "_current_key", None)
+                if cur in self.pages:
+                    self.pages[cur].tkraise()
+                self.after(120, self._prebuild_idle)
+                return
+        # 全部建完，停止调度。
 
     def _show(self, key):
         self._current_key = key   # 记当前可见页，全局热键只控它
-        self.pages[key].tkraise()
-        if hasattr(self.pages[key], "refresh"):
-            self.pages[key].refresh()
+        page, _just_created = self._ensure_page(key)
+        page.tkraise()
+        # 总是 refresh：部分页（如通用页）刻意把内容填充放在 refresh 里、__init__ 不填，靠这里驱动。
+        # 重复 refresh 的代价已被各页的「内容签名守卫」摊薄（数据没变就不重画列表）。
+        if hasattr(page, "refresh"):
+            page.refresh()
         for k, b in self.nav_buttons.items():
             if k == key:
                 b.configure(fg_color=T.SURFACE, text_color=T.TEXT)

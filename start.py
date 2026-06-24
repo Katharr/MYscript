@@ -95,6 +95,127 @@ def _relaunch_windowless():
         return False
 
 
+def _set_dpi_aware_early():
+    """进程级 DPI 感知，必须在创建任何窗口（含启动页）之前调。
+    直接走 ctypes，不导入 mhxy.core.window——那个模块顶部会 import cv2/numpy/mss，
+    一导入就把重库加载提前到启动页之前，正好是我们要用后台线程盖住的那 3 秒。
+    与 window.set_dpi_aware() 行为一致（PER_MONITOR_AWARE，失败回退到 system-DPI-aware）。"""
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
+
+def _make_splash():
+    """创建并显示一个轻量启动页（纯 tkinter，导入极快），返回相关句柄。
+    不在这里跑 mainloop——调用方掌控它的生命周期，好让它盖住「导入+建窗口+建页面」整段。
+
+    启动页是本进程第一个 Tk 根。等主窗口（另一个 ctk.CTk 根）要接管时，调用方会把
+    tkinter._default_root 置 None，使主窗口成为默认根（字体/控件都挂到主窗口，避免双根串台）。"""
+    import tkinter as tk
+    from tkinter import ttk
+
+    splash = tk.Tk()
+    splash.overrideredirect(True)          # 无边框，像启动页
+    try:
+        splash.attributes("-topmost", True)
+    except Exception:
+        pass
+    W, H = 380, 132
+    sw, sh = splash.winfo_screenwidth(), splash.winfo_screenheight()
+    splash.geometry(f"{W}x{H}+{(sw - W) // 2}+{(sh - H) // 2}")
+
+    BG, FG, DIM, ACC, TROUGH, EDGE = "#13161c", "#e7eaf0", "#8a93a3", "#4f8cff", "#20252f", "#2a313d"
+    outer = tk.Frame(splash, bg=BG, highlightbackground=EDGE, highlightthickness=1)
+    outer.pack(fill="both", expand=True)
+    tk.Label(outer, text="梦幻 · 时空 助手", bg=BG, fg=FG,
+             font=("Microsoft YaHei UI", 15, "bold")).pack(pady=(26, 4))
+    status = tk.Label(outer, text="正在加载图像识别库，请稍候…", bg=BG, fg=DIM,
+                      font=("Microsoft YaHei UI", 10))
+    status.pack()
+    try:
+        style = ttk.Style(splash)
+        style.theme_use("default")
+        style.configure("Splash.Horizontal.TProgressbar", troughcolor=TROUGH,
+                        background=ACC, bordercolor=BG, lightcolor=ACC, darkcolor=ACC)
+        pb = ttk.Progressbar(outer, mode="indeterminate", length=300,
+                             style="Splash.Horizontal.TProgressbar")
+    except Exception:
+        pb = ttk.Progressbar(outer, mode="indeterminate", length=300)
+    pb.pack(pady=18)
+    pb.start(12)
+    splash.update()                        # 立刻画出来，别等到 mainloop
+    return {"root": splash, "status": status, "pb": pb}
+
+
+def _launch_gui():
+    """设 DPI → 启动页全程盖住「导入重库 + 建主窗口 + 预建全部页面」→ 一次性亮出就绪窗口。
+    任一步异常都回退到无启动页的直接启动，保证一定能起来。"""
+    import threading
+
+    _set_dpi_aware_early()
+
+    splash = None
+    try:
+        splash = _make_splash()
+    except Exception:
+        splash = None
+
+    # —— 阶段一：后台线程预热重库；启动页进度条在主线程流畅转动 ——
+    if splash is not None:
+        done = threading.Event()
+
+        def _warm():
+            try:
+                import mhxy.gui.app  # noqa: F401  —— 触发 cv2/numpy/customtkinter 一次性加载
+            except Exception:
+                pass               # 预热失败无妨：主线程随后会再 import 并暴露真实错误
+            finally:
+                done.set()
+
+        threading.Thread(target=_warm, daemon=True).start()
+
+        def _poll():
+            if done.is_set():
+                splash["root"].quit()       # 退出 mainloop，回到下面继续（启动页先不销毁）
+            else:
+                splash["root"].after(40, _poll)
+
+        splash["root"].after(40, _poll)
+        splash["root"].mainloop()           # 转动进度条直到重库就绪
+        # 关键：创建主窗口（另一个 ctk Tk 根）之前，必须先销毁启动页这个根——
+        # 两个 Tk 根并存会让 customtkinter 直接崩（之前「正在准备界面」后闪退就是这个）。
+        try:
+            splash["root"].destroy()
+        except Exception:
+            pass
+        try:
+            import tkinter as _tk
+            _tk._default_root = None        # 复位默认根，让主窗口接管
+        except Exception:
+            pass
+
+    # —— 阶段二：建主窗口；用主窗口自带的同根遮罩盖住「建全部页面」的过程，建完再撤遮罩 ——
+    from mhxy.gui.app import App
+    app = App()
+    if splash is not None:
+        # 有过启动页时，亮界面前把其余页面也建好（同根遮罩盖住），杜绝「窗口出现后再逐页卡」。
+        try:
+            app.reveal_with_overlay()
+        except Exception:
+            pass
+    # 无启动页（回退）时：不预建，让窗口尽快出现，其余页面交给空闲预建在后台补。
+    try:
+        app.lift()
+        app.focus_force()
+    except Exception:
+        pass
+    app.mainloop()
+
+
 def main():
     # 打包成 exe（PyInstaller，sys.frozen=True）时，下面这些「源码运行」专用步骤全不适用，
     # 必须短路掉：
@@ -140,10 +261,7 @@ def main():
         if _has_console() and _relaunch_windowless():
             return
 
-    from mhxy.core import window as win_mod
-    win_mod.set_dpi_aware()
-    from mhxy.gui.app import main as gui_main
-    gui_main()
+    _launch_gui()
 
 
 if __name__ == "__main__":
