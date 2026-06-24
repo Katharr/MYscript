@@ -50,9 +50,11 @@ mhxy/
     runner.py   TaskRunner：后台线程跑 Task + 线程安全日志队列
     rotation.py 多开轮转推进器：通用 while/for 骨架 +「连续推进到等待点才让出」
                 （切一次前台把本号能自主做完的步连做完，state 不变=在等待才切下一号，少切前台）
-    teaming.py  TeamFormation：跨窗口组队握手编排（已接入 rotation；其余任务待接入）
+    teaming.py  TeamFormation：跨窗口组队握手编排（基于 rotation）
   tasks/  可插拔任务
     base.py     Task 基类 + 注册表（register/get_task/all_tasks）
+                + _make_rotation()：把运镖/宝图/秘境共用的多开轮转包成 RotationConfig（窗口消失 skip、
+                  activate 失败节流、time_limit 到点自停文案），任务只传 step_fn(rec)
     sniper.py   SniperTask（秒装备）：preflight() 自检 + run(ctx) 主循环
                  刷新=每轮重进货架：_enter_shelf() 点类别→点商品→等加载，再截货架识别
     escort.py        EscortTask（运镖）：开活动→参加→押送普通镖银→循环押满次数
@@ -76,9 +78,10 @@ mhxy/
   用非阻塞状态机——每个 `_do_*/_cap_*/_mem_*` 处理方法只推进一小步，能往下做就 `_goto` 改 `state`、
   在等待（门控未就绪/没找到目标/监控态盯帧差）就**不改 state**。推进器据此「**连续推进到等待点才让出**」：
   切一次前台后把本号能自主做完的步连做完，`state` 不变=在等待才让出切下一号，省掉无谓的反复切前台。
-  接入只需构造 `RotationConfig(records, step_once, should_stop, log, …回调)` 调 `run_rotation()`，
-  任务特有语义（dry_run/窗口消失差异/成功判据）经回调留在调用方。**铁律：监控态未触发转移时绝不 `_goto`**，
-  否则会在一个号上空转盯屏、饿死别的号。（详见 memory: rotation-engine）
+  接入方式：运镖/宝图/秘境（普通逐号任务）直接用 `base.Task._make_rotation(ctx, records, step_fn, …)`
+  得到 `RotationConfig` 再调 `rotation.run_rotation()`，只需传 `step_fn(rec)`（闭包绑自己的 loop/regions/threshold）；
+  组队这类有跨窗口握手/特殊收尾的，自己构造 `RotationConfig`（见 `teaming.py`）。**五个任务均已接入**。
+  **铁律：监控态未触发转移时绝不 `_goto`**，否则会在一个号上空转盯屏、饿死别的号。（详见 memory: rotation-engine）
 - 加“自动师门”示例：新建 `mhxy/tasks/shimen.py` 写 `@register class ShimenTask(Task)`；
   在 `tasks/__init__.py` `from . import shimen`；在 `gui/app.py` 仿 `SniperPage` 加页面 + 在 `App.NAV` 加项。
 

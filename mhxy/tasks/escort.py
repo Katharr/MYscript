@@ -138,47 +138,13 @@ class EscortTask(Task):
             ctx.log(f"时间上限 {time_limit} 分钟（到点自停）。每号主终止条件是对话框不再弹出（次数用完）。")
 
         records = [self._new_record(c) for c in contexts]
-        while not ctx.should_stop():
-            if deadline and time.time() >= deadline:
-                ctx.log(f"已达时间上限 {time_limit} 分钟，停止。")
-                break
-            if all(r["done"] for r in records):
-                ctx.log("所有号都已押满次数/结束。")
-                break
+        rotation.run_rotation(self._make_rotation(
+            ctx, records,
+            lambda rec: self._step_once(rec["ctx"], rec, loop, regions, threshold),
+            multi, switch_delay, tick, time_limit))
 
-            active = [r for r in records if not r["done"]]
-            for rec in records:
-                if ctx.should_stop():
-                    break
-                if rec["done"]:
-                    continue
-                wctx = rec["ctx"]
-                if wctx.window.rect() is None:
-                    if not rec["dead_logged"]:
-                        wctx.log("目标窗口不见了，跳过该号（其余号继续）。", level="warn")
-                        rec["dead_logged"] = True
-                    continue
-                rec["dead_logged"] = False
-                # 操作某号前先切前台，确保点击/快捷键落在这个号身上（多开必须）。
-                # 切前台失败（被系统拒绝焦点抢占）就跳过该号、下轮重试——绝不在后台号上瞎点（会点歪）。
-                if multi:
-                    if not wctx.window.activate():
-                        if not rec.get("fg_warned"):
-                            wctx.log("未能切到前台（系统拒绝焦点抢占），本轮跳过、下轮重试。", level="warn")
-                            rec["fg_warned"] = True
-                        continue
-                    rec["fg_warned"] = False
-                    if wctx.should_stop():
-                        break
-                # 推进这个号一小步
-                self._step_once(wctx, rec, loop, regions, threshold)
-                # 号与号之间留个小间隔，别太机械
-                if multi and len(active) > 1:
-                    self._interruptible_sleep(ctx, self._jitter(switch_delay, ctx))
-
-            # 一整轮（所有号各推进一步）之间留间隔（带抖动）
-            self._interruptible_sleep(ctx, self._jitter(tick, ctx))
-
+        if all(r["done"] for r in records):
+            ctx.log("所有号都已押满次数/结束。")
         total = sum(r["escorts"] for r in records)
         ctx.log(f"已停止。共完成 {total} 趟运镖，用时 {(time.time() - start_ts) / 60:.1f} 分钟。")
 

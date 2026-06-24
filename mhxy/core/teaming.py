@@ -178,6 +178,7 @@ class TeamFormation:
             should_stop=self.lead.should_stop, log=self.lead.log,
             on_window_gone=on_window_gone, on_activate_fail=on_activate_fail,
             multi=multi, switch_delay=switch_delay, tick=tick, overall_timeout=overall,
+            timeout_msg=f"组队总超时 {overall}s 未成形 → 降级结束。",
             jitter_ratio=self.cfg.get("humanize", {}).get("interval_jitter", 0.4))
         result = rotation.run_rotation(rc)
 

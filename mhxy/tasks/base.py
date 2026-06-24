@@ -18,6 +18,7 @@ import numpy as np
 
 from ..core import vision
 from ..core import window as win_mod
+from ..core import rotation
 from ..core.config import CAPTURES_DIR
 
 _REGISTRY = {}
@@ -94,6 +95,41 @@ class Task:
             if ctx.should_stop():
                 return
             time.sleep(min(0.05, max(0.0, end - time.time())))
+
+    def _make_rotation(self, ctx, records, step_fn, multi, switch_delay, tick, time_limit=0):
+        """把「逐号 activate 切前台 + 非阻塞状态机推进」这套多开轮转包成 rotation.RotationConfig。
+
+        运镖/宝图/秘境共用此辅助：
+          · 窗口消失 → skip 不置 done（窗口可能恢复、下轮重试，节流告警）；
+          · activate 失败 → 跳过该号本轮、节流告警；
+          · time_limit>0 时作为总超时，并打各任务「到点自停」文案（非「降级」）。
+        各任务只需传一个 step_fn(rec)（闭包绑定自己的 loop/regions/threshold）。record 须含
+        ctx/state/done/dead_logged 字段（推进器用默认 get_ctx/get_state/is_done 读取）。
+        让出判据见 core/rotation.py：step 后 state 没变=在等待就让出，监控态盯屏天然不空转。"""
+        def on_window_gone(rec):
+            if not rec["dead_logged"]:
+                rec["ctx"].log("目标窗口不见了，跳过该号（其余号继续）。", level="warn")
+                rec["dead_logged"] = True
+            return "skip"
+
+        def on_activate_fail(rec):
+            if not rec.get("fg_warned"):
+                rec["ctx"].log("未能切到前台（系统拒绝焦点抢占），本轮跳过、下轮重试。", level="warn")
+                rec["fg_warned"] = True
+
+        def step_once(rec):
+            rec["fg_warned"] = False        # 能进来=activate 成功+窗口在 → 重置节流标志
+            rec["dead_logged"] = False
+            step_fn(rec)
+
+        return rotation.RotationConfig(
+            records=records, step_once=step_once,
+            should_stop=ctx.should_stop, log=ctx.log,
+            on_window_gone=on_window_gone, on_activate_fail=on_activate_fail,
+            multi=multi, switch_delay=switch_delay, tick=tick,
+            overall_timeout=(time_limit * 60 if time_limit > 0 else 0),
+            timeout_msg=(f"已达时间上限 {time_limit} 分钟，停止。" if time_limit > 0 else None),
+            jitter_ratio=ctx.cfg.get("humanize", {}).get("interval_jitter", 0.4))
 
     @staticmethod
     def _frame_diff(a, b):

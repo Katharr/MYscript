@@ -59,6 +59,7 @@ class RotationConfig:
       switch_delay:    float  号间拟人化间隔基准（秒）
       tick:            float  轮间间隔基准（秒）
       overall_timeout: float  总超时（秒），0 = 不限
+      timeout_msg:     str     总超时触发时打的日志（默认通用文案；运镖/秘境等「到点自停」可传自己的）
       jitter_ratio:    float  间隔抖动比例（默认从无→0.4；一般传 cfg.humanize.interval_jitter）
       barrier_states:  set    可选「进入即让出」屏障集（默认空，允许下一态空跑一次）
       max_consec_steps:int    单号一次最多连续推进步数（防异常号霸占前台）
@@ -69,7 +70,7 @@ class RotationConfig:
                  is_done=None, get_state=None, get_ctx=None,
                  on_window_gone=None, on_activate_fail=None,
                  multi=False, switch_delay=0.15, tick=0.5, overall_timeout=0,
-                 jitter_ratio=0.4, barrier_states=None,
+                 timeout_msg=None, jitter_ratio=0.4, barrier_states=None,
                  max_consec_steps=12, max_consec_sec=4.0):
         self.records = records
         self.step_once = step_once
@@ -84,6 +85,7 @@ class RotationConfig:
         self.switch_delay = switch_delay
         self.tick = tick
         self.overall_timeout = overall_timeout or 0
+        self.timeout_msg = timeout_msg
         self.jitter_ratio = jitter_ratio
         self.barrier_states = barrier_states or set()
         self.max_consec_steps = max(1, max_consec_steps)
@@ -130,7 +132,7 @@ def run_rotation(c):
     start = time.time()
     while not c.should_stop():
         if c.overall_timeout and time.time() - start > c.overall_timeout:
-            c.log(f"轮转总超时 {c.overall_timeout}s 未完成 → 降级结束。", level="warn")
+            c.log(c.timeout_msg or f"轮转总超时 {c.overall_timeout}s 未完成 → 降级结束。", level="warn")
             break
         if all(c.is_done(r) for r in c.records):
             break
