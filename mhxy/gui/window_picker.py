@@ -73,10 +73,11 @@ class WindowPickerDialog(ctk.CTkToplevel):
         top = ctk.CTkFrame(self, fg_color="transparent")
         top.grid(row=0, column=0, sticky="ew", padx=20, pady=(16, 6))
         ctk.CTkLabel(top, text="选择窗口", font=self.fonts["title"], text_color=T.TEXT).pack(anchor="w")
-        ctk.CTkLabel(top, text="单开选 1 个号，多开勾多个号轮流操作。号按屏幕从左到右编号。"
+        sub = ctk.CTkLabel(top, text="单开选 1 个号，多开勾多个号轮流操作。号按屏幕从左到右编号。"
                               "检测区可在「标定」里留空＝整窗，无需框大区域。",
-                     font=self.fonts["small"], text_color=T.TEXT_DIM,
-                     justify="left", wraplength=500).pack(anchor="w", pady=(4, 0))
+                     font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
+        sub.pack(fill="x", pady=(4, 0))
+        T.bind_wraplength(sub)
 
         # 模式切换
         modebar = ctk.CTkFrame(self, fg_color="transparent")
@@ -175,10 +176,11 @@ class WindowPickerDialog(ctk.CTkToplevel):
         self._multi_vars = {}
 
         if not self._wins:
-            ctk.CTkLabel(self.body, text=f"没检测到标题含「{self.title_substr}」的窗口。\n"
+            empty = ctk.CTkLabel(self.body, text=f"没检测到标题含「{self.title_substr}」的窗口。\n"
                                          "请先打开游戏（可多开），再点上方「刷新」。",
-                         font=self.fonts["body"], text_color=T.TEXT_DIM, justify="left").grid(
-                             row=0, column=0, sticky="w", padx=12, pady=24)
+                         font=self.fonts["body"], text_color=T.TEXT_DIM, justify="left")
+            empty.grid(row=0, column=0, sticky="ew", padx=12, pady=24)
+            T.bind_wraplength(empty)
             self.status_lbl.configure(text="未检测到窗口")
             return
 
@@ -218,7 +220,7 @@ class WindowPickerDialog(ctk.CTkToplevel):
 
             # 信息
             info = ctk.CTkFrame(card, fg_color="transparent")
-            info.grid(row=0, column=2, sticky="w")
+            info.grid(row=0, column=2, sticky="ew")
             ctk.CTkLabel(info, text=f"号{i + 1}", font=self.fonts["body_b"],
                          text_color=T.TEXT).pack(anchor="w")
             if rect:
@@ -229,8 +231,10 @@ class WindowPickerDialog(ctk.CTkToplevel):
                          text_color=T.TEXT_DIM).pack(anchor="w")
             ttl = (w.title or "").strip()
             if ttl:
-                ctk.CTkLabel(info, text=ttl, font=self.fonts["small"], text_color=T.TEXT_DIM,
-                             wraplength=320, justify="left").pack(anchor="w")
+                ttl_lbl = ctk.CTkLabel(info, text=ttl, font=self.fonts["small"], text_color=T.TEXT_DIM,
+                             justify="left")
+                ttl_lbl.pack(fill="x")
+                T.bind_wraplength(ttl_lbl)
 
         # 尺寸一致性提示（多开共用一套标定要求同尺寸）
         sizes = {(r[2], r[3]) for _, r, _ in self._wins if r}

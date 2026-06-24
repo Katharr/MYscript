@@ -32,6 +32,11 @@
    不能横向一路扫到列表右缘——否则会把右邻卡片的「参加」一起圈进来、点到右边卡片的参加（已踩坑修复）。
    实现：`_find_join_on_row` 按 `loop.activity_columns`（默认 2）把列表等分定位条目所在列、`x1` 收到该列右边界。
    排数变了就改配置 `tasks.<escort|treasure_map>.loop.activity_columns`，不必改代码。
+8. **GUI 文字换行铁律（已踩坑两轮，务必遵守）**：所有「可能超一行」的说明性文字（副标题/开关说明/
+   卡内提示/`lbl_calib` 标定状态）一律套 `theme.bind_wraplength(label)` + 让标签 `sticky="ew"`/`fill="x"`
+   占满父容器，**禁止写死 `wraplength=数字`**（窗口比该值窄就溢出截断）。`bind_wraplength` 有三个非显而易见
+   的坑（绑父容器读 `winfo_width` 而非 label 自身、DPI 要 `_reverse_widget_scaling`、要给初始 wraplength），
+   细节见该函数 docstring 与 memory `ctklabel-wraplength-gotcha`——**改它前务必看懂，否则极易改回截断/振荡**。
 
 ## 架构（三层，包名 mhxy/）
 ```
@@ -65,6 +70,7 @@ mhxy/
     calibrate.py 旧的命令行标定（cv2.selectROI，已不被 GUI 调用，仅留作 CLI 备用）
   gui/
     theme.py            配色/字体/圆角常量（改这里整体换肤；深色现代风）
+                        + bind_wraplength：说明性文字自动换行助手（见下「GUI 文字换行」铁律）
     app.py              主窗口：侧边导航 + GeneralPage(通用页,置顶,默认页)/各任务Page/SettingsPage/AboutPage
     roi_overlay.py      全屏框选组件（纯 tk，冻结截图上拖框，返回屏幕绝对 ROI）
     calibrate_dialog.py GUI 内标定对话框（区域 + 加装备，全程无黑窗）

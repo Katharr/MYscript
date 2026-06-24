@@ -78,6 +78,58 @@ def resolve(token):
     return token
 
 
+def bind_wraplength(label, padding=4):
+    """让 CTkLabel 文字按其父容器实际宽度自动换行，避免长说明被窗口右缘截断。
+
+    用法：Label 以 `sticky="ew"`(grid) 或 `fill="x"`(pack) 占满父容器宽度即可，本助手会监听
+    父容器尺寸把 wraplength 跟着调。凡「可能比一行还长」的说明性文字都应套用。
+
+    踩过的三个坑（改这里前务必看懂，否则极易改回截断状态）：
+
+    ① 监听「父容器」尺寸来触发，但取宽度要用 `label.winfo_width()`（外层 frame 的真实槽宽，
+       = grid 单元宽，已自动扣除同行其它列与 padx，且因 sticky=ew 填满单元而稳定、不随文字换行变化）。
+       绝不能用 CTkLabel 的 <Configure>.width：CTkLabel.bind() 实为绑到内部 tk.Label/canvas
+       （见 customtkinter/ctk_label.py 的 bind()），内部 label 换行后自身变窄 → 读到「变窄后的宽度」
+       → wraplength 越调越小 → 来回振荡刷爆回调。也不能用父容器整宽：当标签只占父容器的某一列
+       （如页眉副标题与右侧状态药丸同排）时会高估，导致溢出截断。
+
+    ② DPI 缩放：CTkLabel 把 wraplength 当「缩放前」的逻辑单位，内部会再乘以 widget_scaling 才传给
+       底层 tk.Label。而 <Configure>.width 是「实际像素」。高 DPI（如 1.5×）下若直接把实际像素当
+       wraplength，会被放大 1.5 倍 → 文字不在容器内换行 → 溢出。必须先 _reverse_widget_scaling
+       除回逻辑单位。
+
+    ③ 初始 wraplength：grid/pack 的「列最小宽」取子控件 requested width；长文本不设 wraplength 时
+       单行自然宽上千像素会把列顶宽。先给个很小的初值把 requested width 压下去，让列宽由父容器/weight
+       决定，首帧布局后再校正。
+    """
+    reverse = getattr(label, "_reverse_widget_scaling", None)
+
+    def _logical(px):
+        return reverse(px) if reverse else px
+
+    # 说明性文字一律左对齐；CTkLabel 默认 anchor=center，短行换行后会显得居中错位。
+    try:
+        label.configure(anchor="w")
+    except Exception:
+        pass
+    label.configure(wraplength=_logical(120))
+    master = label.master
+    # <Configure> 在初始布局/缩放时会连发多次；宽度没变就别再 configure，避免重排连锁加剧卡顿。
+    state = {"w": -1}
+
+    def _apply():
+        # 用外层 frame 的真实槽宽（单元宽），减去少量内边距余量。
+        w = label.winfo_width() - padding
+        if w > 1 and w != state["w"]:
+            state["w"] = w
+            label.configure(wraplength=_logical(w))
+
+    def _on(e):
+        # 父容器 <Configure> 时子单元宽可能还没重排好，延到空闲再读 winfo_width 取到新值。
+        label.after_idle(_apply)
+    master.bind("<Configure>", _on)
+
+
 def tune_scroll_speed(scrollable, pixels_per_notch=60):
     """加大 CTkScrollableFrame 的滚轮步长。
 

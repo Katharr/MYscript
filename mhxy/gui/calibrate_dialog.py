@@ -85,8 +85,10 @@ class CalibrateDialog(ctk.CTkToplevel):
         top = ctk.CTkFrame(body, fg_color="transparent")
         top.grid(row=row, column=0, sticky="ew", padx=16, pady=(14, 8)); row += 1
         ctk.CTkLabel(top, text="标定向导", font=self.fonts["title"], text_color=T.TEXT).pack(anchor="w")
-        ctk.CTkLabel(top, text="先把游戏切到对应界面，再按提示逐项框选。框选时本助手会临时隐身。",
-                     justify="left", font=self.fonts["small"], text_color=T.TEXT_DIM).pack(anchor="w", pady=(4, 0))
+        sub = ctk.CTkLabel(top, text="先把游戏切到对应界面，再按提示逐项框选。框选时本助手会临时隐身。",
+                     justify="left", font=self.fonts["small"], text_color=T.TEXT_DIM)
+        sub.pack(fill="x", pady=(4, 0))
+        T.bind_wraplength(sub)
 
         # ① 区域与按钮
         regions = self.spec.get("regions", [])
@@ -110,9 +112,10 @@ class CalibrateDialog(ctk.CTkToplevel):
             tcard = self._card(body, row); row += 1
             ctk.CTkLabel(tcard, text="② 标志模板（框选裁图）", font=self.fonts["h2"], text_color=T.TEXT).grid(
                 row=0, column=0, columnspan=3, sticky="w", padx=16, pady=(14, 6))
-            ctk.CTkLabel(tcard, text="框小而独特的区域（按钮/文字/图标），别框会变的数字或背景。",
-                         font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left").grid(
-                             row=1, column=0, columnspan=3, sticky="w", padx=16, pady=(0, 4))
+            thint = ctk.CTkLabel(tcard, text="框小而独特的区域（按钮/文字/图标），别框会变的数字或背景。",
+                         font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
+            thint.grid(row=1, column=0, columnspan=3, sticky="ew", padx=16, pady=(0, 4))
+            T.bind_wraplength(thint, padding=32)
             for i, (key, name, desc) in enumerate(templates):
                 self._spec_row(tcard, 2 + i, key, name, desc, self.template_rows,
                                lambda k=key, n=name: self._calibrate_template(k, n))
@@ -178,9 +181,10 @@ class CalibrateDialog(ctk.CTkToplevel):
         ctk.CTkButton(head, text="＋ 框选添加", font=self.fonts["body"], width=110, height=32,
                       corner_radius=T.RADIUS_SM, fg_color=T.SUCCESS, hover_color=T.SUCCESS_HOVER,
                       text_color=T.BG, command=self._add_item).grid(row=0, column=1, sticky="e")
-        ctk.CTkLabel(icard, text="提示：连「图标 + 名字」一起框，别框价格（价格会变，框了反而认不出）。",
-                     font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left").grid(
-                         row=1, column=0, sticky="w", padx=16, pady=(0, 6))
+        ihint = ctk.CTkLabel(icard, text="提示：连「图标 + 名字」一起框，别框价格（价格会变，框了反而认不出）。",
+                     font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
+        ihint.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 6))
+        T.bind_wraplength(ihint, padding=32)
         self.item_list = ctk.CTkFrame(icard, fg_color="transparent")
         self.item_list.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 12))
         self.item_list.grid_columnconfigure(0, weight=1)
@@ -336,9 +340,10 @@ class CalibrateDialog(ctk.CTkToplevel):
                 w.destroy()
             wl = self.tc.get("watchlist", [])
             if not wl:
-                ctk.CTkLabel(self.item_list, text="还没有装备，点右上「＋ 框选添加」。",
-                             font=self.fonts["body"], text_color=T.TEXT_DIM).grid(
-                                 row=0, column=0, sticky="w", padx=12, pady=16)
+                empty = ctk.CTkLabel(self.item_list, text="还没有装备，点右上「＋ 框选添加」。",
+                             font=self.fonts["body"], text_color=T.TEXT_DIM)
+                empty.grid(row=0, column=0, sticky="ew", padx=12, pady=16)
+                T.bind_wraplength(empty, padding=20)
             else:
                 for i, it in enumerate(wl):
                     row = ctk.CTkFrame(self.item_list, fg_color=T.SURFACE_2, corner_radius=T.RADIUS_SM)

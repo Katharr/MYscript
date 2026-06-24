@@ -59,22 +59,8 @@ def Pill(master, fonts):
     return lbl
 
 
-def bind_wraplength(label, padding=8):
-    """让 Label 文字按其实际占用宽度自动换行，避免长说明被窗口右缘截断。
-
-    用法：Label 必须以 `sticky="ew"`(grid) 或 `fill="x"`(pack) 占满所在容器宽度，
-    这样 <Configure> 事件里的 e.width 即列/容器宽度；据此设 wraplength，文字随窗口宽度回流。
-    凡是「可能比一行还长」的说明性文字（页眉副标题、卡内多行提示）都应套用本助手或显式给 wraplength。
-    """
-    # <Configure> 在初始布局/缩放时会连发多次；宽度没变就别再 configure，否则会引起重排连锁、加剧卡顿。
-    state = {"w": -1}
-
-    def _on(e):
-        w = e.width - padding
-        if w > 1 and w != state["w"]:
-            state["w"] = w
-            label.configure(wraplength=w)
-    label.bind("<Configure>", _on)
+# bind_wraplength 现统一定义在 theme 里（window_picker / calibrate_dialog 也复用，避免循环依赖）。
+bind_wraplength = T.bind_wraplength
 
 
 # ----------------------------------------------------------------------
@@ -234,9 +220,10 @@ class SniperPage(ctk.CTkFrame):
         self.lbl_count.configure(text=f"{len(items)} 件")
 
         if not items:
-            ctk.CTkLabel(self.list_frame, text="还没有要抢的装备。\n点上方「标定 / 加装备」添加。",
-                         font=self.fonts["body"], text_color=T.TEXT_DIM, justify="left").grid(
-                row=0, column=0, sticky="w", padx=12, pady=20)
+            empty = ctk.CTkLabel(self.list_frame, text="还没有要抢的装备。\n点上方「标定 / 加装备」添加。",
+                                 font=self.fonts["body"], text_color=T.TEXT_DIM, justify="left")
+            empty.grid(row=0, column=0, sticky="ew", padx=12, pady=20)
+            bind_wraplength(empty)
             return
 
         for i, it in enumerate(items):
@@ -472,22 +459,24 @@ class TreasureMapPage(ctk.CTkFrame):
         opts.grid_columnconfigure(1, weight=1, uniform="o")
 
         box1 = ctk.CTkFrame(opts, fg_color="transparent")
-        box1.grid(row=0, column=0, sticky="w")
+        box1.grid(row=0, column=0, sticky="ew")
         self.switch_mode = ctk.CTkSwitch(box1, text="实战模式", font=self.fonts["body"],
                                          progress_color=T.DANGER, command=self._toggle_mode)
         self.switch_mode.pack(anchor="w")
-        ctk.CTkLabel(box1, text="关 = 演练（只识别自检，安全）　开 = 真开活动/用宝图/领奖",
-                     font=self.fonts["small"], text_color=T.TEXT_DIM,
-                     justify="left", wraplength=360).pack(anchor="w", pady=(5, 0))
+        desc_mode = ctk.CTkLabel(box1, text="关 = 演练（只识别自检，安全）　开 = 真开活动/用宝图/领奖",
+                                 font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
+        desc_mode.pack(fill="x", pady=(5, 0))
+        bind_wraplength(desc_mode)
 
         box2 = ctk.CTkFrame(opts, fg_color="transparent")
-        box2.grid(row=0, column=1, sticky="w", padx=(16, 0))
+        box2.grid(row=0, column=1, sticky="ew", padx=(16, 0))
         self.switch_skip = ctk.CTkSwitch(box2, text="已有宝图", font=self.fonts["body"],
                                          progress_color=T.ACCENT, command=self._toggle_skip)
         self.switch_skip.pack(anchor="w")
-        ctk.CTkLabel(box2, text="跳过领取，复位后直接挖包裹里的藏宝图",
-                     font=self.fonts["small"], text_color=T.TEXT_DIM,
-                     justify="left", wraplength=360).pack(anchor="w", pady=(5, 0))
+        desc_skip = ctk.CTkLabel(box2, text="跳过领取，复位后直接挖包裹里的藏宝图",
+                                 font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
+        desc_skip.pack(fill="x", pady=(5, 0))
+        bind_wraplength(desc_skip)
 
     def _build_body(self):
         body = ctk.CTkFrame(self, fg_color="transparent")
@@ -519,17 +508,18 @@ class TreasureMapPage(ctk.CTkFrame):
         ctk.CTkEntry(sd, textvariable=self.var_still, width=70, font=self.fonts["body"],
                      fg_color=T.SURFACE_2, border_color=T.BORDER).pack(side="left", padx=(8, 0))
 
-        ctk.CTkLabel(left, text="主终止条件是背包藏宝图挖空；时间上限只是安全网。\n"
+        hint = ctk.CTkLabel(left, text="主终止条件是背包藏宝图挖空；时间上限只是安全网。\n"
                                "“静止判定阈值”太小会一直判不到收集完成→看日志里的实时“帧差”，"
                                "把阈值设到“静止时帧差”之上、“走动时帧差”之下。\n"
                                "鼠标甩到屏幕左上角可紧急停止。",
-                     font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left",
-                     wraplength=340).grid(
-                         row=3, column=0, sticky="w", padx=16, pady=(2, 8))
+                     font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
+        hint.grid(row=3, column=0, sticky="ew", padx=16, pady=(2, 8))
+        bind_wraplength(hint)
 
         self.lbl_calib = ctk.CTkLabel(left, text="", font=self.fonts["small"], text_color=T.TEXT_DIM,
                                       justify="left")
-        self.lbl_calib.grid(row=4, column=0, sticky="w", padx=16, pady=(2, 14))
+        self.lbl_calib.grid(row=4, column=0, sticky="ew", padx=16, pady=(2, 14))
+        bind_wraplength(self.lbl_calib)
 
         # 右：日志
         right = Card(body)
@@ -779,13 +769,14 @@ class EscortPage(ctk.CTkFrame):
         opts = ctk.CTkFrame(card, fg_color="transparent")
         opts.grid(row=2, column=0, sticky="ew", padx=16, pady=(8, 16))
         box1 = ctk.CTkFrame(opts, fg_color="transparent")
-        box1.pack(anchor="w")
+        box1.pack(anchor="w", fill="x")
         self.switch_mode = ctk.CTkSwitch(box1, text="实战模式", font=self.fonts["body"],
                                          progress_color=T.DANGER, command=self._toggle_mode)
         self.switch_mode.pack(anchor="w")
-        ctk.CTkLabel(box1, text="关 = 演练（只识别自检，安全）　开 = 真开活动/真参加/真押镖",
-                     font=self.fonts["small"], text_color=T.TEXT_DIM,
-                     justify="left", wraplength=520).pack(anchor="w", pady=(5, 0))
+        desc_mode = ctk.CTkLabel(box1, text="关 = 演练（只识别自检，安全）　开 = 真开活动/真参加/真押镖",
+                                 font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
+        desc_mode.pack(fill="x", pady=(5, 0))
+        bind_wraplength(desc_mode)
 
     def _build_body(self):
         body = ctk.CTkFrame(self, fg_color="transparent")
@@ -817,16 +808,17 @@ class EscortPage(ctk.CTkFrame):
         ctk.CTkEntry(lim, textvariable=self.var_limit, width=70, font=self.fonts["body"],
                      fg_color=T.SURFACE_2, border_color=T.BORDER).pack(side="left", padx=(8, 0))
 
-        ctk.CTkLabel(left, text="靠「运镖中」标志判断在不在运镖：只要它在 或 在战斗中就绝不停。\n"
+        hint = ctk.CTkLabel(left, text="靠「运镖中」标志判断在不在运镖：只要它在 或 在战斗中就绝不停。\n"
                                "主终止条件是押满设定趟数后「运镖中」标志消失且不再弹对话框；\n"
                                "时间上限只是安全网。鼠标甩到屏幕左上角可紧急停止。",
-                     font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left",
-                     wraplength=340).grid(
-                         row=3, column=0, sticky="w", padx=16, pady=(2, 8))
+                     font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
+        hint.grid(row=3, column=0, sticky="ew", padx=16, pady=(2, 8))
+        bind_wraplength(hint)
 
         self.lbl_calib = ctk.CTkLabel(left, text="", font=self.fonts["small"], text_color=T.TEXT_DIM,
                                       justify="left")
-        self.lbl_calib.grid(row=4, column=0, sticky="w", padx=16, pady=(2, 14))
+        self.lbl_calib.grid(row=4, column=0, sticky="ew", padx=16, pady=(2, 14))
+        bind_wraplength(self.lbl_calib)
 
         # 右：日志
         right = Card(body)
@@ -1053,13 +1045,14 @@ class DungeonPage(ctk.CTkFrame):
         opts = ctk.CTkFrame(card, fg_color="transparent")
         opts.grid(row=2, column=0, sticky="ew", padx=16, pady=(8, 16))
         box1 = ctk.CTkFrame(opts, fg_color="transparent")
-        box1.pack(anchor="w")
+        box1.pack(anchor="w", fill="x")
         self.switch_mode = ctk.CTkSwitch(box1, text="实战模式", font=self.fonts["body"],
                                          progress_color=T.DANGER, command=self._toggle_mode)
         self.switch_mode.pack(anchor="w")
-        ctk.CTkLabel(box1, text="关 = 演练（只识别自检，安全）　开 = 真开队伍/真申请/真接受",
-                     font=self.fonts["small"], text_color=T.TEXT_DIM,
-                     justify="left", wraplength=520).pack(anchor="w", pady=(5, 0))
+        desc_mode = ctk.CTkLabel(box1, text="关 = 演练（只识别自检，安全）　开 = 真开队伍/真申请/真接受",
+                                 font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
+        desc_mode.pack(fill="x", pady=(5, 0))
+        bind_wraplength(desc_mode)
 
     def _build_body(self):
         body = ctk.CTkFrame(self, fg_color="transparent")
@@ -1086,15 +1079,17 @@ class DungeonPage(ctk.CTkFrame):
                                              command=self._on_captain)
         self.opt_captain.pack(side="left", padx=(8, 0))
 
-        ctk.CTkLabel(left, text="从已选的多开窗口里指定队长（按从左到右/上到下编号），其余号自动当队员。\n"
+        hint = ctk.CTkLabel(left, text="从已选的多开窗口里指定队长（按从左到右/上到下编号），其余号自动当队员。\n"
                                "组队的模板/区域在「通用」页统一标定，所有组队任务共享。\n"
                                "鼠标甩到屏幕左上角可紧急停止。",
-                     font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left",
-                     wraplength=340).grid(row=2, column=0, sticky="w", padx=16, pady=(2, 8))
+                     font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
+        hint.grid(row=2, column=0, sticky="ew", padx=16, pady=(2, 8))
+        bind_wraplength(hint)
 
         self.lbl_calib = ctk.CTkLabel(left, text="", font=self.fonts["small"], text_color=T.TEXT_DIM,
                                       justify="left")
-        self.lbl_calib.grid(row=3, column=0, sticky="w", padx=16, pady=(2, 14))
+        self.lbl_calib.grid(row=3, column=0, sticky="ew", padx=16, pady=(2, 14))
+        bind_wraplength(self.lbl_calib)
 
         # 右：日志
         right = Card(body)
@@ -1356,13 +1351,14 @@ class SecretRealmPage(ctk.CTkFrame):
         opts = ctk.CTkFrame(card, fg_color="transparent")
         opts.grid(row=2, column=0, sticky="ew", padx=16, pady=(8, 16))
         box1 = ctk.CTkFrame(opts, fg_color="transparent")
-        box1.pack(anchor="w")
+        box1.pack(anchor="w", fill="x")
         self.switch_mode = ctk.CTkSwitch(box1, text="实战模式", font=self.fonts["body"],
                                          progress_color=T.DANGER, command=self._toggle_mode)
         self.switch_mode.pack(anchor="w")
-        ctk.CTkLabel(box1, text="关 = 演练（只识别自检，安全）　开 = 真开活动/真参加/真挑战秘境",
-                     font=self.fonts["small"], text_color=T.TEXT_DIM,
-                     justify="left", wraplength=520).pack(anchor="w", pady=(5, 0))
+        desc_mode = ctk.CTkLabel(box1, text="关 = 演练（只识别自检，安全）　开 = 真开活动/真参加/真挑战秘境",
+                                 font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
+        desc_mode.pack(fill="x", pady=(5, 0))
+        bind_wraplength(desc_mode)
 
     def _build_body(self):
         body = ctk.CTkFrame(self, fg_color="transparent")
@@ -1394,17 +1390,18 @@ class SecretRealmPage(ctk.CTkFrame):
         ctk.CTkEntry(lim, textvariable=self.var_limit, width=70, font=self.fonts["body"],
                      fg_color=T.SURFACE_2, border_color=T.BORDER).pack(side="left", padx=(8, 0))
 
-        ctk.CTkLabel(left, text="进入秘境后游戏自动战斗；到难度关卡会停下，脚本实时盯「进入战斗」按钮一出现就点。\n"
+        hint = ctk.CTkLabel(left, text="进入秘境后游戏自动战斗；到难度关卡会停下，脚本实时盯「进入战斗」按钮一出现就点。\n"
                                "每轮终止条件是出现 失败/超时/离开；时间上限只是安全网。\n"
                                "几个副本的「进入」长得一样，只认左下角那个（比例框可在配置 dungeon_enter_box 调）。\n"
                                "鼠标甩到屏幕左上角可紧急停止。",
-                     font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left",
-                     wraplength=340).grid(
-                         row=3, column=0, sticky="w", padx=16, pady=(2, 8))
+                     font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
+        hint.grid(row=3, column=0, sticky="ew", padx=16, pady=(2, 8))
+        bind_wraplength(hint)
 
         self.lbl_calib = ctk.CTkLabel(left, text="", font=self.fonts["small"], text_color=T.TEXT_DIM,
                                       justify="left")
-        self.lbl_calib.grid(row=4, column=0, sticky="w", padx=16, pady=(2, 14))
+        self.lbl_calib.grid(row=4, column=0, sticky="ew", padx=16, pady=(2, 14))
+        bind_wraplength(self.lbl_calib)
 
         # 右：日志
         right = Card(body)
@@ -1642,8 +1639,8 @@ class SettingsPage(ctk.CTkFrame):
                                     values=["sendinput", "pyautogui", "pydirectinput"],
                                     font=self.fonts["body"], fg_color=T.SURFACE_2,
                                     button_color=T.BORDER, button_hover_color=T.ACCENT, text_color=T.TEXT, dropdown_text_color=T.TEXT, width=240))
-        self._row(card, 3, "开始/停止 快捷键", self._build_hotkey(card))
-        self._row(card, 4, "识别置信度（匹配阈值）", self._build_threshold(card))
+        self._row(card, 3, "开始/停止 快捷键", self._build_hotkey(card), sticky="ew")
+        self._row(card, 4, "识别置信度（匹配阈值）", self._build_threshold(card), sticky="ew")
 
     def _build_hotkey(self, parent):
         box = ctk.CTkFrame(parent, fg_color="transparent")
@@ -1651,9 +1648,10 @@ class SettingsPage(ctk.CTkFrame):
                           font=self.fonts["body"], fg_color=T.SURFACE_2,
                           button_color=T.BORDER, button_hover_color=T.ACCENT, text_color=T.TEXT, dropdown_text_color=T.TEXT,
                           width=240).pack(anchor="w")
-        ctk.CTkLabel(box, text="全局热键：游戏在前台也能按。鼠标被脚本拉着失控时，按一下立刻停。改完记得保存。",
-                     font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left",
-                     wraplength=300).pack(anchor="w", pady=(4, 0))
+        hint = ctk.CTkLabel(box, text="全局热键：游戏在前台也能按。鼠标被脚本拉着失控时，按一下立刻停。改完记得保存。",
+                     font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
+        hint.pack(fill="x", pady=(4, 0))
+        bind_wraplength(hint)
         return box
 
     # ---- 速度与节奏卡片 ----
@@ -1666,9 +1664,10 @@ class SettingsPage(ctk.CTkFrame):
         head.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 2))
         ctk.CTkLabel(head, text="速度与节奏（手速）", font=self.fonts["h2"],
                      text_color=T.TEXT).pack(anchor="w")
-        ctk.CTkLabel(head, text="抢不过别人就往「快」调；但越快越规律越像机器、封号风险越高。先在演练模式下试。",
-                     font=self.fonts["small"], text_color=T.WARN, justify="left",
-                     wraplength=640).pack(anchor="w", pady=(2, 0))
+        warn = ctk.CTkLabel(head, text="抢不过别人就往「快」调；但越快越规律越像机器、封号风险越高。先在演练模式下试。",
+                     font=self.fonts["small"], text_color=T.WARN, justify="left")
+        warn.pack(fill="x", pady=(2, 0))
+        bind_wraplength(warn)
 
         for i, (loc, key, label, lo, hi, steps, dec, hint) in enumerate(self.SPEED_FIELDS):
             self._slider_row(card, i + 1, loc, key, label, lo, hi, steps, dec, hint)
@@ -1697,9 +1696,10 @@ class SettingsPage(ctk.CTkFrame):
         slider.grid(row=0, column=1, sticky="ew", padx=10)
 
         # 第二行：说明文字（整行单独占一行，不再和滑块重叠）
-        ctk.CTkLabel(box, text=hint, font=self.fonts["small"], text_color=T.TEXT_DIM,
-                     justify="left", wraplength=620).grid(
-            row=1, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        hint_lbl = ctk.CTkLabel(box, text=hint, font=self.fonts["small"], text_color=T.TEXT_DIM,
+                     justify="left")
+        hint_lbl.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(4, 0))
+        bind_wraplength(hint_lbl)
 
     def _on_slider(self, key, val):
         lbl, fmt = self._value_labels[key]
@@ -1719,10 +1719,10 @@ class SettingsPage(ctk.CTkFrame):
         except (TypeError, ValueError):
             return float(default)
 
-    def _row(self, parent, r, label, widget):
+    def _row(self, parent, r, label, widget, sticky="w"):
         ctk.CTkLabel(parent, text=label, font=self.fonts["body"], text_color=T.TEXT).grid(
             row=r, column=0, sticky="w", padx=16, pady=12)
-        widget.grid(row=r, column=1, sticky="w", padx=16, pady=12)
+        widget.grid(row=r, column=1, sticky=sticky, padx=16, pady=12)
 
     # ---- 置信度滑块 ----
     def _get_threshold(self):
@@ -1744,9 +1744,10 @@ class SettingsPage(ctk.CTkFrame):
         self.thr_value = ctk.CTkLabel(top, text=f"{self.var_threshold.get():.2f}",
                                       font=self.fonts["body_b"], text_color=T.ACCENT, width=48)
         self.thr_value.pack(side="left", padx=(12, 0))
-        ctk.CTkLabel(box, text="越高越严格：命中更准但可能漏；越低越宽松：易命中但可能误认。建议 0.85~0.92。",
-                     font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left",
-                     wraplength=300).pack(anchor="w", pady=(4, 0))
+        hint = ctk.CTkLabel(box, text="越高越严格：命中更准但可能漏；越低越宽松：易命中但可能误认。建议 0.85~0.92。",
+                     font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
+        hint.pack(fill="x", pady=(4, 0))
+        bind_wraplength(hint)
         return box
 
     def _on_threshold(self, val):
@@ -1814,8 +1815,10 @@ class AboutPage(ctk.CTkFrame):
             "⚠ 风险提示：使用任何第三方脚本都违反《梦幻西游》用户协议，可能被封号（含永封）。\n"
             "   请务必用小号测试，自负风险。本工具仅供学习交流。"
         )
-        ctk.CTkLabel(card, text=text, font=self.fonts["body"], text_color=T.TEXT,
-                     justify="left", wraplength=640).pack(anchor="w", padx=16, pady=16)
+        lbl = ctk.CTkLabel(card, text=text, font=self.fonts["body"], text_color=T.TEXT,
+                     justify="left")
+        lbl.pack(fill="x", padx=16, pady=16)
+        bind_wraplength(lbl, padding=32)
 
 
 # ----------------------------------------------------------------------
@@ -1914,7 +1917,7 @@ class GeneralPage(ctk.CTkFrame):
         head_t.pack(fill="x", padx=16, pady=(14, 4))
         head_t.grid_columnconfigure(0, weight=1)
         txt_t = ctk.CTkFrame(head_t, fg_color="transparent")
-        txt_t.grid(row=0, column=0, sticky="w")
+        txt_t.grid(row=0, column=0, sticky="ew")
         ctk.CTkLabel(txt_t, text="组队（共享）", font=self.fonts["h2"], text_color=T.TEXT).pack(anchor="w")
         team_tc = cfg_mod.task_config(cfg, "teaming")
         treg, ttpl = team_tc.get("regions", {}), team_tc.get("templates", {})
@@ -1930,7 +1933,7 @@ class GeneralPage(ctk.CTkFrame):
                                         "刷副本等任何用到组队的任务都自动读这份标定"
                                         "（队长ID、创建/申请/接受/申请入队、好友列表区/队伍面板区等）。",
                              font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
-        sub_t.pack(anchor="w", pady=(2, 0))
+        sub_t.pack(fill="x", pady=(2, 0))
         bind_wraplength(sub_t)
         btns_t = ctk.CTkFrame(head_t, fg_color="transparent")
         btns_t.grid(row=0, column=1, padx=(12, 0))
@@ -1944,7 +1947,7 @@ class GeneralPage(ctk.CTkFrame):
         head2.pack(fill="x", padx=16, pady=(14, 4))
         head2.grid_columnconfigure(0, weight=1)
         txt2 = ctk.CTkFrame(head2, fg_color="transparent")
-        txt2.grid(row=0, column=0, sticky="w")
+        txt2.grid(row=0, column=0, sticky="ew")
         ctk.CTkLabel(txt2, text="窗口尺寸归一化", font=self.fonts["h2"], text_color=T.TEXT).pack(anchor="w")
         base_txt = f"{int(base[0])}×{int(base[1])}" if base and len(base) >= 2 else "未设置"
         ctk.CTkLabel(txt2, text=f"当前基准尺寸：{base_txt}", font=self.fonts["body"],
@@ -1952,7 +1955,7 @@ class GeneralPage(ctk.CTkFrame):
         sub2 = ctk.CTkLabel(txt2, text="点「还原尺寸」把所有窗口拉回基准尺寸（脚本点位按此尺寸标定）。"
                                        "在下面窗口列表点「设为基准」来设定基准尺寸。",
                             font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
-        sub2.pack(anchor="w", pady=(2, 0))
+        sub2.pack(fill="x", pady=(2, 0))
         bind_wraplength(sub2)
         btns2 = ctk.CTkFrame(head2, fg_color="transparent")
         btns2.grid(row=0, column=1, padx=(12, 0))
@@ -2142,8 +2145,10 @@ class DailyPage(ctk.CTkFrame):
         self.var_limit = ctk.StringVar(value="0")
         ctk.CTkEntry(lim, textvariable=self.var_limit, width=70, font=self.fonts["body"],
                      fg_color=T.SURFACE_2, border_color=T.BORDER).pack(side="left", padx=(8, 0))
-        ctk.CTkLabel(opts, text="只是安全网：正常会按各子任务自身条件跑完。未就绪（缺标定/缺窗口）的任务会自动跳过。",
-                     font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left").pack(anchor="w", pady=(5, 0))
+        net = ctk.CTkLabel(opts, text="只是安全网：正常会按各子任务自身条件跑完。未就绪（缺标定/缺窗口）的任务会自动跳过。",
+                     font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
+        net.pack(fill="x", pady=(5, 0))
+        bind_wraplength(net)
 
     # ---- 主体：左任务清单 + 右日志 ----
     def _build_body(self):
