@@ -17,8 +17,9 @@
 
 关键观察（决定怎么等战斗）：每场战斗【结束后】都会再弹「跳过剧情动画」按钮——所以
 「等这场战斗打完」= 轮询下一个「跳过剧情」按钮重新出现（自然信号，不用额外标定战斗/结束标志）。
-故三场战斗的公共节奏抽成一个循环：[等并点跳过 → 开任务弹窗 → 马上传送 → 点本场对话选项]，
+故三场战斗的公共节奏抽成一个循环：[等并点跳过 → 开任务弹窗 → 在任务列表点选蹈海去任务 → 马上传送 → 点本场对话选项]，
 三场只是对话选项不同（竖子尔敢/恕难从命/与尔一战）。循环后收尾第三场的跳过 + 点屏幕 + 小闹钟。
+（注意：开任务弹窗后【不能直接传送】，要先在任务列表里点中蹈海去这条任务，「马上传送」才对应它。）
 
 安全默认 dry_run=true：不组队、不发快捷键/不点，只对各号识别组队+副本相关模板做自检，先验证模板/阈值。
 """
@@ -32,7 +33,7 @@ from .base import Task, register
 
 # 本副本自身模板键（thq_ 前缀，存盘 templates/tm_thq_*.png，避免与别的任务同名互相覆盖）。
 _FLAG_KEYS = ["thq_entry", "thq_join", "thq_select", "thq_enter", "thq_skip",
-              "thq_teleport", "thq_opt1", "thq_opt2", "thq_opt3", "thq_clock"]
+              "thq_task", "thq_teleport", "thq_opt1", "thq_opt2", "thq_opt3", "thq_clock"]
 # 三场战斗前各自要点的对话选项（顺序固定）。
 _DIALOGS = [("thq_opt1", "竖子尔敢！"), ("thq_opt2", "恕难从命"), ("thq_opt3", "与尔一战！")]
 
@@ -55,7 +56,8 @@ class TaohaiquTask(Task):
             ("thq_enter", "蹈海去「进入」按钮", "副本列表里蹈海去【下方】的「进入」按钮。几个进入长得一样，"
                                           "运行时只在比例框 enter_box 里找它（默认整屏；点错就收窄到蹈海去那块）"),
             ("thq_skip", "「跳过剧情动画」按钮", "剧情动画时角落的「跳过」按钮——每场战斗前后都点它；它的重新出现也用来判战斗结束"),
-            ("thq_teleport", "「马上传送」按钮", "快捷键开任务弹窗后里面的「马上传送」按钮"),
+            ("thq_task", "任务列表·蹈海去条目", "开任务弹窗后，任务列表里「蹈海去」那一条任务——先点中它，「马上传送」才对应它"),
+            ("thq_teleport", "「马上传送」按钮", "任务弹窗里、点中蹈海去任务后出现的「马上传送」按钮"),
             ("thq_opt1", "对话「竖子尔敢！」", "第 1 场战斗前弹框里的「竖子尔敢！」选项"),
             ("thq_opt2", "对话「恕难从命」", "第 2 场战斗前弹框里的「恕难从命」选项"),
             ("thq_opt3", "对话「与尔一战！」", "第 3 场战斗前弹框里的「与尔一战！」选项"),
@@ -201,6 +203,10 @@ class TaohaiquTask(Task):
                 ctx.log("打不开任务弹窗（open_task 未配置），中止。", level="error")
                 return
             self._interruptible_sleep(ctx, self._jitter(0.6, ctx))
+            # 开任务弹窗后【不能直接传送】，要先在任务列表点中蹈海去这条任务，「马上传送」才对应它。
+            if not self._click_when(ctx, "thq_task", "任务列表·蹈海去", regions, threshold, step_to):
+                ctx.log("等任务列表里「蹈海去」任务条目超时，中止。", level="error")
+                return
             if not self._click_when(ctx, "thq_teleport", "马上传送", regions, threshold, step_to):
                 ctx.log("等「马上传送」超时，中止。", level="error")
                 return

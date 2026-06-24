@@ -333,6 +333,7 @@ DEFAULT_CONFIG = {
                 "thq_select": None,          # 对话框「选择副本」按钮
                 "thq_enter": None,           # 蹈海去下方的「进入」按钮(按位置区分)
                 "thq_skip": None,            # 「跳过剧情动画」按钮(每场战斗前后都点，重现也用来判战斗结束)
+                "thq_task": None,            # 任务列表里「蹈海去」任务条目(开任务弹窗后先点中它，传送才对应)
                 "thq_teleport": None,        # 任务弹窗里的「马上传送」按钮
                 "thq_opt1": None,            # 第1场对话「竖子尔敢！」
                 "thq_opt2": None,            # 第2场对话「恕难从命」

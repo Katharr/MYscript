@@ -450,6 +450,7 @@
         "thq_select": null,
         "thq_enter": null,
         "thq_skip": null,
+        "thq_task": null,
         "thq_teleport": null,
         "thq_opt1": null,
         "thq_opt2": null,

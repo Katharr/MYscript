@@ -1286,7 +1286,7 @@ class TaohaiquPage(ctk.CTkFrame):
     RUN_LABEL = "▶  开始蹈海去"
     # 自身必备模板（组队资产单独在「通用」页标定/统计）
     NEED_TPL = ["thq_entry", "thq_join", "thq_select", "thq_enter", "thq_skip",
-                "thq_teleport", "thq_opt1", "thq_opt2", "thq_opt3", "thq_clock"]
+                "thq_task", "thq_teleport", "thq_opt1", "thq_opt2", "thq_opt3", "thq_clock"]
 
     def __init__(self, master, app):
         super().__init__(master, fg_color="transparent")
