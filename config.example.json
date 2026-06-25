@@ -1,5 +1,6 @@
 {
   "window_title": "梦幻西游",
+  "window_process": "MyGame_x64r.exe",
   "input_backend": "sendinput",
   "window_offset": [
     0,

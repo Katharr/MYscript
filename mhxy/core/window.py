@@ -4,6 +4,7 @@
 让上层任务不用关心 mss / pygetwindow 细节。
 """
 
+import os
 import time
 import ctypes
 import ctypes.wintypes
@@ -26,6 +27,67 @@ _user32.SetActiveWindow.argtypes = [ctypes.wintypes.HWND]
 _user32.ShowWindow.argtypes = [ctypes.wintypes.HWND, ctypes.c_int]
 _user32.GetWindowThreadProcessId.argtypes = [ctypes.wintypes.HWND, ctypes.wintypes.LPDWORD]
 _user32.GetWindowThreadProcessId.restype = ctypes.wintypes.DWORD
+
+_kernel32 = ctypes.windll.kernel32
+_kernel32.OpenProcess.argtypes = [ctypes.wintypes.DWORD, ctypes.wintypes.BOOL, ctypes.wintypes.DWORD]
+_kernel32.OpenProcess.restype = ctypes.wintypes.HANDLE
+_kernel32.QueryFullProcessImageNameW.argtypes = [
+    ctypes.wintypes.HANDLE, ctypes.wintypes.DWORD,
+    ctypes.wintypes.LPWSTR, ctypes.POINTER(ctypes.wintypes.DWORD)]
+_kernel32.QueryFullProcessImageNameW.restype = ctypes.wintypes.BOOL
+_kernel32.CloseHandle.argtypes = [ctypes.wintypes.HANDLE]
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+
+
+# ---- 游戏窗口识别：按「进程 exe 名」过滤（标题会和别的窗口撞，进程名才稳）----
+#   背景（踩坑）：原先只按标题子串 "梦幻西游" 匹配，结果【终端/编辑器等标题里恰好含这几个字的窗口】
+#   会被误认成游戏窗口去点击（实测把 Windows Terminal 当成了「号1」，因为它的标签名含「梦幻西游」）。
+#   游戏窗口类名是【随机串】（每个窗口都不同，无法白名单），但进程 exe 名稳定，故据此过滤最可靠。
+#   默认值对应《时空》客户端；若客户端 exe 改名，改 config 顶层 window_process 即可（空串=退回纯标题匹配）。
+_GAME_PROCESS = "MyGame_x64r.exe"
+
+
+def set_game_process(name):
+    """配置「只认这个 exe 进程的窗口」。来自 config.window_process。
+    传空/None=不按进程过滤（退回纯标题匹配，与旧行为一致）。进程名比对大小写不敏感。"""
+    global _GAME_PROCESS
+    _GAME_PROCESS = (name or "").strip() or None
+
+
+def _proc_basename(hwnd):
+    """返回 hwnd 所属进程的 exe basename（小写）。取不到返回 ""。"""
+    try:
+        pid = ctypes.wintypes.DWORD()
+        _user32.GetWindowThreadProcessId(int(hwnd), ctypes.byref(pid))
+        hp = _kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
+        if not hp:
+            return ""
+        try:
+            buf = ctypes.create_unicode_buffer(512)
+            sz = ctypes.wintypes.DWORD(512)
+            if not _kernel32.QueryFullProcessImageNameW(hp, 0, buf, ctypes.byref(sz)):
+                return ""
+            return os.path.basename(buf.value or "").lower()
+        finally:
+            _kernel32.CloseHandle(hp)
+    except Exception:
+        return ""
+
+
+def _match_basic(w, title_substr):
+    """游戏窗口基本判定：标题含关键字 + 尺寸够大 +（若配置了 _GAME_PROCESS）所属进程匹配。
+    不在此查「最小化」——locate() 允许最小化窗口当候选并排后面，locate_all() 自行另外排除。"""
+    try:
+        if title_substr not in (w.title or ""):
+            return False
+        if w.width <= 100 or w.height <= 100:
+            return False
+        hwnd = w._hWnd
+    except Exception:
+        return False
+    if _GAME_PROCESS and _proc_basename(hwnd) != _GAME_PROCESS.lower():
+        return False
+    return True
 
 
 def _force_foreground(hwnd, tries=3):
@@ -96,11 +158,8 @@ class GameWindow:
         """按标题关键字找窗口，找到返回 True。"""
         candidates = []
         for w in gw.getAllWindows():
-            try:
-                if self.title_substr in (w.title or "") and w.width > 100 and w.height > 100:
-                    candidates.append(w)
-            except Exception:
-                continue
+            if _match_basic(w, self.title_substr):
+                candidates.append(w)
         if not candidates:
             self._win = None
             return False
@@ -216,8 +275,7 @@ def locate_all(title_substr, offset=(0, 0), max_n=0):
     found = []
     for w in gw.getAllWindows():
         try:
-            if (title_substr in (w.title or "")
-                    and w.width > 100 and w.height > 100 and not w.isMinimized):
+            if _match_basic(w, title_substr) and not w.isMinimized:
                 found.append(w)
         except Exception:
             continue

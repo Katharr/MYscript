@@ -2889,6 +2889,8 @@ class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.cfg = cfg_mod.load_config()
+        # 全局窗口识别按进程名过滤（避免把终端/编辑器等同名标题窗口当游戏号）；GUI 各窗口操作据此生效。
+        win_mod.set_game_process(self.cfg.get("window_process", "MyGame_x64r.exe"))
         mode = self.cfg.get("appearance", "dark")
         ctk.set_appearance_mode(mode if mode in ("dark", "light") else "dark")
         self.title("梦幻 · 时空 助手")

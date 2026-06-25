@@ -15,6 +15,8 @@ from .input import Mouse
 class TaskContext:
     def __init__(self, cfg, log_fn=None, stop_event=None, window=None, label=None):
         self.cfg = cfg
+        # 按 config 设定「只认游戏进程的窗口」，避免把终端/编辑器等同名标题窗口当成游戏号去点击。
+        win_mod.set_game_process(cfg.get("window_process", "MyGame_x64r.exe"))
         # window 非空（多开派生子上下文）则绑定指定窗口；否则按标题建一个待 locate 的窗口。
         self.window = window or GameWindow(cfg.get("window_title", "梦幻西游"),
                                            cfg.get("window_offset", [0, 0]))
