@@ -263,9 +263,12 @@ DEFAULT_CONFIG = {
 
         # ---- 组队（全局共享资产；不是可运行任务，只存「组队」用到的标定+参数）----
         #   组队是跨窗口握手：队长建队→队员申请→队长接受→双方关窗。多个任务（刷副本/师门/帮派…）都会复用。
-        #   故标定的模板/区域放这个共享命名空间 tasks.teaming，与具体任务解耦；
-        #   每个任务自己的角色参数（谁当队长等）放各任务自己的块（如 tasks.dungeon）。
+        #   故标定的模板/区域放这个共享命名空间 tasks.teaming，与具体任务解耦。
+        #   「一键组队」（通用页）的角色参数也放这里：captain_index=谁当队长、dry_run=是否演练。
+        #   各副本任务（蹈海去等）自己跑组队时，队长仍读各副本自己块里的 captain_index。
         "teaming": {
+            "dry_run": False,            # 一键组队默认直接组（不是只识别）——它是显式的手动动作
+            "captain_index": 0,          # 一键组队：队长是所选多开窗口里的第几号（0 起），其余自动当队员
             "loop": {
                 "match_threshold": 0.85,     # 标志模板匹配阈值
                 "tick_interval_sec": 0.5,    # 多号轮转节拍：所有号各推进一步后的间隔（带抖动）
@@ -291,24 +294,27 @@ DEFAULT_CONFIG = {
                 "team_accept": None,         # 「同意」按钮（切到申请页后，队员申请那行右侧，见即点）
                 "team_apply_join": None,     # 队员点队长右侧箭头后弹出的「申请入队」按钮
                 "team_arrow": None,          # 好友列表里队长ID右侧的箭头按钮（在命中右侧小范围内找，可选）
-                "leader_id": None            # 队长ID（队员据此在好友列表定位队长）
-            }
+                "leader_id": None            # 队长ID（队员据此在好友列表定位队长）。由 leader_history 维护：
+                                             #   历史非空→恒指 templates/tm_leader_id.png，历史空→None
+            },
+            # 队长ID「当前+最近3历史」库（见 core/leader_history.py）。激活图永远是 tm_leader_id.png，
+            #   切换=复制覆盖该文件；历史存 4 个固定槽 tm_leader_id_slot0..3.png，环形淘汰最旧。
+            "leader_id_history": [],     # [{slot, label}, ...]，最新在前，最多4项（当前1+历史3）
+            "leader_id_active": 0        # 指向 history 的下标（仅 UI 高亮；约定 history[active] 字节==激活图）
         },
 
-        # ---- 刷副本（第一版只做组队：1 大号带 N 小号自动组队，组队成功即结束）----
-        #   组队的标定/参数走共享的 tasks.teaming；这里只放本任务的角色参数。
+        # ---- 刷副本（副本中枢：选一个已收录的副本来跑；副本本身的组队/流程都在该副本任务里）----
+        #   本块只存中枢级选择；各副本的队长/演练实战/标定都在各副本自己的命名空间（如 tasks.taohaiqu）。
+        #   "selected" = 当前选中的副本任务名（is_dungeon=True 的任务），刷副本页据此决定跑谁。
         "dungeon": {
-            "dry_run": True,             # true=演练：只识别+打日志，不发快捷键/不点
-            "captain_index": 0,          # 队长是「第几号」：所选多开窗口列表里的序号（0 起）；其余号自动当队员
-            "loop": {
-                "time_limit_min": 0          # 时间上限(分钟)安全网，0=不限
-            }
+            "selected": "taohaiqu"       # 默认选中蹈海去；以后收录更多副本后可在刷副本页下拉切换
         },
 
         # ---- 副本·蹈海去(50级)（先组队，再由队长跑整条剧情战斗流程，跑一遍即停）----
         #   组队的标定/参数走共享的 tasks.teaming；这里放本副本自己的角色参数(队长序号)+模板/区域+流程超时。
         "taohaiqu": {
             "dry_run": True,             # true=演练：不组队、不点，只识别副本+组队模板自检
+            "skip_team": False,          # true=「已组队」：跳过组队握手，直接由队长跑副本流程
             "captain_index": 0,          # 队长是「第几号」：所选多开窗口列表里的序号(0 起)；其余号自动当队员
             "loop": {
                 "match_threshold": 0.85,     # 标志模板匹配阈值

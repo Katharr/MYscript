@@ -16,6 +16,7 @@ from ..core import config as cfg_mod
 from ..core import window as win_mod
 from ..core.runner import TaskRunner
 from ..tasks import get_task
+from ..tasks.base import dungeon_tasks
 from ..tasks.daily import CHAINABLE
 from ..core.teaming import TEAM_REQUIRED_REGIONS, TEAM_REQUIRED_TEMPLATES
 
@@ -61,6 +62,27 @@ def Pill(master, fonts):
 
 # bind_wraplength 现统一定义在 theme 里（window_picker / calibrate_dialog 也复用，避免循环依赖）。
 bind_wraplength = T.bind_wraplength
+
+
+def load_thumb(template_rel, thumbs_list, max_h=40):
+    """把模板图按高缩放成缩略图 CTkImage，引用 append 进 thumbs_list 防 GC，兼容中文/打包路径。
+    不存在/失败返回 None。多页复用（SniperPage 清单、队长ID 库与行内按钮都调它）。"""
+    if not template_rel:
+        return None
+    try:
+        from PIL import Image
+        path = template_rel if os.path.isabs(template_rel) else str(cfg_mod.PROJECT_ROOT / template_rel)
+        if not os.path.exists(path):
+            return None
+        img = Image.open(path)
+        w, h = img.size
+        scale = max_h / max(1, h)
+        size = (max(1, int(w * scale)), max_h)
+        cimg = ctk.CTkImage(light_image=img, dark_image=img, size=size)
+        thumbs_list.append(cimg)
+        return cimg
+    except Exception:
+        return None
 
 
 # ----------------------------------------------------------------------
@@ -251,22 +273,8 @@ class SniperPage(ctk.CTkFrame):
                           command=lambda idx=i: self._delete_item(idx)).grid(row=0, column=2, padx=10)
 
     def _load_thumb(self, template_rel):
-        if not template_rel:
-            return None
-        try:
-            from PIL import Image
-            path = template_rel if os.path.isabs(template_rel) else str(cfg_mod.PROJECT_ROOT / template_rel)
-            if not os.path.exists(path):
-                return None
-            img = Image.open(path)
-            w, h = img.size
-            scale = 40 / max(1, h)
-            size = (max(1, int(w * scale)), 40)
-            cimg = ctk.CTkImage(light_image=img, dark_image=img, size=size)
-            self._thumbs.append(cimg)
-            return cimg
-        except Exception:
-            return None
+        # 逻辑已抽成模块级 load_thumb（多页共享）；保留本方法名兼容现有调用。
+        return load_thumb(template_rel, self._thumbs)
 
     def _delete_item(self, idx):
         tc = cfg_mod.task_config(self.app.cfg, self.TASK_NAME)
@@ -976,9 +984,13 @@ class EscortPage(ctk.CTkFrame):
 
 
 # ----------------------------------------------------------------------
-# 刷副本 页面（第一版：只做组队）
+# 刷副本 页面（副本中枢：选一个已收录的副本来跑；以后可扩展为连刷多个）
 # ----------------------------------------------------------------------
 class DungeonPage(ctk.CTkFrame):
+    """副本中枢：下拉选一个副本（is_dungeon=True 的任务）→ 选队长 → 跑。
+    副本本身的「先组队再跑流程」都在各副本任务里；本页只负责选哪个、谁当队长、演练/实战、标定入口。
+    新增副本：写个 is_dungeon=True 的 Task 即自动出现在下拉里，本页无需改。"""
+
     TASK_NAME = "dungeon"
     RUN_LABEL = "▶  开始刷副本"
 
@@ -987,7 +999,14 @@ class DungeonPage(ctk.CTkFrame):
         self.app = app
         self.fonts = app.fonts
         self.runner = None
+        self._cal_dialog = None          # 副本自身「标定」的去重槽（队长ID 走「队长ID 库」弹窗）
+        self._leader_thumbs = []         # 行内队长ID缩略图防 GC
         self._win_count = 0
+        # 已收录的副本（按注册顺序）。title 给下拉显示、name 作配置命名空间键。
+        self._dungeons = dungeon_tasks()
+        self._dnames = [c.name for c in self._dungeons]
+        self._dtitles = [c.title for c in self._dungeons]
+        self._selected = self._dnames[0] if self._dnames else None
 
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(2, weight=1)
@@ -996,6 +1015,22 @@ class DungeonPage(ctk.CTkFrame):
         self._build_control()
         self._build_body()
         self.refresh()
+
+    # ---- 选中副本的辅助 ----
+    def _title_to_name(self, title):
+        for c in self._dungeons:
+            if c.title == title:
+                return c.name
+        return self._selected
+
+    def _selected_title(self):
+        for c in self._dungeons:
+            if c.name == self._selected:
+                return c.title
+        return self._dtitles[0] if self._dtitles else "（无副本）"
+
+    def _selected_cls(self):
+        return get_task(self._selected) if self._selected else None
 
     def _build_header(self):
         bar = ctk.CTkFrame(self, fg_color="transparent")
@@ -1009,315 +1044,9 @@ class DungeonPage(ctk.CTkFrame):
         self.pill_game.pack(side="left", padx=(0, 8))
         self.pill_mode = Pill(right, self.fonts)
         self.pill_mode.pack(side="left")
-        sub = ctk.CTkLabel(bar, text="第一版只做组队：指定一个号当队长、其余当队员，自动建队→申请→接受→关窗，"
-                                     "组队成功即结束。需多开 3~5 个号、同尺寸。",
-                           font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left", anchor="w")
-        sub.grid(row=1, column=0, sticky="ew", pady=(2, 0))
-        bind_wraplength(sub)
-
-    def _build_control(self):
-        card = Card(self)
-        card.grid(row=1, column=0, sticky="ew", padx=4, pady=(0, 14))
-        card.grid_columnconfigure(0, weight=1)
-
-        top = ctk.CTkFrame(card, fg_color="transparent")
-        top.grid(row=0, column=0, sticky="ew", padx=16, pady=(16, 10))
-        top.grid_columnconfigure(1, weight=1)
-        self.btn_run = ctk.CTkButton(top, text=self.RUN_LABEL, font=self.fonts["btn"],
-                                     height=46, width=200, corner_radius=T.RADIUS_SM,
-                                     fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER, text_color=T.ON_ACCENT,
-                                     command=self._toggle_run)
-        self.btn_run.grid(row=0, column=0, sticky="w")
-        tools = ctk.CTkFrame(top, fg_color="transparent")
-        tools.grid(row=0, column=2, sticky="e")
-        ctk.CTkButton(tools, text="选择窗口", font=self.fonts["body"], height=36, width=104,
-                      corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
-                      border_width=1, border_color=T.BORDER,
-                      command=lambda: self.app.open_window_picker(self.refresh)).pack(side="left", padx=(0, 8))
-        ctk.CTkButton(tools, text="刷新配置", font=self.fonts["body"], height=36, width=104,
-                      corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
-                      border_width=1, border_color=T.BORDER,
-                      command=self.refresh).pack(side="left")
-
-        ctk.CTkFrame(card, fg_color=T.BORDER, height=1).grid(
-            row=1, column=0, sticky="ew", padx=16, pady=(0, 4))
-
-        opts = ctk.CTkFrame(card, fg_color="transparent")
-        opts.grid(row=2, column=0, sticky="ew", padx=16, pady=(8, 16))
-        box1 = ctk.CTkFrame(opts, fg_color="transparent")
-        box1.pack(anchor="w", fill="x")
-        self.switch_mode = ctk.CTkSwitch(box1, text="实战模式", font=self.fonts["body"],
-                                         progress_color=T.DANGER, command=self._toggle_mode)
-        self.switch_mode.pack(anchor="w")
-        desc_mode = ctk.CTkLabel(box1, text="关 = 演练（只识别自检，安全）　开 = 真开队伍/真申请/真接受",
-                                 font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
-        desc_mode.pack(fill="x", pady=(5, 0))
-        bind_wraplength(desc_mode)
-
-    def _build_body(self):
-        body = ctk.CTkFrame(self, fg_color="transparent")
-        body.grid(row=2, column=0, sticky="nsew", padx=4)
-        body.grid_columnconfigure(0, weight=2, uniform="b")
-        body.grid_columnconfigure(1, weight=3, uniform="b")
-        body.grid_rowconfigure(0, weight=1)
-
-        # 左：组队设置（队长下拉）+ 标定状态
-        left = Card(body)
-        left.grid(row=0, column=0, sticky="nsew", padx=(0, 7))
-        left.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(left, text="组队设置", font=self.fonts["h2"], text_color=T.TEXT).grid(
-            row=0, column=0, sticky="w", padx=16, pady=(14, 6))
-
-        cap = ctk.CTkFrame(left, fg_color="transparent")
-        cap.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 6))
-        ctk.CTkLabel(cap, text="谁当队长", font=self.fonts["body"], text_color=T.TEXT).pack(side="left")
-        self.var_captain = ctk.StringVar(value="号1")
-        self.opt_captain = ctk.CTkOptionMenu(cap, variable=self.var_captain, values=["号1"],
-                                             font=self.fonts["body"], fg_color=T.SURFACE_2,
-                                             button_color=T.BORDER, button_hover_color=T.ACCENT,
-                                             text_color=T.TEXT, dropdown_text_color=T.TEXT, width=120,
-                                             command=self._on_captain)
-        self.opt_captain.pack(side="left", padx=(8, 0))
-
-        hint = ctk.CTkLabel(left, text="从已选的多开窗口里指定队长（按从左到右/上到下编号），其余号自动当队员。\n"
-                               "组队的模板/区域在「通用」页统一标定，所有组队任务共享。\n"
-                               "鼠标甩到屏幕左上角可紧急停止。",
-                     font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
-        hint.grid(row=2, column=0, sticky="ew", padx=16, pady=(2, 8))
-        bind_wraplength(hint)
-
-        self.lbl_calib = ctk.CTkLabel(left, text="", font=self.fonts["small"], text_color=T.TEXT_DIM,
-                                      justify="left")
-        self.lbl_calib.grid(row=3, column=0, sticky="ew", padx=16, pady=(2, 14))
-        bind_wraplength(self.lbl_calib)
-
-        # 右：日志
-        right = Card(body)
-        right.grid(row=0, column=1, sticky="nsew", padx=(7, 0))
-        right.grid_rowconfigure(1, weight=1)
-        right.grid_columnconfigure(0, weight=1)
-        rhead = ctk.CTkFrame(right, fg_color="transparent")
-        rhead.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 8))
-        rhead.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(rhead, text="运行日志", font=self.fonts["h2"], text_color=T.TEXT).grid(row=0, column=0, sticky="w")
-        ctk.CTkButton(rhead, text="清空", font=self.fonts["small"], height=26, width=56,
-                      corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
-                      border_width=1, border_color=T.BORDER,
-                      command=self._clear_log).grid(row=0, column=1, sticky="e")
-        self.log = ctk.CTkTextbox(right, font=self.fonts["mono"], fg_color=T.SURFACE_2,
-                                  text_color=T.TEXT, corner_radius=T.RADIUS_SM, wrap="word")
-        self.log.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 12))
-        T.apply_log_tags(self.log._textbox)
-        self.log.configure(state="disabled")
-        self._log_line("界面就绪。请先「选择窗口」(多开 3~5 号)、指定队长；组队标定在「通用」页完成。", "info")
-
-    # ---- 刷新 / 状态 ----
-    def refresh(self):
-        self.app.cfg = cfg_mod.load_config()
-        tc = cfg_mod.task_config(self.app.cfg, self.TASK_NAME)
-        dry = tc.get("dry_run", True)
-        (self.switch_mode.select if not dry else self.switch_mode.deselect)()
-        self._render_mode_pill(dry)
-        # 先用上次已知的号数即时渲染（窗口枚举很慢，不能每次切页都同步卡住）；再后台枚举刷新号数。
-        self._render_team_status(tc)
-        self._kick_count_windows()
-
-    def _render_team_status(self, tc):
-        """据当前 self._win_count + teaming 标定渲染队长下拉与就绪状态（纯本地数据，秒回）。"""
-        n = self._win_count
-        opts = [f"号{i + 1}" for i in range(n)] or ["（未选窗口）"]
-        self.opt_captain.configure(values=opts)
-        cap = tc.get("captain_index", 0)
-        if not (0 <= cap < n):
-            cap = 0
-        self.var_captain.set(f"号{cap + 1}" if n else "（未选窗口）")
-
-        team_tc = cfg_mod.task_config(self.app.cfg, "teaming")
-        treg, ttpl = team_tc.get("regions", {}), team_tc.get("templates", {})
-        rdone = sum(1 for k in TEAM_REQUIRED_REGIONS if treg.get(k))
-        tdone = sum(1 for k in TEAM_REQUIRED_TEMPLATES if ttpl.get(k))
-        ready = (rdone == len(TEAM_REQUIRED_REGIONS) and tdone == len(TEAM_REQUIRED_TEMPLATES)
-                 and n >= 3)
-        self.lbl_calib.configure(
-            text=f"组队标定：必要区域 {rdone}/{len(TEAM_REQUIRED_REGIONS)}，"
-                 f"必要模板 {tdone}/{len(TEAM_REQUIRED_TEMPLATES)}\n"
-                 f"已选 {n} 个号，队长=号{cap + 1}"
-                 + ("　✓ 可运行" if ready else "　（需多开≥3 且标定齐全）"))
-
-    def _kick_count_windows(self):
-        """后台枚举已选窗口数，变了再回主线程重渲染。token 丢弃过期结果。"""
-        title = self.app.cfg.get("window_title", "梦幻西游")
-        offset = self.app.cfg.get("window_offset", [0, 0])
-        targets = self.app.cfg.get("targets", {})
-        token = object()
-        self._count_token = token
-
-        def work():
-            try:
-                n = len(win_mod.resolve_targets(title, offset, targets))
-            except Exception:
-                n = 0
-
-            def apply():
-                if token is not getattr(self, "_count_token", None):
-                    return
-                if n != self._win_count:
-                    self._win_count = n
-                    tc = cfg_mod.task_config(self.app.cfg, self.TASK_NAME)
-                    self._render_team_status(tc)
-
-            try:
-                self.app.after(0, apply)
-            except Exception:
-                pass
-
-        threading.Thread(target=work, daemon=True).start()
-
-    def _on_captain(self, choice):
-        if not self._win_count:
-            return
-        try:
-            idx = int(str(choice).replace("号", "")) - 1
-        except (TypeError, ValueError):
-            idx = 0
-        idx = max(0, min(self._win_count - 1, idx))
-        cfg = cfg_mod.load_config()
-        tc = cfg_mod.task_config(cfg, self.TASK_NAME)
-        tc["captain_index"] = idx
-        cfg_mod.set_task_config(cfg, self.TASK_NAME, tc)
-        cfg_mod.save_config(cfg)
-        self.app.cfg = cfg
-
-    def _render_mode_pill(self, dry):
-        if dry:
-            self.pill_mode.configure(text="演练", fg_color=T.PILL_OK_BG, text_color=T.SUCCESS)
-        else:
-            self.pill_mode.configure(text="实战", fg_color=T.PILL_DANGER_BG, text_color=T.DANGER)
-
-    def update_game_pill(self, connected, summary=""):
-        if connected:
-            self.pill_game.configure(text="● " + (summary or "目标窗口已连接"),
-                                     fg_color=T.PILL_OK_BG, text_color=T.SUCCESS)
-        else:
-            self.pill_game.configure(text="○ 未检测到目标窗口", fg_color=T.SURFACE_2, text_color=T.TEXT_DIM)
-
-    # ---- 运行控制 ----
-    def _toggle_run(self):
-        if self.runner and self.runner.is_running():
-            self.runner.stop()
-            self._log_line("正在停止…", "warn")
-            self.btn_run.configure(text="停止中…", state="disabled")
-            return
-        self._apply_params()
-        self.app.cfg = cfg_mod.load_config()
-        task_cls = get_task(self.TASK_NAME)
-        self.runner = TaskRunner(task_cls(), self.app.cfg)
-        ok, problems = self.runner.start()
-        if not ok:
-            for p in problems:
-                self._log_line("无法启动：" + p, "error")
-            self.runner = None
-            return
-        self.btn_run.configure(text="■  停止", fg_color=T.DANGER, hover_color=T.DANGER_HOVER, state="normal")
-
-    def _apply_params(self):
-        """启动前把队长序号写回配置（下拉框变更时已即时存，这里兜底再存一次）。"""
-        cfg = cfg_mod.load_config()
-        tc = cfg_mod.task_config(cfg, self.TASK_NAME)
-        if self._win_count:
-            try:
-                idx = int(self.var_captain.get().replace("号", "")) - 1
-                tc["captain_index"] = max(0, min(self._win_count - 1, idx))
-            except (TypeError, ValueError):
-                pass
-        cfg_mod.set_task_config(cfg, self.TASK_NAME, tc)
-        cfg_mod.save_config(cfg)
-        self.app.cfg = cfg
-
-    def _on_runner_finished(self):
-        self.btn_run.configure(text=self.RUN_LABEL, fg_color=T.ACCENT,
-                               hover_color=T.ACCENT_HOVER, state="normal")
-
-    def _toggle_mode(self):
-        live = bool(self.switch_mode.get())
-        cfg = cfg_mod.load_config()
-        tc = cfg_mod.task_config(cfg, self.TASK_NAME)
-        tc["dry_run"] = not live
-        cfg_mod.set_task_config(cfg, self.TASK_NAME, tc)
-        cfg_mod.save_config(cfg)
-        self.app.cfg = cfg
-        self._render_mode_pill(not live)
-        if live:
-            self._log_line("⚠ 已切到实战：会真开队伍、真申请、真接受，请用小号！", "warn")
-        else:
-            self._log_line("已切回演练（只识别自检，安全）。", "info")
-
-    # ---- 日志（由 App._tick 驱动）----
-    def pump(self):
-        if self.runner:
-            q = self.runner.log_queue
-            while not q.empty():
-                level, msg = q.get()
-                self._log_line(msg, level)
-            if not self.runner.is_running() and self.btn_run.cget("text") != self.RUN_LABEL:
-                self._on_runner_finished()
-
-    def _log_line(self, msg, level="info"):
-        ts = datetime.datetime.now().strftime("%H:%M:%S")
-        self.log.configure(state="normal")
-        try:
-            self.log._textbox.insert("end", f"[{ts}] {msg}\n", level)
-        except Exception:
-            self.log.insert("end", f"[{ts}] {msg}\n")
-        self.log.see("end")
-        self.log.configure(state="disabled")
-
-    def _clear_log(self):
-        self.log.configure(state="normal")
-        self.log.delete("1.0", "end")
-        self.log.configure(state="disabled")
-
-
-# ----------------------------------------------------------------------
-# 副本·蹈海去(50级) 页面（先组队，再由队长跑整条剧情战斗，跑一遍即停）
-# ----------------------------------------------------------------------
-class TaohaiquPage(ctk.CTkFrame):
-    TASK_NAME = "taohaiqu"
-    RUN_LABEL = "▶  开始蹈海去"
-    # 自身必备模板（组队资产单独在「通用」页标定/统计）
-    NEED_TPL = ["thq_entry", "thq_join", "thq_select", "thq_enter", "thq_skip",
-                "thq_task", "thq_teleport", "thq_opt1", "thq_opt2", "thq_opt3", "thq_clock"]
-
-    def __init__(self, master, app):
-        super().__init__(master, fg_color="transparent")
-        self.app = app
-        self.fonts = app.fonts
-        self.runner = None
-        self._cal_dialog = None
-        self._win_count = 0
-
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(2, weight=1)
-
-        self._build_header()
-        self._build_control()
-        self._build_body()
-        self.refresh()
-
-    def _build_header(self):
-        bar = ctk.CTkFrame(self, fg_color="transparent")
-        bar.grid(row=0, column=0, sticky="ew", padx=4, pady=(2, 14))
-        bar.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(bar, text="蹈海去 · 50", font=self.fonts["title"], text_color=T.TEXT).grid(
-            row=0, column=0, sticky="w")
-        right = ctk.CTkFrame(bar, fg_color="transparent")
-        right.grid(row=0, column=1, sticky="e")
-        self.pill_game = Pill(right, self.fonts)
-        self.pill_game.pack(side="left", padx=(0, 8))
-        self.pill_mode = Pill(right, self.fonts)
-        self.pill_mode.pack(side="left")
-        sub = ctk.CTkLabel(bar, text="先组队，再由队长跑完整条蹈海去：参加→选副本→进入→三场剧情战斗→小闹钟收尾，"
-                                     "队员只被传送+自动战斗。需多开≥2 个号、同尺寸。",
+        sub = ctk.CTkLabel(bar, text="选一个副本来跑：自动先组队、再由队长跑完该副本流程。"
+                                     "目前收录：蹈海去·50。需多开≥2 个号、同尺寸。"
+                                     "组队功能本身在「通用 / 工具」页（选队长→一键组队）。",
                            font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left", anchor="w")
         sub.grid(row=1, column=0, sticky="ew", pady=(2, 0))
         bind_wraplength(sub)
@@ -1360,7 +1089,7 @@ class TaohaiquPage(ctk.CTkFrame):
         self.switch_mode = ctk.CTkSwitch(box1, text="实战模式", font=self.fonts["body"],
                                          progress_color=T.DANGER, command=self._toggle_mode)
         self.switch_mode.pack(anchor="w")
-        desc_mode = ctk.CTkLabel(box1, text="关 = 演练（不组队、只识别副本/组队模板自检，安全）　开 = 真组队 + 真跑副本",
+        desc_mode = ctk.CTkLabel(box1, text="关 = 演练（只识别自检，安全）　开 = 真组队 + 真跑副本（演练/实战是「每个副本各自」的设置）",
                                  font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
         desc_mode.pack(fill="x", pady=(5, 0))
         bind_wraplength(desc_mode)
@@ -1372,15 +1101,27 @@ class TaohaiquPage(ctk.CTkFrame):
         body.grid_columnconfigure(1, weight=3, uniform="b")
         body.grid_rowconfigure(0, weight=1)
 
-        # 左：组队设置（队长下拉）+ 标定状态
+        # 左：选副本 + 队长 + 标定状态
         left = Card(body)
         left.grid(row=0, column=0, sticky="nsew", padx=(0, 7))
         left.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(left, text="组队设置", font=self.fonts["h2"], text_color=T.TEXT).grid(
+        ctk.CTkLabel(left, text="副本设置", font=self.fonts["h2"], text_color=T.TEXT).grid(
             row=0, column=0, sticky="w", padx=16, pady=(14, 6))
 
+        dsel = ctk.CTkFrame(left, fg_color="transparent")
+        dsel.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 6))
+        ctk.CTkLabel(dsel, text="选择副本", font=self.fonts["body"], text_color=T.TEXT).pack(side="left")
+        self.var_dungeon = ctk.StringVar(value=self._selected_title())
+        self.opt_dungeon = ctk.CTkOptionMenu(dsel, variable=self.var_dungeon,
+                                             values=self._dtitles or ["（无副本）"],
+                                             font=self.fonts["body"], fg_color=T.SURFACE_2,
+                                             button_color=T.BORDER, button_hover_color=T.ACCENT,
+                                             text_color=T.TEXT, dropdown_text_color=T.TEXT, width=160,
+                                             command=self._on_select_dungeon)
+        self.opt_dungeon.pack(side="left", padx=(8, 0))
+
         cap = ctk.CTkFrame(left, fg_color="transparent")
-        cap.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 6))
+        cap.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 6))
         ctk.CTkLabel(cap, text="谁当队长", font=self.fonts["body"], text_color=T.TEXT).pack(side="left")
         self.var_captain = ctk.StringVar(value="号1")
         self.opt_captain = ctk.CTkOptionMenu(cap, variable=self.var_captain, values=["号1"],
@@ -1389,18 +1130,32 @@ class TaohaiquPage(ctk.CTkFrame):
                                              text_color=T.TEXT, dropdown_text_color=T.TEXT, width=120,
                                              command=self._on_captain)
         self.opt_captain.pack(side="left", padx=(8, 0))
+        # 队长ID 入口：带缩略图的小按钮（一眼看到当前认哪张脸），点开「队长ID 库」弹窗；
+        # 库里管当前+最近3历史、可切换，写的是共享 teaming.leader_id，和通用页同步。
+        self.btn_leader = ctk.CTkButton(cap, text="标定队长ID", font=self.fonts["small"], height=36, width=110,
+                                        corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER,
+                                        text_color=T.TEXT, border_width=1, border_color=T.BORDER,
+                                        compound="left", command=self._open_leader_gallery)
+        self.btn_leader.pack(side="left", padx=(8, 0))
+        self._refresh_leader_btn()
 
-        hint = ctk.CTkLabel(left, text="从已选的多开窗口里指定队长，其余号自动当队员（只有队长跑副本流程）。\n"
-                               "组队模板/区域在「通用」页统一标定；副本自身模板用本页「标定」按钮。\n"
-                               "几个「进入」长得一样时，在标定里收窄 enter_box 到蹈海去那块。\n"
+        skip = ctk.CTkFrame(left, fg_color="transparent")
+        skip.grid(row=3, column=0, sticky="ew", padx=16, pady=(0, 4))
+        self.switch_skip = ctk.CTkSwitch(skip, text="已组队（跳过组队，直接开刷）", font=self.fonts["body"],
+                                         progress_color=T.ACCENT, command=self._toggle_skip)
+        self.switch_skip.pack(anchor="w")
+
+        hint = ctk.CTkLabel(left, text="选要跑的副本，再从已选多开窗口里指定队长（按从左到右/上到下编号），其余号自动当队员。\n"
+                               "「已组队」勾上=已自行组好队，直接由队长开刷、不再组队（此时不需要组队标定）。\n"
+                               "组队的模板/区域在「通用」页统一标定（所有副本共享）；副本自身模板用本页「标定」按钮。\n"
                                "鼠标甩到屏幕左上角可紧急停止。",
                      font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
-        hint.grid(row=2, column=0, sticky="ew", padx=16, pady=(2, 8))
+        hint.grid(row=4, column=0, sticky="ew", padx=16, pady=(2, 8))
         bind_wraplength(hint)
 
         self.lbl_calib = ctk.CTkLabel(left, text="", font=self.fonts["small"], text_color=T.TEXT_DIM,
                                       justify="left")
-        self.lbl_calib.grid(row=3, column=0, sticky="ew", padx=16, pady=(2, 14))
+        self.lbl_calib.grid(row=5, column=0, sticky="ew", padx=16, pady=(2, 14))
         bind_wraplength(self.lbl_calib)
 
         # 右：日志
@@ -1421,46 +1176,91 @@ class TaohaiquPage(ctk.CTkFrame):
         self.log.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 12))
         T.apply_log_tags(self.log._textbox)
         self.log.configure(state="disabled")
-        self._log_line("界面就绪。请先「选择窗口」(多开≥2 号)、指定队长；组队标定在「通用」页，副本标定用本页「标定」。", "info")
+        self._log_line("界面就绪。请先「选择窗口」(多开≥2 号)、选副本、指定队长；组队标定在「通用」页，副本标定用本页「标定」。", "info")
 
     # ---- 刷新 / 状态 ----
     def refresh(self):
         self.app.cfg = cfg_mod.load_config()
-        tc = cfg_mod.task_config(self.app.cfg, self.TASK_NAME)
-        dry = tc.get("dry_run", True)
+        # 当前选中的副本（中枢级，存 tasks.dungeon.selected）
+        hub = cfg_mod.task_config(self.app.cfg, self.TASK_NAME)
+        sel = hub.get("selected")
+        if sel in self._dnames:
+            self._selected = sel
+        elif self._dnames:
+            self._selected = self._dnames[0]
+        self.var_dungeon.set(self._selected_title())
+        # 演练/实战、已组队 都读「选中副本自己」的命名空间
+        sel_tc = cfg_mod.task_config(self.app.cfg, self._selected) if self._selected else {}
+        dry = sel_tc.get("dry_run", True)
         (self.switch_mode.select if not dry else self.switch_mode.deselect)()
         self._render_mode_pill(dry)
-        self._render_team_status(tc)
+        (self.switch_skip.select if sel_tc.get("skip_team", False) else self.switch_skip.deselect)()
+        self._refresh_leader_btn()
+        # 先用上次已知的号数即时渲染（窗口枚举很慢，不能每次切页都同步卡住）；再后台枚举刷新号数。
+        self._render_team_status()
         self._kick_count_windows()
 
-    def _render_team_status(self, tc):
+    def _selected_dry(self):
+        if not self._selected:
+            return True
+        return cfg_mod.task_config(self.app.cfg, self._selected).get("dry_run", True)
+
+    def _selected_skip_team(self):
+        if not self._selected:
+            return False
+        return cfg_mod.task_config(self.app.cfg, self._selected).get("skip_team", False)
+
+    def _dungeon_calib_counts(self):
+        """据选中副本的 CALIBRATION 通用算出 (区域完成, 区域需, 模板完成, 模板需)。
+        区域 spec 第 4 项为 True 表示「可选」，不计入必要项（如 scene 留空=整窗）。"""
+        cls = self._selected_cls()
+        if cls is None:
+            return 0, 0, 0, 0
+        spec = getattr(cls, "CALIBRATION", {}) or {}
+        tc = cfg_mod.task_config(self.app.cfg, self._selected)
+        regions, templates = tc.get("regions", {}), tc.get("templates", {})
+        need_r = [t[0] for t in spec.get("regions", []) if not (len(t) >= 4 and t[3])]
+        need_t = [t[0] for t in spec.get("templates", [])]
+        rdone = sum(1 for k in need_r if regions.get(k))
+        tdone = sum(1 for k in need_t if templates.get(k))
+        return rdone, len(need_r), tdone, len(need_t)
+
+    def _render_team_status(self):
+        """据当前 self._win_count + 组队标定 + 选中副本标定，渲染队长下拉与就绪状态（纯本地数据，秒回）。"""
         n = self._win_count
         opts = [f"号{i + 1}" for i in range(n)] or ["（未选窗口）"]
         self.opt_captain.configure(values=opts)
+        tc = cfg_mod.task_config(self.app.cfg, self._selected) if self._selected else {}
         cap = tc.get("captain_index", 0)
         if not (0 <= cap < n):
             cap = 0
         self.var_captain.set(f"号{cap + 1}" if n else "（未选窗口）")
 
+        skip_team = self._selected_skip_team()
         team_tc = cfg_mod.task_config(self.app.cfg, "teaming")
         treg, ttpl = team_tc.get("regions", {}), team_tc.get("templates", {})
         trdone = sum(1 for k in TEAM_REQUIRED_REGIONS if treg.get(k))
         ttdone = sum(1 for k in TEAM_REQUIRED_TEMPLATES if ttpl.get(k))
         team_ok = (trdone == len(TEAM_REQUIRED_REGIONS) and ttdone == len(TEAM_REQUIRED_TEMPLATES))
 
-        regions = tc.get("regions", {})
-        templates = tc.get("templates", {})
-        rdone = 1 if regions.get("activity_list") else 0
-        tdone = sum(1 for k in self.NEED_TPL if templates.get(k))
-        self_ok = (rdone == 1 and tdone == len(self.NEED_TPL))
-        ready = team_ok and self_ok and n >= 2
+        rdone, rneed, tdone, tneed = self._dungeon_calib_counts()
+        self_ok = (rdone == rneed and tdone == tneed)
+        if skip_team:
+            ready = self_ok and n >= 1
+            team_line = "组队标定：已勾「已组队」，本次跳过组队（无需组队标定）\n"
+            tail = "　✓ 可运行" if ready else "　（需≥1 个号 且副本标定齐全）"
+        else:
+            ready = team_ok and self_ok and n >= 2
+            team_line = (f"组队标定：区域 {trdone}/{len(TEAM_REQUIRED_REGIONS)}，"
+                         f"模板 {ttdone}/{len(TEAM_REQUIRED_TEMPLATES)}\n")
+            tail = "　✓ 可运行" if ready else "　（需多开≥2 且组队+副本标定齐全）"
         self.lbl_calib.configure(
-            text=f"组队标定：区域 {trdone}/{len(TEAM_REQUIRED_REGIONS)}，模板 {ttdone}/{len(TEAM_REQUIRED_TEMPLATES)}\n"
-                 f"副本标定：活动列表区 {rdone}/1，模板 {tdone}/{len(self.NEED_TPL)}\n"
-                 f"已选 {n} 个号，队长=号{cap + 1}"
-                 + ("　✓ 可运行" if ready else "　（需多开≥2 且组队+副本标定齐全）"))
+            text=team_line
+                 + f"副本标定（{self._selected_title()}）：区域 {rdone}/{rneed}，模板 {tdone}/{tneed}\n"
+                 + f"已选 {n} 个号，队长=号{cap + 1}" + tail)
 
     def _kick_count_windows(self):
+        """后台枚举已选窗口数，变了再回主线程重渲染。token 丢弃过期结果。"""
         title = self.app.cfg.get("window_title", "梦幻西游")
         offset = self.app.cfg.get("window_offset", [0, 0])
         targets = self.app.cfg.get("targets", {})
@@ -1478,8 +1278,7 @@ class TaohaiquPage(ctk.CTkFrame):
                     return
                 if n != self._win_count:
                     self._win_count = n
-                    tc = cfg_mod.task_config(self.app.cfg, self.TASK_NAME)
-                    self._render_team_status(tc)
+                    self._render_team_status()
 
             try:
                 self.app.after(0, apply)
@@ -1488,8 +1287,58 @@ class TaohaiquPage(ctk.CTkFrame):
 
         threading.Thread(target=work, daemon=True).start()
 
+    def _on_select_dungeon(self, choice):
+        """切换要跑的副本：把选择存进中枢命名空间（tasks.dungeon.selected），再整体刷新本页
+        （队长/演练实战/标定状态都改读新副本自己的命名空间）。"""
+        name = self._title_to_name(choice)
+        if name == self._selected:
+            return
+        self._selected = name
+        cfg = cfg_mod.load_config()
+        hub = cfg_mod.task_config(cfg, self.TASK_NAME)
+        hub["selected"] = name
+        cfg_mod.set_task_config(cfg, self.TASK_NAME, hub)
+        cfg_mod.save_config(cfg)
+        self.app.cfg = cfg
+        self.refresh()
+        self._log_line(f"已切换副本：{self._selected_title()}", "info")
+
+    def _toggle_skip(self):
+        """切「已组队」：写进选中副本自己的命名空间。勾上=本次跳过组队、直接由队长开刷。"""
+        if not self._selected:
+            return
+        skip = bool(self.switch_skip.get())
+        cfg = cfg_mod.load_config()
+        tc = cfg_mod.task_config(cfg, self._selected)
+        tc["skip_team"] = skip
+        cfg_mod.set_task_config(cfg, self._selected, tc)
+        cfg_mod.save_config(cfg)
+        self.app.cfg = cfg
+        self._render_team_status()
+        if skip:
+            self._log_line("已勾「已组队」：本次不再组队，直接由队长开刷（确保你已自行组好队、队长在副本入口）。", "info")
+        else:
+            self._log_line("已取消「已组队」：恢复先组队再开刷。", "info")
+
+    def _open_leader_gallery(self):
+        """打开「队长ID 库」：当前+最近3历史可切换（共享 teaming.leader_id，与通用页同步）。"""
+        from .leader_gallery import LeaderIdGallery
+        LeaderIdGallery.open(self.app)
+
+    def _refresh_leader_btn(self):
+        """重读激活队长ID图，更新行内按钮缩略图（无图则回退纯文字「标定队长ID」）。"""
+        btn = getattr(self, "btn_leader", None)
+        if btn is None:
+            return
+        self._leader_thumbs.clear()
+        img = load_thumb("templates/tm_leader_id.png", self._leader_thumbs, max_h=26)
+        try:
+            btn.configure(image=img, text=" 队长ID" if img is not None else "标定队长ID")
+        except Exception:
+            pass
+
     def _on_captain(self, choice):
-        if not self._win_count:
+        if not self._win_count or not self._selected:
             return
         try:
             idx = int(str(choice).replace("号", "")) - 1
@@ -1497,9 +1346,9 @@ class TaohaiquPage(ctk.CTkFrame):
             idx = 0
         idx = max(0, min(self._win_count - 1, idx))
         cfg = cfg_mod.load_config()
-        tc = cfg_mod.task_config(cfg, self.TASK_NAME)
+        tc = cfg_mod.task_config(cfg, self._selected)
         tc["captain_index"] = idx
-        cfg_mod.set_task_config(cfg, self.TASK_NAME, tc)
+        cfg_mod.set_task_config(cfg, self._selected, tc)
         cfg_mod.save_config(cfg)
         self.app.cfg = cfg
 
@@ -1523,9 +1372,15 @@ class TaohaiquPage(ctk.CTkFrame):
             self._log_line("正在停止…", "warn")
             self.btn_run.configure(text="停止中…", state="disabled")
             return
+        if not self._selected:
+            self._log_line("还没有可跑的副本（未收录任何副本）。", "error")
+            return
         self._apply_params()
         self.app.cfg = cfg_mod.load_config()
-        task_cls = get_task(self.TASK_NAME)
+        task_cls = get_task(self._selected)
+        if task_cls is None:
+            self._log_line(f"找不到副本任务「{self._selected}」。", "error")
+            return
         self.runner = TaskRunner(task_cls(), self.app.cfg)
         ok, problems = self.runner.start()
         if not ok:
@@ -1533,18 +1388,22 @@ class TaohaiquPage(ctk.CTkFrame):
                 self._log_line("无法启动：" + p, "error")
             self.runner = None
             return
+        self._log_line(f"开始跑副本：{self._selected_title()}", "hit")
         self.btn_run.configure(text="■  停止", fg_color=T.DANGER, hover_color=T.DANGER_HOVER, state="normal")
 
     def _apply_params(self):
+        """启动前把队长序号写回【选中副本】的配置（下拉框变更时已即时存，这里兜底再存一次）。"""
+        if not self._selected:
+            return
         cfg = cfg_mod.load_config()
-        tc = cfg_mod.task_config(cfg, self.TASK_NAME)
+        tc = cfg_mod.task_config(cfg, self._selected)
         if self._win_count:
             try:
                 idx = int(self.var_captain.get().replace("号", "")) - 1
                 tc["captain_index"] = max(0, min(self._win_count - 1, idx))
             except (TypeError, ValueError):
                 pass
-        cfg_mod.set_task_config(cfg, self.TASK_NAME, tc)
+        cfg_mod.set_task_config(cfg, self._selected, tc)
         cfg_mod.save_config(cfg)
         self.app.cfg = cfg
 
@@ -1553,20 +1412,26 @@ class TaohaiquPage(ctk.CTkFrame):
                                hover_color=T.ACCENT_HOVER, state="normal")
 
     def _toggle_mode(self):
+        if not self._selected:
+            return
         live = bool(self.switch_mode.get())
         cfg = cfg_mod.load_config()
-        tc = cfg_mod.task_config(cfg, self.TASK_NAME)
+        tc = cfg_mod.task_config(cfg, self._selected)
         tc["dry_run"] = not live
-        cfg_mod.set_task_config(cfg, self.TASK_NAME, tc)
+        cfg_mod.set_task_config(cfg, self._selected, tc)
         cfg_mod.save_config(cfg)
         self.app.cfg = cfg
         self._render_mode_pill(not live)
         if live:
-            self._log_line("⚠ 已切到实战：会真组队、真跑副本，请用小号！", "warn")
+            self._log_line(f"⚠ 已切到实战（{self._selected_title()}）：会真组队、真跑副本，请用小号！", "warn")
         else:
-            self._log_line("已切回演练（不组队、只识别自检，安全）。", "info")
+            self._log_line(f"已切回演练（{self._selected_title()}，只识别自检，安全）。", "info")
 
     def _open_calibrate(self):
+        """打开【当前选中副本】的标定向导（标定它自己的模板/区域；组队标定仍在「通用」页）。"""
+        if not self._selected:
+            self._log_line("没有可标定的副本。", "warn")
+            return
         if getattr(self, "_cal_dialog", None) is not None:
             try:
                 if self._cal_dialog.winfo_exists():
@@ -1583,7 +1448,7 @@ class TaohaiquPage(ctk.CTkFrame):
             self._log_line("标定完成，配置已更新。", "info")
 
         try:
-            self._cal_dialog = CalibrateDialog(self.app, task_name=self.TASK_NAME, on_done=_after)
+            self._cal_dialog = CalibrateDialog(self.app, task_name=self._selected, on_done=_after)
         except Exception as e:
             self._cal_dialog = None
             self._log_line(f"打开标定向导失败：{e}", "error")
@@ -2162,13 +2027,21 @@ class AboutPage(ctk.CTkFrame):
 # ----------------------------------------------------------------------
 class GeneralPage(ctk.CTkFrame):
     """通用页：集中放与具体任务无关的功能。
-    目前：窗口尺寸归一化——列出所有游戏窗口、把某个尺寸设为基准、一键还原被拉大的号。"""
+    目前：组队标定 + 一键组队（选队长→把所选多开窗口组成一队）；窗口尺寸归一化。"""
 
     def __init__(self, parent, app):
         super().__init__(parent, fg_color="transparent")
         self.app = app
         self.fonts = app.fonts
         self.cfg = app.cfg
+        self.runner = None          # 一键组队跑的后台任务（DungeonTask）
+        self._team_cal_dialog = None    # 「标定（组队）」去重槽（队长ID 走无弹窗直接标定，无需去重槽）
+        self._win_count = 0         # 已选多开窗口数（resolve_targets），供状态行显示
+        self.log = None             # 组队卡里的紧凑日志框；每次 _refresh_body 重建后重新指向
+        self.btn_team = None
+        self.btn_leader = None      # 行内队长ID按钮（_refresh_body 每次重建）
+        self._leader_thumbs = []    # 行内队长ID缩略图防 GC
+        self.lbl_team_status = None
         self._build()
 
     def _build(self):
@@ -2177,7 +2050,7 @@ class GeneralPage(ctk.CTkFrame):
         head = ctk.CTkFrame(self, fg_color="transparent")
         head.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         ctk.CTkLabel(head, text="通用 / 工具", font=self.fonts["title"], text_color=T.TEXT).pack(anchor="w")
-        sub = ctk.CTkLabel(head, text="跨任务的通用功能：组队标定 / 还原窗口尺寸。各任务专属的标定与「选择窗口」仍在对应任务页。",
+        sub = ctk.CTkLabel(head, text="跨任务的通用功能：组队标定 + 一键组队 / 还原窗口尺寸。各任务专属的标定与「选择窗口」仍在对应任务页。",
                            font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left", anchor="w")
         sub.pack(fill="x", anchor="w", pady=(4, 0))
         bind_wraplength(sub)
@@ -2276,6 +2149,45 @@ class GeneralPage(ctk.CTkFrame):
         ctk.CTkButton(btns_t, text="标定（组队）", font=self.fonts["body"], height=36, width=120,
                       corner_radius=T.RADIUS_SM, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
                       text_color=T.ON_ACCENT, command=self._open_team_calibrate).pack()
+
+        # —— 一键组队（选好队长，把所选多开窗口直接组成一队）——
+        ctk.CTkFrame(c_team, fg_color=T.BORDER, height=1).pack(fill="x", padx=16, pady=(10, 0))
+        act = ctk.CTkFrame(c_team, fg_color="transparent")
+        act.pack(fill="x", padx=16, pady=(10, 0))
+        self.btn_team = ctk.CTkButton(act, text="▶  一键组队", font=self.fonts["btn"], height=40, width=150,
+                                      corner_radius=T.RADIUS_SM, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
+                                      text_color=T.ON_ACCENT, command=self._start_teaming)
+        self.btn_team.pack(side="left")
+        # 「选择窗口」带缩略图，且队长就在这里选（卡片上勾「队长」）——下拉框「号123」看不出是哪个窗口，故移进来。
+        ctk.CTkButton(act, text="选择窗口/队长", font=self.fonts["body"], height=36, width=120,
+                      corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
+                      border_width=1, border_color=T.BORDER,
+                      command=lambda: self.app.open_window_picker(self.refresh, captain_ns="teaming")).pack(
+                          side="left", padx=(8, 0))
+        # 队长ID 入口：带缩略图的小按钮，点开「队长ID 库」（当前+最近3历史可切换）；
+        # 和刷副本页写同一处 teaming.leader_id，天然同步。
+        self.btn_leader = ctk.CTkButton(act, text="标定队长ID", font=self.fonts["small"], height=36, width=110,
+                                        corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER,
+                                        text_color=T.TEXT, border_width=1, border_color=T.BORDER,
+                                        compound="left", command=self._open_leader_gallery)
+        self.btn_leader.pack(side="left", padx=(8, 0))
+        self._refresh_leader_btn()
+
+        self.lbl_team_status = ctk.CTkLabel(c_team, text="", font=self.fonts["small"],
+                                            text_color=T.TEXT_DIM, justify="left")
+        self.lbl_team_status.pack(fill="x", padx=16, pady=(6, 0))
+        bind_wraplength(self.lbl_team_status)
+
+        self.log = ctk.CTkTextbox(c_team, font=self.fonts["mono"], height=120, fg_color=T.SURFACE_2,
+                                  text_color=T.TEXT, corner_radius=T.RADIUS_SM, wrap="word")
+        self.log.pack(fill="x", padx=16, pady=(8, 14))
+        T.apply_log_tags(self.log._textbox)
+        self.log.configure(state="disabled")
+        # 重建后：按窗口数即时渲染队长下拉/状态 + 据 runner 复位按钮，再后台刷新窗口数
+        self._render_team_action()
+        if self.runner and self.runner.is_running():
+            self.btn_team.configure(text="■  停止组队", fg_color=T.DANGER, hover_color=T.DANGER_HOVER)
+        self._kick_count_windows()
 
         # ── 窗口尺寸归一化 ──
         c2 = self._card()
@@ -2383,13 +2295,160 @@ class GeneralPage(ctk.CTkFrame):
         self.app.toast(f"已设基准尺寸 {r[2]}×{r[3]}（点「还原尺寸」时其它号会归一化到这个大小）")
         self.refresh()
 
-    def _open_team_calibrate(self):
-        """打开组队标定（共享命名空间 teaming）。任何用到组队的任务都读这份配置。"""
+    def _calib_singleton(self, attr, only, fail_msg, exclude=None):
+        """打开一个标定窗并按 attr 去重：已开着就 lift 回来，不叠开多个写同一处 teaming 的窗
+        （叠开会「后关的覆盖先关的」，让用户以为没生效）。"""
+        existing = getattr(self, attr, None)
+        if existing is not None:
+            try:
+                if existing.winfo_exists():
+                    existing.lift()
+                    existing.focus_force()
+                    return
+            except Exception:
+                pass
         from .calibrate_dialog import CalibrateDialog
+
+        def _after():
+            setattr(self, attr, None)
+            self.refresh()
+
         try:
-            CalibrateDialog(self.app, task_name="teaming", on_done=self.refresh)
+            setattr(self, attr, CalibrateDialog(self.app, task_name="teaming",
+                                                only=only, exclude=exclude, on_done=_after))
         except Exception as e:
-            self.app.toast(f"打开组队标定失败：{e}")
+            setattr(self, attr, None)
+            self.app.toast(f"{fail_msg}：{e}")
+
+    def _open_team_calibrate(self):
+        """打开组队标定（共享命名空间 teaming）。队长ID 已移到「标定队长ID」按钮单独标，这里不再列出。"""
+        self._calib_singleton("_team_cal_dialog", None, "打开组队标定失败", exclude=["leader_id"])
+
+    def _open_leader_gallery(self):
+        """打开「队长ID 库」：当前+最近3历史可切换（共享 teaming.leader_id，与刷副本页同步）。"""
+        from .leader_gallery import LeaderIdGallery
+        LeaderIdGallery.open(self.app)
+
+    def _refresh_leader_btn(self):
+        """重读激活队长ID图，更新行内按钮缩略图（无图则回退纯文字「标定队长ID」）。"""
+        btn = getattr(self, "btn_leader", None)
+        if btn is None:
+            return
+        self._leader_thumbs.clear()
+        img = load_thumb("templates/tm_leader_id.png", self._leader_thumbs, max_h=26)
+        try:
+            btn.configure(image=img, text=" 队长ID" if img is not None else "标定队长ID")
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    # 一键组队（角色参数存共享命名空间 tasks.teaming；跑的是 DungeonTask）
+    # ------------------------------------------------------------------
+    def _render_team_action(self):
+        """据当前 self._win_count + teaming.captain_index 渲染队长状态行（纯本地数据，秒回）。
+        队长已挪进「选择窗口/队长」里选（带缩略图），这里只读出来显示。"""
+        if self.lbl_team_status is None:
+            return
+        n = self._win_count
+        team_tc = cfg_mod.task_config(self.app.cfg, "teaming")
+        cap = team_tc.get("captain_index", 0)
+        if not (0 <= cap < n):
+            cap = 0
+        multi = self.app.cfg.get("targets", {}).get("multi", False)
+        if n >= 2:
+            tip = f"已选 {n} 个号，队长=第{cap + 1}个所选号，其余当队员。点「一键组队」开始。"
+        elif not multi:
+            tip = "组队需多开：请点「选择窗口/队长」切到多开、勾 2~5 个号并指定队长。"
+        else:
+            tip = f"已选 {n} 个号，组队至少 2 个号（队长+≥1 队员）。"
+        self.lbl_team_status.configure(text=tip)
+
+    def _kick_count_windows(self):
+        """后台枚举已选窗口数，变了再回主线程重渲染队长状态。token 丢弃过期结果。"""
+        title = self.app.cfg.get("window_title", "梦幻西游")
+        offset = self.app.cfg.get("window_offset", [0, 0])
+        targets = self.app.cfg.get("targets", {})
+        token = object()
+        self._count_token = token
+
+        def work():
+            try:
+                n = len(win_mod.resolve_targets(title, offset, targets))
+            except Exception:
+                n = 0
+
+            def apply():
+                if token is not getattr(self, "_count_token", None):
+                    return
+                self._win_count = n
+                self._render_team_action()
+
+            try:
+                self.app.after(0, apply)
+            except Exception:
+                pass
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _start_teaming(self):
+        if self.runner and self.runner.is_running():
+            self.runner.stop()
+            self._log_line("正在停止…", "warn")
+            self.btn_team.configure(text="停止中…", state="disabled")
+            return
+        # 强制实战（一键组队是显式动作，不走演练）。窗口选择与队长都在「选择窗口/队长」里定好了。
+        cfg = cfg_mod.load_config()
+        tc = cfg_mod.task_config(cfg, "teaming")
+        tc["dry_run"] = False
+        cfg_mod.set_task_config(cfg, "teaming", tc)
+        cfg_mod.save_config(cfg)
+        self.app.cfg = self.cfg = cfg
+
+        task_cls = get_task("dungeon")
+        if task_cls is None:
+            self._log_line("找不到组队任务。", "error")
+            return
+        self.runner = TaskRunner(task_cls(), self.app.cfg)
+        ok, problems = self.runner.start()
+        if not ok:
+            for p in problems:
+                self._log_line("无法开始组队：" + p, "error")
+            self.runner = None
+            return
+        self._log_line("开始一键组队…", "hit")
+        self.btn_team.configure(text="■  停止组队", fg_color=T.DANGER, hover_color=T.DANGER_HOVER, state="normal")
+
+    def _on_team_finished(self):
+        if self.btn_team is not None:
+            self.btn_team.configure(text="▶  一键组队", fg_color=T.ACCENT,
+                                    hover_color=T.ACCENT_HOVER, state="normal")
+
+    # ---- 由 App._tick 驱动 ----
+    def pump(self):
+        if self.runner:
+            q = self.runner.log_queue
+            while not q.empty():
+                level, msg = q.get()
+                self._log_line(msg, level)
+            if not self.runner.is_running() and self.btn_team is not None \
+                    and self.btn_team.cget("text") != "▶  一键组队":
+                self._on_team_finished()
+
+    def update_game_pill(self, connected, summary=""):
+        # 通用页没有连接药丸；仅为满足 App 对可运行页的统一调用而存在。
+        pass
+
+    def _log_line(self, msg, level="info"):
+        if self.log is None:
+            return
+        ts = datetime.datetime.now().strftime("%H:%M:%S")
+        self.log.configure(state="normal")
+        try:
+            self.log._textbox.insert("end", f"[{ts}] {msg}\n", level)
+        except Exception:
+            self.log.insert("end", f"[{ts}] {msg}\n")
+        self.log.see("end")
+        self.log.configure(state="disabled")
 
 
 # ----------------------------------------------------------------------
@@ -2725,10 +2784,11 @@ class App(ctk.CTk):
            ("daily", "🐉  日常一条龙"),
            ("sniper", "🗡  秒装备"), ("treasure_map", "🗺  刷副本·宝图"),
            ("escort", "🚚  运镖"), ("secret_realm", "👹  秘境降妖"),
-           ("dungeon", "🏰  刷副本"), ("taohaiqu", "🌊  蹈海去·50"),
+           ("dungeon", "🏰  刷副本"),
            ("settings", "⚙  设置"), ("about", "ⓘ  关于")]
-    # 可运行任务页（有 runner/pump/update_game_pill），App 的定时器/热键/关闭钩子按此遍历
-    RUNNABLE_KEYS = ("daily", "sniper", "treasure_map", "escort", "secret_realm", "dungeon", "taohaiqu")
+    # 可运行任务页（有 runner/pump/update_game_pill），App 的定时器/热键/关闭钩子按此遍历。
+    # general 也在内：它的「一键组队」会跑后台任务，需要 pump 抽日志、关闭时停 runner。
+    RUNNABLE_KEYS = ("general", "daily", "sniper", "treasure_map", "escort", "secret_realm", "dungeon")
 
     def __init__(self):
         super().__init__()
@@ -2800,7 +2860,6 @@ class App(ctk.CTk):
         "escort": EscortPage,
         "secret_realm": SecretRealmPage,
         "dungeon": DungeonPage,
-        "taohaiqu": TaohaiquPage,
         "general": GeneralPage,
         "settings": SettingsPage,
         "about": AboutPage,
@@ -2826,6 +2885,16 @@ class App(ctk.CTk):
             found, summary = self._game_connected
             p.update_game_pill(found, summary)
         return p, True
+
+    def refresh_leader_thumb(self):
+        """广播刷新两处行内队长ID缩略图：无论从刷副本页还是通用页改了「队长ID 库」，两页同时更新。"""
+        for key in ("dungeon", "general"):
+            p = self.pages.get(key)
+            if p is not None and hasattr(p, "_refresh_leader_btn"):
+                try:
+                    p._refresh_leader_btn()
+                except Exception:
+                    pass
 
     def build_all_pages(self, on_step=None):
         """一次性把所有页面都建好（建完再亮窗口，杜绝「出现后才逐页卡」）。
@@ -3007,8 +3076,9 @@ class App(ctk.CTk):
             if p:
                 p.update_game_pill(found, summary)
 
-    def open_window_picker(self, after=None):
-        """打开「选择窗口」对话框（各任务页共用）。关闭后刷新配置并强制刷新药丸。"""
+    def open_window_picker(self, after=None, captain_ns=None):
+        """打开「选择窗口」对话框（各任务页共用）。关闭后刷新配置并强制刷新药丸。
+        captain_ns: 传入则多开模式下可在卡片上直接指定队长，写入 tasks.<captain_ns>.captain_index。"""
         from .window_picker import WindowPickerDialog
 
         def _done():
@@ -3021,7 +3091,7 @@ class App(ctk.CTk):
                     pass
 
         try:
-            WindowPickerDialog(self, on_done=_done)
+            WindowPickerDialog(self, on_done=_done, captain_ns=captain_ns)
         except Exception:
             pass
 

@@ -66,6 +66,10 @@ mhxy/
     treasure_map.py  TreasureMapTask（宝图）：开活动→收图→挖宝→领奖 两阶段状态机
     secret_realm.py  SecretRealmTask（秘境降妖）：开活动→参加→点秘境降妖→(选副本点左下角「进入」)→
                       确定→继续挑战→挑战→盯「进入战斗」续战→失败/超时/出现「离开」收尾，可连跑 max_runs 轮
+    dungeon.py       DungeonTask（组队/一键组队）：把所选多开窗口组成一队即停。是「通用」页「一键组队」跑的任务
+                      （角色参数 captain_index/dry_run 存共享 tasks.teaming）。注意：name 仍叫 "dungeon" 只为兼容，
+                      「刷副本」页本身不再跑它，而是跑被选中的副本（见下「副本中枢」）。
+    taohaiqu.py      TaohaiquTask（蹈海去·50，is_dungeon=True）：组队后由队长跑完整条剧情战斗，跑一遍即停
   tools/
     calibrate.py 旧的命令行标定（cv2.selectROI，已不被 GUI 调用，仅留作 CLI 备用）
   gui/
@@ -90,11 +94,31 @@ mhxy/
   **铁律：监控态未触发转移时绝不 `_goto`**，否则会在一个号上空转盯屏、饿死别的号。（详见 memory: rotation-engine）
 - 加“自动师门”示例：新建 `mhxy/tasks/shimen.py` 写 `@register class ShimenTask(Task)`；
   在 `tasks/__init__.py` `from . import shimen`；在 `gui/app.py` 仿 `SniperPage` 加页面 + 在 `App.NAV` 加项。
+- **副本中枢（「刷副本」页 = DungeonPage）**：副本不各占一个导航项，统一收进「刷副本」页用「选择副本」下拉切换、
+  选谁跑谁（为以后「连刷多个副本」铺路）。**加新副本只需写个 `is_dungeon = True` 的 Task**（照 taohaiqu.py），
+  `tasks/__init__.py` import 注册即可——`base.dungeon_tasks()` 会自动把它列进下拉，GUI 不用改。
+  约定：副本「选谁跑」存中枢命名空间 `tasks.dungeon.selected`；每个副本自己的队长/演练实战/**已组队(skip_team)**/标定
+  都在**该副本自己的命名空间**（如 `tasks.taohaiqu`），中枢页只是代理读写到选中副本。副本就绪度由其 `CALIBRATION`
+  spec 通用推导（区域 spec 第 4 项 True=可选，不计必要项）。
+  - **「已组队」开关（skip_team）**：勾上=已自行组好队，副本任务跳过组队握手、直接由队长开刷；此时 preflight 放宽
+    （不要求多开≥2、不查组队资产/open_team/open_friend，只需队长那个号能定位）。就绪判定也随之不要求组队标定。
+- **组队是共享能力、单独可一键触发**：组队握手在 `core/teaming.TeamFormation`；「通用 / 工具」页有
+  「选队长 + 一键组队」（跑 `DungeonTask`），角色参数（captain_index/dry_run）存共享 `tasks.teaming`。
+- **「队长ID 库」就近入口**：刷副本页 + 通用页都在「谁当队长」旁放了一个**带缩略图**的小按钮（一眼看到
+  当前认哪张脸），点开 `gui/leader_gallery.LeaderIdGallery`（2x2 画廊：当前 + 最近 3 历史，可设为当前/删除/
+  重新标定追加）。数据逻辑全在纯函数 `core/leader_history.py`：**激活图路径永远是 `templates/tm_leader_id.png`**
+  （teaming 与 calibrate 都写死读它），切换 = 把选中历史图**字节复制覆盖**该文件、**绝不改 config 路径串**，
+  故 `TeamFormation` 零改、零回归；历史存 4 个固定槽 `tm_leader_id_slot0..3.png` 环形淘汰最旧。两处入口写同一份
+  config + 同一批文件、天然同步，变更后由 `App.refresh_leader_thumb()` **广播刷新两页**缩略图。
+  ⚠ 就绪度判定只看 `templates.leader_id` 是否非空（不看文件存在），故 `leader_history` 在历史空时把它置 None。
+  组队全套标定仍走通用页「标定（组队）」（`exclude=["leader_id"]`）。任何副本跑之前都先自动组队，这里只是把
+  「单纯组个队」抽成手动动作。
 
 ## 当前状态
 - 依赖已装好：numpy, opencv-python, mss, pyautogui, pygetwindow, customtkinter, Pillow。已打 v1.0 单文件 exe（`python build.py` / 双击 `打包.bat` 重打；数据落 exe 同级目录）。
-- 五个任务全部就位：秒装备(sniper) / 宝图(treasure_map) / 运镖(escort) / 秘境降妖(secret_realm) / 日常一条龙(daily)。
-  后四个都支持多开逐号轮转（非阻塞状态机）；秒装备也多开轮转。GUI 已落地令牌化主题 + 白天/夜间切换。
+- 任务已就位：秒装备(sniper) / 宝图(treasure_map) / 运镖(escort) / 秘境降妖(secret_realm) / 日常一条龙(daily)
+  / 刷副本(副本中枢，目前收录蹈海去 taohaiqu) / 一键组队(通用页, dungeon)。
+  逐号任务多开轮转（非阻塞状态机）；秒装备也多开轮转。GUI 已落地令牌化主题 + 白天/夜间切换。
 - **通用约束（贯穿全部任务）**：多开各号窗口须**同尺寸**（共用标定点位）；一只鼠标，多开节奏天然慢于单开；
   操作某号前先 `window.activate()` 切前台（用 `_force_foreground` 绕过焦点抢占并校验，失败则跳过该号、下轮重试，绝不在后台号瞎点）。
 - ⚠ **几乎所有改动都「未真机端到端验证」**——代码层 py_compile / example.json 合法 / 纯逻辑模拟基本都过了，

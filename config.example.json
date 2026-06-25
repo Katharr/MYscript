@@ -380,6 +380,8 @@
       }
     },
     "teaming": {
+      "dry_run": false,
+      "captain_index": 0,
       "loop": {
         "match_threshold": 0.85,
         "tick_interval_sec": 0.5,
@@ -416,17 +418,18 @@
         "team_apply_join": "templates/tm_team_apply_join.png",
         "team_arrow": "templates/tm_team_arrow.png",
         "leader_id": "templates/tm_leader_id.png"
-      }
+      },
+      "leader_id_history": [
+        { "slot": "templates/tm_leader_id_slot0.png", "label": "06-25 14:30" }
+      ],
+      "leader_id_active": 0
     },
     "dungeon": {
-      "dry_run": true,
-      "captain_index": 0,
-      "loop": {
-        "time_limit_min": 0
-      }
+      "selected": "taohaiqu"
     },
     "taohaiqu": {
       "dry_run": true,
+      "skip_team": false,
       "captain_index": 0,
       "loop": {
         "match_threshold": 0.85,
