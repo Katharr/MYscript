@@ -414,15 +414,20 @@ class TeamFormation:
         return (rect[0] + m[0], rect[1] + m[1], m[2])
 
     def _find_arrow_on_row(self, ctx, region_key, leader_screen_xy):
-        """在队长ID命中【行】的右侧找箭头按钮(team_arrow)。返回屏幕 (x, y, score)。
+        """在队长ID命中【行/卡片】的右侧找箭头按钮(team_arrow)。返回屏幕 (x, y, score)。
         参照 secret_realm._find_join_on_row 的「按行」思路抗布局漂移、不串到别人那行：
         - 横向：从队长名字的【右边缘】一直扫到该区域【右缘】（整行右半部分都找）。
           注意 match() 返回的是模板【中心】，名字模板有几十像素宽，老逻辑从中心起算只取 80px
           常够不到更靠右的箭头 → 「认出队长却找不到箭头」。改成扫到行尾，彻底消除这个够不着。
           （arrow_band_w>0 时仍按它当上限裁，便于个别布局收窄；默认 0=扫到区域右缘。）
-        - 纵向：只取约 1.6 行高，不会串到上下相邻好友那一行的箭头。
-        模板未标定、或行内没匹配到，统一退化为「名字右边缘 + arrow_offset_x」固定偏移点击
-        （返回 score=0 表示走了兜底，调用方据此区分日志）。"""
+        - 纵向（已踩坑修）：好友是【卡片】不是单行——卡片高 ≈ 队长ID 模板高的 ~2 倍，
+          队长ID 落在卡片【中上】，箭头落在卡片偏下，且与队长ID 并不在同一水平线。
+          老逻辑只取「以队长ID 的 Y 为中心、~1.6 模板高」的带，下边界够不到偏下的箭头
+          → 「认出队长却匹配不到箭头、兜底又按队长ID 的 Y 点歪」。
+          改成按卡片几何撑开竖直带、覆盖【整张卡片】：卡片高 = 模板高 × arrow_card_ratio(默认 2.0)，
+          队长ID 在卡片内的纵向位置 = arrow_leader_pos(默认 0.4，即中上)，据此把带从卡片顶撑到卡片底；
+          兜底点也落到【卡片纵向中心】而非队长ID 的 Y。排版不同改这俩 config 即可，不必改代码。
+          下边界恰停在本卡片底，不会串到下一张卡片的箭头。"""
         rect = self._region_rect(ctx, region_key)
         if rect is None:
             return None
@@ -430,8 +435,17 @@ class TeamFormation:
         lx, ly = leader_screen_xy
         leader_tpl = self.tpl.get("leader_id")
         name_w = leader_tpl.shape[1] if leader_tpl is not None else 64
+        row_h = leader_tpl.shape[0] if leader_tpl is not None else 32
         right_edge_x = lx + name_w // 2          # 队长名字的右边缘（屏幕坐标）
-        fallback = (right_edge_x + int(self.loop.get("arrow_offset_x", 28)), ly, 0.0)
+        # 卡片几何：卡片高、队长ID 在卡片内的纵向位置（从顶算的占比）→ 推卡片顶/底/中心相对队长ID 的偏移
+        card_ratio = float(self.loop.get("arrow_card_ratio", 2.0))
+        leader_pos = min(0.95, max(0.05, float(self.loop.get("arrow_leader_pos", 0.4))))
+        card_h = max(row_h, int(row_h * card_ratio))
+        top_off = int(leader_pos * card_h)           # 队长ID 上方到卡片顶
+        bot_off = int((1.0 - leader_pos) * card_h)   # 队长ID 下方到卡片底
+        mid_off = int((0.5 - leader_pos) * card_h)   # 队长ID 到卡片纵向中心（箭头大致在此）
+        # 兜底：箭头匹配不到时点「名字右边缘 + offset_x，卡片纵向中心」（Y 不再用队长ID 的 Y）
+        fallback = (right_edge_x + int(self.loop.get("arrow_offset_x", 28)), ly + mid_off, 0.0)
         arrow_tpl = self.tpl.get("team_arrow")
         if arrow_tpl is None:
             return fallback
@@ -439,11 +453,9 @@ class TeamFormation:
         if scene is None:
             return fallback
         sh, sw = scene.shape[:2]
-        row_h = leader_tpl.shape[0] if leader_tpl is not None else 32
-        band = max(32, int(row_h * 1.6))
         ly_local = int(ly - ry)
-        y0 = max(0, ly_local - band // 2)
-        y1 = min(sh, ly_local + band // 2)
+        y0 = max(0, ly_local - top_off)            # 卡片顶
+        y1 = min(sh, ly_local + bot_off)           # 卡片底（恰停在本卡片，不串下一张）
         x0 = max(0, int(right_edge_x - rx) - 2)            # 从名字右边缘起（留 2px 容差）
         band_w = int(self.loop.get("arrow_band_w", 0))
         x1 = min(sw, x0 + band_w) if band_w > 0 else sw    # 0=扫到区域右缘（整行右半部分）

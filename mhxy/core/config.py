@@ -294,6 +294,8 @@ DEFAULT_CONFIG = {
                 "scroll_reset_max": 20,      # 「滚到顶」最多上滚几屏的防死循环上限
                 "arrow_band_w": 0,           # 找箭头的横向范围：从名字右边缘往右多宽；0=扫到该区域右缘(整行右半)
                 "arrow_offset_x": 28,        # 箭头没匹配到时的兜底：点「名字右边缘 + 这么多像素」处
+                "arrow_card_ratio": 2.0,     # 好友【卡片】高 ≈ 队长ID模板高的几倍（撑开找箭头的竖直带、覆盖整张卡片）
+                "arrow_leader_pos": 0.4,     # 队长ID 在卡片内的纵向位置(从顶算占比，0.4=中上)；兜底点落到卡片纵向中心而非队长ID 的 Y
                 "max_stuck_recover": 3       # 连续卡死多少次就放弃该号
             },
             "regions": {                 # 相对游戏窗口 [x,y,w,h]，标定向导写入
@@ -315,6 +317,35 @@ DEFAULT_CONFIG = {
             "leader_id_active": 0        # 指向 history 的下标（仅 UI 高亮；约定 history[active] 字节==激活图）
         },
 
+        # ---- 整理背包（全局共享能力；像组队一样可单独一键运行，也可被任意流程穿插调用）----
+        #   翻包裹找到用户标定的物品图，按各自动作逐个 使用/丢弃/出售。核心在 core.inventory.InventoryOrganizer。
+        #   标定的区域/按钮模板/物品清单都放共享命名空间 tasks.organize_bag，与具体任务解耦。
+        "organize_bag": {
+            "dry_run": True,
+            "loop": {
+                "match_threshold": 0.85,
+                "open_item_click": "right",      # 打开物品操作菜单的方式：right(右键,默认)/left/double
+                "action_settle_sec": 0.4,        # 点物品后等操作菜单/面板出现
+                "confirm_timeout_sec": 6,        # 等丢弃/出售确认弹窗的超时
+                "passes": 1,                     # 整理几遍（丢/卖后列表会变，可多遍兜底）
+                "scroll_step": -3,
+                "scroll_max_tries": 30,          # 背包可能很长：处理动作会改画面、削弱「帧差判到底」，故给足翻屏上限兜底
+                "scroll_settle_sec": 0.35,
+                "scroll_reset_top": True,
+                "scroll_end_diff": 2.0,
+                "scroll_reset_max": 20
+            },
+            "regions": {"bag_list": None},       # 背包列表区（留空=整窗检测）
+            "templates": {
+                "use_button": None,              # 操作菜单里「使用」按钮
+                "discard_button": None,          # 「丢弃」按钮
+                "sell_button": None,             # 「出售/售卖」按钮
+                "confirm_button": None           # 丢弃/出售的「确定」确认按钮（三种动作共用）
+            },
+            "items": []                          # [{name, template, action}]，action ∈ "use"/"discard"/"sell"
+                                                 # 物品图存 templates/ob_<name>.png
+        },
+
         # ---- 刷副本（副本中枢：选一个已收录的副本来跑；副本本身的组队/流程都在该副本任务里）----
         #   本块只存中枢级选择；各副本的队长/演练实战/标定都在各副本自己的命名空间（如 tasks.taohaiqu）。
         #   "selected" = 当前选中的副本任务名（is_dungeon=True 的任务），刷副本页据此决定跑谁。
@@ -332,6 +363,7 @@ DEFAULT_CONFIG = {
                 "match_threshold": 0.85,     # 标志模板匹配阈值
                 "npc_dialog_sec": 60,        # 点「参加」后等角色寻路到 NPC、弹出「选择副本」对话框的超时
                 "step_timeout_sec": 30,      # 选副本/进入/马上传送/对话选项/小闹钟 等每步按钮出现的超时
+                "daily_wait_sec": 1,         # 任务弹窗「日常」按钮的短等待：打开任务列表就有它，超这么久没检测到就直接点蹈海去任务
                 "entry_skip_sec": 60,        # 「进入」后传送动画结束、首个「跳过剧情」出现的超时
                 "battle_timeout_sec": 600,   # 单场战斗上限：挂够这么久仍没等到下一个「跳过剧情」就判超时中止(按真实关卡时长调)
                 "enter_box": None,           # 蹈海去「进入」限定的比例框 [x0,y0,x1,y1](0~1)；None=整屏找。
@@ -354,7 +386,8 @@ DEFAULT_CONFIG = {
                 "thq_select": None,          # 对话框「选择副本」按钮
                 "thq_enter": None,           # 蹈海去下方的「进入」按钮(按位置区分)
                 "thq_skip": None,            # 「跳过剧情动画」按钮(每场战斗前后都点，重现也用来判战斗结束)
-                "thq_task": None,            # 任务列表里「蹈海去」任务条目(开任务弹窗后先点中它，传送才对应)
+                "thq_daily": None,           # 任务弹窗里的「日常」分类按钮(开任务弹窗后先点它才列出蹈海去任务)
+                "thq_task": None,            # 任务列表里「蹈海去」任务条目(点「日常」后先点中它，传送才对应)
                 "thq_teleport": None,        # 任务弹窗里的「马上传送」按钮
                 "thq_opt1": None,            # 第1场对话「竖子尔敢！」
                 "thq_opt2": None,            # 第2场对话「恕难从命」

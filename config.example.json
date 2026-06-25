@@ -436,6 +436,32 @@
       ],
       "leader_id_active": 0
     },
+    "organize_bag": {
+      "dry_run": true,
+      "loop": {
+        "match_threshold": 0.85,
+        "open_item_click": "right",
+        "action_settle_sec": 0.4,
+        "confirm_timeout_sec": 6,
+        "passes": 1,
+        "scroll_step": -3,
+        "scroll_max_tries": 30,
+        "scroll_settle_sec": 0.35,
+        "scroll_reset_top": true,
+        "scroll_end_diff": 2.0,
+        "scroll_reset_max": 20
+      },
+      "regions": {
+        "bag_list": null
+      },
+      "templates": {
+        "use_button": null,
+        "discard_button": null,
+        "sell_button": null,
+        "confirm_button": null
+      },
+      "items": []
+    },
     "dungeon": {
       "selected": "taohaiqu"
     },

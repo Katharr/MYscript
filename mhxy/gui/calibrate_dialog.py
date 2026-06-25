@@ -117,6 +117,24 @@ def calibrate_template_direct(app, task_name, key, name, toast=None):
     return True
 
 
+def _pick_cols(n):
+    """按缩略图张数选画廊列数。用户拍板：标定太长时按「尽量均匀分行」原则适当加宽、增加每行卡片数。
+    策略：在 [2, 上限] 列里优先选「行数最少」（加宽降低高度），并列时选「末行最满（最均匀）」。
+    上限随 n 增大（小数量不滥用宽列）：n≤4→2 列，≤6→3 列，更多→4 列。"""
+    import math
+    if n <= 1:
+        return 2
+    max_cols = 2 if n <= 4 else (3 if n <= 6 else 4)
+    best, best_key = 2, None
+    for c in range(2, max_cols + 1):
+        rows = math.ceil(n / c)
+        empty = c - (n - (rows - 1) * c)   # 末行空位数（越小越均匀）
+        key = (rows, empty)                # 先比行数，再比空位
+        if best_key is None or key < best_key:
+            best, best_key = c, key
+    return best
+
+
 class CalibrateDialog(ctk.CTkToplevel):
     def __init__(self, app, task_name="sniper", on_done=None, only=None, exclude=None):
         """only: 可选的 key 白名单——只渲染这些区域/模板项（其余隐藏）。None=渲染全部项。
@@ -154,17 +172,27 @@ class CalibrateDialog(ctk.CTkToplevel):
                 "watchlist": self.spec.get("watchlist", False),
             }
 
+        self.cfg = cfg_mod.load_config()
+        self.tc = cfg_mod.task_config(self.cfg, task_name)
+
+        # 缩略图画廊列数：模板/装备越多列越多，行尽量匀（_pick_cols）；窗口随列数适当加宽。
+        n_items = len(self.spec.get("templates", []))
+        if self.spec.get("watchlist"):
+            n_items = max(n_items, len(self.tc.get("watchlist", [])))
+        has_gallery = bool(self.spec.get("templates")) or bool(self.spec.get("watchlist"))
+        self.n_cols = max(2, _pick_cols(n_items)) if has_gallery else 2
+        win_w = {2: 680, 3: 800, 4: 940}.get(self.n_cols, 680)
+
         self.title(f"标定 · {title_name}")
-        self.geometry("680x640")
+        self.geometry(f"{win_w}x640")
         self.minsize(560, 420)
         self.configure(fg_color=T.BG)
         self.transient(app)
 
-        self.cfg = cfg_mod.load_config()
-        self.tc = cfg_mod.task_config(self.cfg, task_name)
-
         self.region_rows = {}
-        self.template_rows = {}
+        self.template_rows = {}          # 兼容保留（模板改走缩略图画廊后已不用）
+        self.template_grid = None        # 模板缩略图画廊容器（_render_templates 填充）
+        self._thumbs = []                # 防缩略图被 GC（_refresh 开头清空再重建）
         self._full_window_keys = set()   # 支持「留空=整窗」的大检测区 key
         self.item_list = None
 
@@ -204,12 +232,16 @@ class CalibrateDialog(ctk.CTkToplevel):
             rcard = self._card(body, row); row += 1
             ctk.CTkLabel(rcard, text="① 区域与按钮", font=self.fonts["h2"], text_color=T.TEXT).grid(
                 row=0, column=0, columnspan=3, sticky="w", padx=16, pady=(14, 6))
+            rhint = ctk.CTkLabel(rcard, text="这些只是记录屏幕上一块位置（坐标），本身没有图片，标好显示「● 已框选」即可。",
+                         font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
+            rhint.grid(row=1, column=0, columnspan=3, sticky="ew", padx=16, pady=(0, 4))
+            T.bind_wraplength(rhint, padding=32)
             for i, item in enumerate(regions):
                 key, name, desc = item[0], item[1], item[2]
                 full_window = len(item) > 3 and bool(item[3])   # 第4元素=True 表示可整窗
                 if full_window:
                     self._full_window_keys.add(key)
-                self._spec_row(rcard, 1 + i, key, name, desc, self.region_rows,
+                self._spec_row(rcard, 2 + i, key, name, desc, self.region_rows,
                                lambda k=key, n=name: self._calibrate_region(k, n),
                                full_window=full_window)
             ctk.CTkFrame(rcard, fg_color="transparent", height=8).grid(row=99, column=0)
@@ -219,15 +251,16 @@ class CalibrateDialog(ctk.CTkToplevel):
         if templates:
             tcard = self._card(body, row); row += 1
             ctk.CTkLabel(tcard, text="② 标志模板（框选裁图）", font=self.fonts["h2"], text_color=T.TEXT).grid(
-                row=0, column=0, columnspan=3, sticky="w", padx=16, pady=(14, 6))
+                row=0, column=0, sticky="w", padx=16, pady=(14, 6))
             thint = ctk.CTkLabel(tcard, text="框小而独特的区域（按钮/文字/图标），别框会变的数字或背景。",
                          font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
-            thint.grid(row=1, column=0, columnspan=3, sticky="ew", padx=16, pady=(0, 4))
+            thint.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 6))
             T.bind_wraplength(thint, padding=32)
-            for i, (key, name, desc) in enumerate(templates):
-                self._spec_row(tcard, 2 + i, key, name, desc, self.template_rows,
-                               lambda k=key, n=name: self._calibrate_template(k, n))
-            ctk.CTkFrame(tcard, fg_color="transparent", height=8).grid(row=99, column=0)
+            grid = ctk.CTkFrame(tcard, fg_color="transparent")
+            grid.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 10))
+            for c in range(self.n_cols):
+                grid.grid_columnconfigure(c, weight=1, uniform="tpl")
+            self.template_grid = grid
 
         # ③ 监控清单（仅 watchlist=True 的任务）
         if self.spec.get("watchlist"):
@@ -295,7 +328,8 @@ class CalibrateDialog(ctk.CTkToplevel):
         T.bind_wraplength(ihint, padding=32)
         self.item_list = ctk.CTkFrame(icard, fg_color="transparent")
         self.item_list.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 12))
-        self.item_list.grid_columnconfigure(0, weight=1)
+        for c in range(self.n_cols):
+            self.item_list.grid_columnconfigure(c, weight=1, uniform="wl")
 
     # ------------------------------------------------------------------
     # 框选：藏起自己 -> 截图框选 -> 复原。返回 (rel_roi, crop)
@@ -380,6 +414,7 @@ class CalibrateDialog(ctk.CTkToplevel):
 
     # ------------------------------------------------------------------
     def _refresh(self):
+        self._thumbs.clear()
         regions = self.tc.get("regions", {})
         for key, status in self.region_rows.items():
             if regions.get(key):
@@ -388,34 +423,90 @@ class CalibrateDialog(ctk.CTkToplevel):
                 status.configure(text="○ 整窗(默认)", text_color=T.TEXT_DIM)
             else:
                 status.configure(text="○ 未标定", text_color=T.TEXT_DIM)
+        self._render_templates()
+        self._render_watchlist()
 
-        templates = self.tc.get("templates", {})
-        for key, status in self.template_rows.items():
-            ok = bool(templates.get(key)) and vision.load_template(templates.get(key)) is not None
-            status.configure(text="● 已裁图" if ok else "○ 未标定",
-                             text_color=T.SUCCESS if ok else T.TEXT_DIM)
+    # ---- 模板缩略图画廊（每次 _refresh 整段重画，照搬 leader_gallery 的范式）----
+    def _render_templates(self):
+        if self.template_grid is None:
+            return
+        from .app import load_thumb     # 延迟导入避免与 app.py 循环依赖
+        for w in self.template_grid.winfo_children():
+            w.destroy()
+        saved = self.tc.get("templates", {})
+        for i, (key, name, desc) in enumerate(self.spec.get("templates", [])):
+            r, col = divmod(i, self.n_cols)
+            rel = saved.get(key)
+            thumb = load_thumb(rel, self._thumbs, max_h=46) if rel else None
+            self._thumb_card(self.template_grid, r, col, name=name,
+                             thumb=thumb, has_path=bool(rel), rel=rel,
+                             btn_text=("重新标定" if thumb is not None else "去标定"),
+                             btn_cmd=lambda k=key, n=name: self._calibrate_template(k, n))
 
-        if self.item_list is not None:
-            for w in self.item_list.winfo_children():
-                w.destroy()
-            wl = self.tc.get("watchlist", [])
-            if not wl:
-                empty = ctk.CTkLabel(self.item_list, text="还没有装备，点右上「＋ 框选添加」。",
-                             font=self.fonts["body"], text_color=T.TEXT_DIM)
-                empty.grid(row=0, column=0, sticky="ew", padx=12, pady=16)
-                T.bind_wraplength(empty, padding=20)
-            else:
-                for i, it in enumerate(wl):
-                    row = ctk.CTkFrame(self.item_list, fg_color=T.SURFACE_2, corner_radius=T.RADIUS_SM)
-                    row.grid(row=i, column=0, sticky="ew", pady=3, padx=4)
-                    row.grid_columnconfigure(0, weight=1)
-                    ctk.CTkLabel(row, text=f"🗡  {it.get('name', '?')}", font=self.fonts["body"],
-                                 text_color=T.TEXT).grid(row=0, column=0, sticky="w", padx=12, pady=8)
-                    ctk.CTkButton(row, text="删除", font=self.fonts["small"], width=52, height=28,
-                                  corner_radius=T.RADIUS_SM, fg_color="transparent", hover_color=T.DANGER, text_color=T.TEXT,
-                                  border_width=1, border_color=T.BORDER,
-                                  command=lambda idx=i: self._delete_item(idx)).grid(
-                                      row=0, column=1, padx=10)
+    # ---- 装备缩略图画廊（watchlist）----
+    def _render_watchlist(self):
+        if self.item_list is None:
+            return
+        from .app import load_thumb
+        for w in self.item_list.winfo_children():
+            w.destroy()
+        wl = self.tc.get("watchlist", [])
+        if not wl:
+            empty = ctk.CTkLabel(self.item_list, text="还没有装备，点右上「＋ 框选添加」。",
+                         font=self.fonts["body"], text_color=T.TEXT_DIM)
+            empty.grid(row=0, column=0, columnspan=self.n_cols, sticky="ew", padx=12, pady=16)
+            T.bind_wraplength(empty, padding=20)
+            return
+        for i, it in enumerate(wl):
+            r, col = divmod(i, self.n_cols)
+            rel = it.get("template")
+            thumb = load_thumb(rel, self._thumbs, max_h=46) if rel else None
+            self._thumb_card(self.item_list, r, col, name=it.get("name", "?"),
+                             thumb=thumb, has_path=bool(rel), rel=rel,
+                             btn_text="删除", danger_btn=True,
+                             btn_cmd=lambda idx=i: self._delete_item(idx))
+
+    # ---- 单张缩略图卡片（模板/装备共用）：名字+状态徽标 / 缩略图(占位) / 操作按钮，三态等高 ----
+    def _thumb_card(self, parent, r, col, name, thumb, has_path, rel,
+                    btn_text, btn_cmd, danger_btn=False):
+        ok = thumb is not None
+        card = ctk.CTkFrame(parent, fg_color=T.SURFACE_2, corner_radius=T.RADIUS_SM,
+                            border_width=2, border_color=(T.SUCCESS if ok else T.BORDER))
+        card.grid(row=r, column=col, sticky="nsew", padx=6, pady=6)
+        card.grid_columnconfigure(0, weight=1)
+
+        head = ctk.CTkFrame(card, fg_color="transparent")
+        head.grid(row=0, column=0, sticky="ew", padx=10, pady=(8, 0))
+        head.grid_columnconfigure(0, weight=1)
+        nm = ctk.CTkLabel(head, text=name, font=self.fonts["body_b"], text_color=T.TEXT,
+                          justify="left", anchor="w")
+        nm.grid(row=0, column=0, sticky="ew")
+        T.bind_wraplength(nm)
+        ctk.CTkLabel(head, text=("● 已裁图" if ok else "○ 未标定"), font=self.fonts["small"],
+                     text_color=(T.SUCCESS if ok else T.TEXT_DIM)).grid(row=0, column=1, sticky="e", padx=(6, 0))
+
+        # 缩略图 / 占位框：固定高度让有图/无图卡片等高，网格不参差
+        holder = ctk.CTkFrame(card, fg_color=T.SURFACE, corner_radius=T.RADIUS_SM,
+                              border_width=1, border_color=T.BORDER, height=58)
+        holder.grid(row=1, column=0, sticky="ew", padx=10, pady=8)
+        holder.grid_propagate(False)
+        holder.grid_columnconfigure(0, weight=1)
+        holder.grid_rowconfigure(0, weight=1)
+        if ok:
+            ctk.CTkLabel(holder, text="", image=thumb).grid(row=0, column=0)
+        elif has_path:
+            ctk.CTkLabel(holder, text="（图片丢失）", font=self.fonts["small"],
+                         text_color=T.WARN).grid(row=0, column=0)
+        else:
+            ctk.CTkLabel(holder, text="○ 未标定", font=self.fonts["small"],
+                         text_color=T.TEXT_DIM).grid(row=0, column=0)
+
+        ctk.CTkButton(card, text=btn_text, font=self.fonts["small"], height=30,
+                      corner_radius=T.RADIUS_SM, text_color=T.TEXT,
+                      fg_color=("transparent" if danger_btn else T.BTN),
+                      hover_color=(T.DANGER if danger_btn else T.BTN_HOVER),
+                      border_width=1, border_color=T.BORDER,
+                      command=btn_cmd).grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 10))
 
     def _save(self):
         cfg_mod.set_task_config(self.cfg, self.task_name, self.tc)

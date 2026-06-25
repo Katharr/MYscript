@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-主界面。深色简约风，左侧导航 + 右侧分页。
+主界面。深色简约风，左侧导航 + 中间分页 + 右侧常驻全局日志。
 每个任务对应一个页面：以后加新任务，写个 *Page 并在 PAGES 注册即可。
 """
 
@@ -74,7 +74,18 @@ def load_thumb(template_rel, thumbs_list, max_h=40):
         path = template_rel if os.path.isabs(template_rel) else str(cfg_mod.PROJECT_ROOT / template_rel)
         if not os.path.exists(path):
             return None
-        img = Image.open(path)
+        try:
+            img = Image.open(path)
+            img.load()
+        except Exception:
+            # 中文/异常路径兜底：走 cv2 imdecode（np.fromfile，兼容中文路径）读出再转回 PIL。
+            # watchlist 装备图是 templates/<中文名>.png，个别环境 PIL.open 不保险，缺这条会“有图却显示不出”。
+            import cv2
+            from ..core import vision
+            arr = vision.load_template(template_rel)
+            if arr is None:
+                return None
+            img = Image.fromarray(cv2.cvtColor(arr, cv2.COLOR_BGR2RGB))
         w, h = img.size
         scale = max_h / max(1, h)
         size = (max(1, int(w * scale)), max_h)
@@ -90,6 +101,7 @@ def load_thumb(template_rel, thumbs_list, max_h=40):
 # ----------------------------------------------------------------------
 class SniperPage(ctk.CTkFrame):
     TASK_NAME = "sniper"
+    LOG_SOURCE = "秒装备"
 
     def __init__(self, master, app):
         super().__init__(master, fg_color="transparent")
@@ -173,12 +185,11 @@ class SniperPage(ctk.CTkFrame):
         ctk.CTkLabel(box1, text="关 = 演练（只识别不下单，安全）",
                      font=self.fonts["small"], text_color=T.TEXT_DIM).pack(anchor="w", pady=(5, 0))
 
-    # ---- 主体：左监控清单 + 右日志 ----
+    # ---- 主体：监控清单（铺满；日志已移到全局右栏）----
     def _build_body(self):
         body = ctk.CTkFrame(self, fg_color="transparent")
         body.grid(row=2, column=0, sticky="nsew", padx=4)
-        body.grid_columnconfigure(0, weight=2, uniform="b")
-        body.grid_columnconfigure(1, weight=3, uniform="b")
+        body.grid_columnconfigure(0, weight=1)   # 日志已移到全局右栏，主体内容独占整宽
         body.grid_rowconfigure(0, weight=1)
 
         # 监控清单卡片
@@ -197,25 +208,7 @@ class SniperPage(ctk.CTkFrame):
         self.list_frame.grid_columnconfigure(0, weight=1)
         T.tune_scroll_speed(self.list_frame)
 
-        # 日志卡片
-        right = Card(body)
-        right.grid(row=0, column=1, sticky="nsew", padx=(7, 0))
-        right.grid_rowconfigure(1, weight=1)
-        right.grid_columnconfigure(0, weight=1)
-        rhead = ctk.CTkFrame(right, fg_color="transparent")
-        rhead.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 8))
-        rhead.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(rhead, text="运行日志", font=self.fonts["h2"], text_color=T.TEXT).grid(row=0, column=0, sticky="w")
-        ctk.CTkButton(rhead, text="清空", font=self.fonts["small"], height=26, width=56,
-                      corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
-                      border_width=1, border_color=T.BORDER,
-                      command=self._clear_log).grid(row=0, column=1, sticky="e")
-        self.log = ctk.CTkTextbox(right, font=self.fonts["mono"], fg_color=T.SURFACE_2,
-                                  text_color=T.TEXT, corner_radius=T.RADIUS_SM, wrap="word")
-        self.log.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 12))
-        T.apply_log_tags(self.log._textbox)
-        self.log.configure(state="disabled")
-        self._log_line("界面就绪。第一次使用请先「标定 / 加装备」。", "info")
+        # 日志已统一到 App 右侧的全局日志面板，本页不再单独建日志框。
 
     # ------------------------------------------------------------------
     # 数据刷新
@@ -373,19 +366,11 @@ class SniperPage(ctk.CTkFrame):
             self.pill_game.configure(text="○ 未检测到目标窗口", fg_color=T.SURFACE_2, text_color=T.TEXT_DIM)
 
     def _log_line(self, msg, level="info"):
-        ts = datetime.datetime.now().strftime("%H:%M:%S")
-        self.log.configure(state="normal")
-        try:
-            self.log._textbox.insert("end", f"[{ts}] {msg}\n", level)
-        except Exception:
-            self.log.insert("end", f"[{ts}] {msg}\n")
-        self.log.see("end")
-        self.log.configure(state="disabled")
+        # 日志统一汇到 App 右侧全局面板，按本页 LOG_SOURCE 打来源标签。
+        self.app.log_line(msg, level, getattr(self, "LOG_SOURCE", None))
 
     def _clear_log(self):
-        self.log.configure(state="normal")
-        self.log.delete("1.0", "end")
-        self.log.configure(state="disabled")
+        self.app.clear_log()
 
 
 # ----------------------------------------------------------------------
@@ -393,6 +378,7 @@ class SniperPage(ctk.CTkFrame):
 # ----------------------------------------------------------------------
 class TreasureMapPage(ctk.CTkFrame):
     TASK_NAME = "treasure_map"
+    LOG_SOURCE = "宝图"
     RUN_LABEL = "▶  开始刷宝图"
 
     def __init__(self, master, app):
@@ -489,8 +475,7 @@ class TreasureMapPage(ctk.CTkFrame):
     def _build_body(self):
         body = ctk.CTkFrame(self, fg_color="transparent")
         body.grid(row=2, column=0, sticky="nsew", padx=4)
-        body.grid_columnconfigure(0, weight=2, uniform="b")
-        body.grid_columnconfigure(1, weight=3, uniform="b")
+        body.grid_columnconfigure(0, weight=1)   # 日志已移到全局右栏，主体内容独占整宽
         body.grid_rowconfigure(0, weight=1)
 
         # 左：运行参数 + 标定状态
@@ -529,25 +514,7 @@ class TreasureMapPage(ctk.CTkFrame):
         self.lbl_calib.grid(row=4, column=0, sticky="ew", padx=16, pady=(2, 14))
         bind_wraplength(self.lbl_calib)
 
-        # 右：日志
-        right = Card(body)
-        right.grid(row=0, column=1, sticky="nsew", padx=(7, 0))
-        right.grid_rowconfigure(1, weight=1)
-        right.grid_columnconfigure(0, weight=1)
-        rhead = ctk.CTkFrame(right, fg_color="transparent")
-        rhead.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 8))
-        rhead.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(rhead, text="运行日志", font=self.fonts["h2"], text_color=T.TEXT).grid(row=0, column=0, sticky="w")
-        ctk.CTkButton(rhead, text="清空", font=self.fonts["small"], height=26, width=56,
-                      corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
-                      border_width=1, border_color=T.BORDER,
-                      command=self._clear_log).grid(row=0, column=1, sticky="e")
-        self.log = ctk.CTkTextbox(right, font=self.fonts["mono"], fg_color=T.SURFACE_2,
-                                  text_color=T.TEXT, corner_radius=T.RADIUS_SM, wrap="word")
-        self.log.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 12))
-        T.apply_log_tags(self.log._textbox)
-        self.log.configure(state="disabled")
-        self._log_line("界面就绪。第一次使用请先「标定」(区域 + 各标志模板)，并核对快捷键。", "info")
+        # 日志已统一到 App 右侧的全局日志面板，本页不再单独建日志框。
 
     # ---- 刷新 / 状态 ----
     def refresh(self):
@@ -689,19 +656,11 @@ class TreasureMapPage(ctk.CTkFrame):
                 self._on_runner_finished()
 
     def _log_line(self, msg, level="info"):
-        ts = datetime.datetime.now().strftime("%H:%M:%S")
-        self.log.configure(state="normal")
-        try:
-            self.log._textbox.insert("end", f"[{ts}] {msg}\n", level)
-        except Exception:
-            self.log.insert("end", f"[{ts}] {msg}\n")
-        self.log.see("end")
-        self.log.configure(state="disabled")
+        # 日志统一汇到 App 右侧全局面板，按本页 LOG_SOURCE 打来源标签。
+        self.app.log_line(msg, level, getattr(self, "LOG_SOURCE", None))
 
     def _clear_log(self):
-        self.log.configure(state="normal")
-        self.log.delete("1.0", "end")
-        self.log.configure(state="disabled")
+        self.app.clear_log()
 
 
 # ----------------------------------------------------------------------
@@ -709,6 +668,7 @@ class TreasureMapPage(ctk.CTkFrame):
 # ----------------------------------------------------------------------
 class EscortPage(ctk.CTkFrame):
     TASK_NAME = "escort"
+    LOG_SOURCE = "运镖"
     RUN_LABEL = "▶  开始运镖"
 
     def __init__(self, master, app):
@@ -789,8 +749,7 @@ class EscortPage(ctk.CTkFrame):
     def _build_body(self):
         body = ctk.CTkFrame(self, fg_color="transparent")
         body.grid(row=2, column=0, sticky="nsew", padx=4)
-        body.grid_columnconfigure(0, weight=2, uniform="b")
-        body.grid_columnconfigure(1, weight=3, uniform="b")
+        body.grid_columnconfigure(0, weight=1)   # 日志已移到全局右栏，主体内容独占整宽
         body.grid_rowconfigure(0, weight=1)
 
         # 左：运行参数 + 标定状态
@@ -828,25 +787,7 @@ class EscortPage(ctk.CTkFrame):
         self.lbl_calib.grid(row=4, column=0, sticky="ew", padx=16, pady=(2, 14))
         bind_wraplength(self.lbl_calib)
 
-        # 右：日志
-        right = Card(body)
-        right.grid(row=0, column=1, sticky="nsew", padx=(7, 0))
-        right.grid_rowconfigure(1, weight=1)
-        right.grid_columnconfigure(0, weight=1)
-        rhead = ctk.CTkFrame(right, fg_color="transparent")
-        rhead.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 8))
-        rhead.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(rhead, text="运行日志", font=self.fonts["h2"], text_color=T.TEXT).grid(row=0, column=0, sticky="w")
-        ctk.CTkButton(rhead, text="清空", font=self.fonts["small"], height=26, width=56,
-                      corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
-                      border_width=1, border_color=T.BORDER,
-                      command=self._clear_log).grid(row=0, column=1, sticky="e")
-        self.log = ctk.CTkTextbox(right, font=self.fonts["mono"], fg_color=T.SURFACE_2,
-                                  text_color=T.TEXT, corner_radius=T.RADIUS_SM, wrap="word")
-        self.log.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 12))
-        T.apply_log_tags(self.log._textbox)
-        self.log.configure(state="disabled")
-        self._log_line("界面就绪。第一次使用请先「标定」(区域 + 各标志模板)，并核对快捷键。", "info")
+        # 日志已统一到 App 右侧的全局日志面板，本页不再单独建日志框。
 
     # ---- 刷新 / 状态 ----
     def refresh(self):
@@ -968,19 +909,11 @@ class EscortPage(ctk.CTkFrame):
                 self._on_runner_finished()
 
     def _log_line(self, msg, level="info"):
-        ts = datetime.datetime.now().strftime("%H:%M:%S")
-        self.log.configure(state="normal")
-        try:
-            self.log._textbox.insert("end", f"[{ts}] {msg}\n", level)
-        except Exception:
-            self.log.insert("end", f"[{ts}] {msg}\n")
-        self.log.see("end")
-        self.log.configure(state="disabled")
+        # 日志统一汇到 App 右侧全局面板，按本页 LOG_SOURCE 打来源标签。
+        self.app.log_line(msg, level, getattr(self, "LOG_SOURCE", None))
 
     def _clear_log(self):
-        self.log.configure(state="normal")
-        self.log.delete("1.0", "end")
-        self.log.configure(state="disabled")
+        self.app.clear_log()
 
 
 # ----------------------------------------------------------------------
@@ -992,6 +925,7 @@ class DungeonPage(ctk.CTkFrame):
     新增副本：写个 is_dungeon=True 的 Task 即自动出现在下拉里，本页无需改。"""
 
     TASK_NAME = "dungeon"
+    LOG_SOURCE = "刷副本"
     RUN_LABEL = "▶  开始刷副本"
 
     def __init__(self, master, app):
@@ -1097,8 +1031,7 @@ class DungeonPage(ctk.CTkFrame):
     def _build_body(self):
         body = ctk.CTkFrame(self, fg_color="transparent")
         body.grid(row=2, column=0, sticky="nsew", padx=4)
-        body.grid_columnconfigure(0, weight=2, uniform="b")
-        body.grid_columnconfigure(1, weight=3, uniform="b")
+        body.grid_columnconfigure(0, weight=1)   # 日志已移到全局右栏，主体内容独占整宽
         body.grid_rowconfigure(0, weight=1)
 
         # 左：选副本 + 队长 + 标定状态
@@ -1158,25 +1091,7 @@ class DungeonPage(ctk.CTkFrame):
         self.lbl_calib.grid(row=5, column=0, sticky="ew", padx=16, pady=(2, 14))
         bind_wraplength(self.lbl_calib)
 
-        # 右：日志
-        right = Card(body)
-        right.grid(row=0, column=1, sticky="nsew", padx=(7, 0))
-        right.grid_rowconfigure(1, weight=1)
-        right.grid_columnconfigure(0, weight=1)
-        rhead = ctk.CTkFrame(right, fg_color="transparent")
-        rhead.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 8))
-        rhead.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(rhead, text="运行日志", font=self.fonts["h2"], text_color=T.TEXT).grid(row=0, column=0, sticky="w")
-        ctk.CTkButton(rhead, text="清空", font=self.fonts["small"], height=26, width=56,
-                      corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
-                      border_width=1, border_color=T.BORDER,
-                      command=self._clear_log).grid(row=0, column=1, sticky="e")
-        self.log = ctk.CTkTextbox(right, font=self.fonts["mono"], fg_color=T.SURFACE_2,
-                                  text_color=T.TEXT, corner_radius=T.RADIUS_SM, wrap="word")
-        self.log.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 12))
-        T.apply_log_tags(self.log._textbox)
-        self.log.configure(state="disabled")
-        self._log_line("界面就绪。请先「选择窗口」(多开≥2 号)、选副本、指定队长；组队标定在「通用」页，副本标定用本页「标定」。", "info")
+        # 日志已统一到 App 右侧的全局日志面板，本页不再单独建日志框。
 
     # ---- 刷新 / 状态 ----
     def refresh(self):
@@ -1464,19 +1379,11 @@ class DungeonPage(ctk.CTkFrame):
                 self._on_runner_finished()
 
     def _log_line(self, msg, level="info"):
-        ts = datetime.datetime.now().strftime("%H:%M:%S")
-        self.log.configure(state="normal")
-        try:
-            self.log._textbox.insert("end", f"[{ts}] {msg}\n", level)
-        except Exception:
-            self.log.insert("end", f"[{ts}] {msg}\n")
-        self.log.see("end")
-        self.log.configure(state="disabled")
+        # 日志统一汇到 App 右侧全局面板，按本页 LOG_SOURCE 打来源标签。
+        self.app.log_line(msg, level, getattr(self, "LOG_SOURCE", None))
 
     def _clear_log(self):
-        self.log.configure(state="normal")
-        self.log.delete("1.0", "end")
-        self.log.configure(state="disabled")
+        self.app.clear_log()
 
 
 # ----------------------------------------------------------------------
@@ -1484,6 +1391,7 @@ class DungeonPage(ctk.CTkFrame):
 # ----------------------------------------------------------------------
 class SecretRealmPage(ctk.CTkFrame):
     TASK_NAME = "secret_realm"
+    LOG_SOURCE = "秘境"
     RUN_LABEL = "▶  开始秘境降妖"
 
     def __init__(self, master, app):
@@ -1564,8 +1472,7 @@ class SecretRealmPage(ctk.CTkFrame):
     def _build_body(self):
         body = ctk.CTkFrame(self, fg_color="transparent")
         body.grid(row=2, column=0, sticky="nsew", padx=4)
-        body.grid_columnconfigure(0, weight=2, uniform="b")
-        body.grid_columnconfigure(1, weight=3, uniform="b")
+        body.grid_columnconfigure(0, weight=1)   # 日志已移到全局右栏，主体内容独占整宽
         body.grid_rowconfigure(0, weight=1)
 
         # 左：运行参数 + 标定状态
@@ -1604,25 +1511,7 @@ class SecretRealmPage(ctk.CTkFrame):
         self.lbl_calib.grid(row=4, column=0, sticky="ew", padx=16, pady=(2, 14))
         bind_wraplength(self.lbl_calib)
 
-        # 右：日志
-        right = Card(body)
-        right.grid(row=0, column=1, sticky="nsew", padx=(7, 0))
-        right.grid_rowconfigure(1, weight=1)
-        right.grid_columnconfigure(0, weight=1)
-        rhead = ctk.CTkFrame(right, fg_color="transparent")
-        rhead.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 8))
-        rhead.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(rhead, text="运行日志", font=self.fonts["h2"], text_color=T.TEXT).grid(row=0, column=0, sticky="w")
-        ctk.CTkButton(rhead, text="清空", font=self.fonts["small"], height=26, width=56,
-                      corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
-                      border_width=1, border_color=T.BORDER,
-                      command=self._clear_log).grid(row=0, column=1, sticky="e")
-        self.log = ctk.CTkTextbox(right, font=self.fonts["mono"], fg_color=T.SURFACE_2,
-                                  text_color=T.TEXT, corner_radius=T.RADIUS_SM, wrap="word")
-        self.log.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 12))
-        T.apply_log_tags(self.log._textbox)
-        self.log.configure(state="disabled")
-        self._log_line("界面就绪。第一次使用请先「标定」(区域 + 各标志模板)，并核对快捷键。", "info")
+        # 日志已统一到 App 右侧的全局日志面板，本页不再单独建日志框。
 
     # ---- 刷新 / 状态 ----
     def refresh(self):
@@ -1745,19 +1634,11 @@ class SecretRealmPage(ctk.CTkFrame):
                 self._on_runner_finished()
 
     def _log_line(self, msg, level="info"):
-        ts = datetime.datetime.now().strftime("%H:%M:%S")
-        self.log.configure(state="normal")
-        try:
-            self.log._textbox.insert("end", f"[{ts}] {msg}\n", level)
-        except Exception:
-            self.log.insert("end", f"[{ts}] {msg}\n")
-        self.log.see("end")
-        self.log.configure(state="disabled")
+        # 日志统一汇到 App 右侧全局面板，按本页 LOG_SOURCE 打来源标签。
+        self.app.log_line(msg, level, getattr(self, "LOG_SOURCE", None))
 
     def _clear_log(self):
-        self.log.configure(state="normal")
-        self.log.delete("1.0", "end")
-        self.log.configure(state="disabled")
+        self.app.clear_log()
 
 
 # ----------------------------------------------------------------------
@@ -2029,15 +1910,20 @@ class GeneralPage(ctk.CTkFrame):
     """通用页：集中放与具体任务无关的功能。
     目前：组队标定 + 一键组队（选队长→把所选多开窗口组成一队）；窗口尺寸归一化。"""
 
+    LOG_SOURCE = "通用"   # 组队/整理背包日志在 pump 里各自覆盖来源标签
+
     def __init__(self, parent, app):
         super().__init__(parent, fg_color="transparent")
         self.app = app
         self.fonts = app.fonts
         self.cfg = app.cfg
         self.runner = None          # 一键组队跑的后台任务（DungeonTask）
+        self.runner_ob = None       # 一键整理跑的后台任务（OrganizeBagTask），与组队并存互不干扰
         self._team_cal_dialog = None    # 「标定（组队）」去重槽（队长ID 走无弹窗直接标定，无需去重槽）
+        self._ob_cal_dialog = None      # 「标定（整理背包）」去重槽
+        self.btn_ob = None          # 「一键整理」按钮（_refresh_body 每次重建）
+        self.switch_ob = None       # 整理背包实战/演练开关
         self._win_count = 0         # 已选多开窗口数（resolve_targets），供状态行显示
-        self.log = None             # 组队卡里的紧凑日志框；每次 _refresh_body 重建后重新指向
         self.btn_team = None
         self.btn_leader = None      # 行内队长ID按钮（_refresh_body 每次重建）
         self._leader_thumbs = []    # 行内队长ID缩略图防 GC
@@ -2178,16 +2064,15 @@ class GeneralPage(ctk.CTkFrame):
         self.lbl_team_status.pack(fill="x", padx=16, pady=(6, 0))
         bind_wraplength(self.lbl_team_status)
 
-        self.log = ctk.CTkTextbox(c_team, font=self.fonts["mono"], height=120, fg_color=T.SURFACE_2,
-                                  text_color=T.TEXT, corner_radius=T.RADIUS_SM, wrap="word")
-        self.log.pack(fill="x", padx=16, pady=(8, 14))
-        T.apply_log_tags(self.log._textbox)
-        self.log.configure(state="disabled")
+        # 日志已统一到 App 右侧的全局日志面板（组队打「组队」标签、整理背包打「整理背包」标签），本页不再单独建日志框。
         # 重建后：按窗口数即时渲染队长下拉/状态 + 据 runner 复位按钮，再后台刷新窗口数
         self._render_team_action()
         if self.runner and self.runner.is_running():
             self.btn_team.configure(text="■  停止组队", fg_color=T.DANGER, hover_color=T.DANGER_HOVER)
         self._kick_count_windows()
+
+        # ── 整理背包（跨任务共享：任何任务流程都可穿插调用，这里可单独一键运行）──
+        self._build_organize_card()
 
         # ── 窗口尺寸归一化 ──
         c2 = self._card()
@@ -2393,7 +2278,7 @@ class GeneralPage(ctk.CTkFrame):
     def _start_teaming(self):
         if self.runner and self.runner.is_running():
             self.runner.stop()
-            self._log_line("正在停止…", "warn")
+            self._log_line("正在停止…", "warn", "组队")
             self.btn_team.configure(text="停止中…", state="disabled")
             return
         # 强制实战（一键组队是显式动作，不走演练）。窗口选择与队长都在「选择窗口/队长」里定好了。
@@ -2406,16 +2291,16 @@ class GeneralPage(ctk.CTkFrame):
 
         task_cls = get_task("dungeon")
         if task_cls is None:
-            self._log_line("找不到组队任务。", "error")
+            self._log_line("找不到组队任务。", "error", "组队")
             return
         self.runner = TaskRunner(task_cls(), self.app.cfg)
         ok, problems = self.runner.start()
         if not ok:
             for p in problems:
-                self._log_line("无法开始组队：" + p, "error")
+                self._log_line("无法开始组队：" + p, "error", "组队")
             self.runner = None
             return
-        self._log_line("开始一键组队…", "hit")
+        self._log_line("开始一键组队…", "hit", "组队")
         self.btn_team.configure(text="■  停止组队", fg_color=T.DANGER, hover_color=T.DANGER_HOVER, state="normal")
 
     def _on_team_finished(self):
@@ -2429,26 +2314,190 @@ class GeneralPage(ctk.CTkFrame):
             q = self.runner.log_queue
             while not q.empty():
                 level, msg = q.get()
-                self._log_line(msg, level)
+                self._log_line(msg, level, "组队")
             if not self.runner.is_running() and self.btn_team is not None \
                     and self.btn_team.cget("text") != "▶  一键组队":
                 self._on_team_finished()
+        if self.runner_ob:
+            q = self.runner_ob.log_queue
+            while not q.empty():
+                level, msg = q.get()
+                self._log_line(msg, level, "整理背包")
+            if not self.runner_ob.is_running() and self.btn_ob is not None \
+                    and self.btn_ob.cget("text") != "▶  一键整理":
+                self._on_ob_finished()
+
+    @staticmethod
+    def _targets_summary(cfg):
+        """只读 cfg.targets 拼一句「将操作哪些号」的说明，不去枚举/定位窗口（够快、给卡片当提示用）。
+        多开未指定 multi_indices = 全体号；指定了就报个数；单开报号几。"""
+        targets = (cfg or {}).get("targets", {}) or {}
+        if targets.get("multi"):
+            idxs = targets.get("multi_indices") or []
+            return f"多开 · 已选 {len(idxs)} 个号" if idxs else "多开 · 全体号"
+        i = targets.get("single_index", 0)
+        i = i if isinstance(i, int) and i >= 0 else 0
+        return f"单开 · 号{i + 1}"
+
+    # ------------------------------------------------------------------
+    # 整理背包（跨任务共享：core.InventoryOrganizer + tasks.OrganizeBagTask；
+    # 标定/物品/参数存共享命名空间 tasks.organize_bag；这里可单独一键运行）
+    # ------------------------------------------------------------------
+    def _build_organize_card(self):
+        """在组队卡之后渲染「整理背包（共享）」卡片：完成度行 + 说明 + 按钮行。
+        日志统一写到 App 右侧的全局日志面板（来源标签「整理背包」）。"""
+        cfg = self.cfg
+        ob_tc = cfg_mod.task_config(cfg, "organize_bag")
+        items = ob_tc.get("items", []) or []
+        tpl = ob_tc.get("templates", {}) or {}
+
+        # 被 items 用到的动作 → 所需按钮键。任一 discard/sell 还需 confirm_button（三动作共用确认）。
+        need = set()
+        for it in items:
+            act = it.get("action")
+            if act == "use":
+                need.add("use_button")
+            elif act == "discard":
+                need.add("discard_button"); need.add("confirm_button")
+            elif act == "sell":
+                need.add("sell_button"); need.add("confirm_button")
+        done = sum(1 for k in need if tpl.get(k))
+        total = len(need)
+        ready = (total > 0 and done == total)
+
+        c = self._card()
+        head = ctk.CTkFrame(c, fg_color="transparent")
+        head.pack(fill="x", padx=16, pady=(14, 4))
+        head.grid_columnconfigure(0, weight=1)
+        txt = ctk.CTkFrame(head, fg_color="transparent")
+        txt.grid(row=0, column=0, sticky="ew")
+        ctk.CTkLabel(txt, text="整理背包（共享）", font=self.fonts["h2"], text_color=T.TEXT).pack(anchor="w")
+        ctk.CTkLabel(txt, text=f"物品 {len(items)} 件；动作按钮 {done}/{total} 已标定"
+                              + ("　✓ 已就绪" if ready else "　（还需标定）"),
+                     font=self.fonts["body"],
+                     text_color=T.SUCCESS if ready else T.WARN).pack(anchor="w", pady=(4, 0))
+        sub = ctk.CTkLabel(txt, text="翻包裹找到标定的物品，逐个使用/丢弃/出售。是跨任务共享能力，"
+                                     "任何任务流程都可穿插调用；这里可单独一键运行。",
+                           font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
+        sub.pack(fill="x", pady=(2, 0))
+        bind_wraplength(sub)
+        ctk.CTkLabel(txt, text="将整理：" + self._targets_summary(cfg),
+                     font=self.fonts["small"], text_color=T.TEXT_DIM).pack(anchor="w", pady=(4, 0))
+        btns = ctk.CTkFrame(head, fg_color="transparent")
+        btns.grid(row=0, column=1, padx=(12, 0))
+        ctk.CTkButton(btns, text="标定（整理背包）", font=self.fonts["body"], height=36, width=130,
+                      corner_radius=T.RADIUS_SM, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
+                      text_color=T.ON_ACCENT, command=self._open_organize_calibrate).pack()
+        ctk.CTkButton(btns, text="管理物品", font=self.fonts["body"], height=32, width=130,
+                      corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
+                      border_width=1, border_color=T.BORDER,
+                      command=self._open_organize_items).pack(pady=(6, 0))
+
+        ctk.CTkFrame(c, fg_color=T.BORDER, height=1).pack(fill="x", padx=16, pady=(10, 0))
+        act = ctk.CTkFrame(c, fg_color="transparent")
+        act.pack(fill="x", padx=16, pady=(10, 14))
+        self.btn_ob = ctk.CTkButton(act, text="▶  一键整理", font=self.fonts["btn"], height=40, width=150,
+                                    corner_radius=T.RADIUS_SM, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
+                                    text_color=T.ON_ACCENT, command=self._start_organize)
+        self.btn_ob.pack(side="left")
+        # 选择整理哪些号：写的是和秒装备/运镖等任务共用的全局 targets（select_windows 读它），
+        # 不选/多开留空 = 全体号。放在最右，和「一键整理」分列两端。
+        ctk.CTkButton(act, text="选择窗口", font=self.fonts["body"], height=36, width=104,
+                      corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
+                      border_width=1, border_color=T.BORDER,
+                      command=lambda: self.app.open_window_picker(self.refresh)).pack(side="right")
+        self.switch_ob = ctk.CTkSwitch(act, text="实战模式（真的会使用/丢弃/出售）", font=self.fonts["body"],
+                                       command=self._toggle_organize_mode, progress_color=T.DANGER)
+        self.switch_ob.pack(side="left", padx=(16, 0))
+        if not ob_tc.get("dry_run", True):
+            self.switch_ob.select()
+        else:
+            self.switch_ob.deselect()
+        # 重建后：若整理在跑，恢复「停止整理」文案/颜色（照 btn_team 的恢复写法）
+        if self.runner_ob and self.runner_ob.is_running():
+            self.btn_ob.configure(text="■  停止整理", fg_color=T.DANGER, hover_color=T.DANGER_HOVER)
+
+    def _open_organize_calibrate(self):
+        """打开整理背包标定（共享命名空间 organize_bag），按 _ob_cal_dialog 去重。"""
+        existing = self._ob_cal_dialog
+        if existing is not None:
+            try:
+                if existing.winfo_exists():
+                    existing.lift()
+                    existing.focus_force()
+                    return
+            except Exception:
+                pass
+        from .calibrate_dialog import CalibrateDialog
+
+        def _after():
+            self._ob_cal_dialog = None
+            self.refresh()
+
+        try:
+            self._ob_cal_dialog = CalibrateDialog(self.app, task_name="organize_bag", on_done=_after)
+        except Exception as e:
+            self._ob_cal_dialog = None
+            self.app.toast(f"打开整理背包标定失败：{e}")
+
+    def _open_organize_items(self):
+        """打开「管理物品」弹窗：增删物品、改每件的动作（使用/丢弃/出售）。关闭后刷新完成度。"""
+        from .inventory_items_dialog import InventoryItemsDialog
+        try:
+            InventoryItemsDialog(self.app, on_done=self.refresh)
+        except Exception as e:
+            self.app.toast(f"打开物品管理失败：{e}")
+
+    def _toggle_organize_mode(self):
+        """实战/演练开关：存 tasks.organize_bag.dry_run（照 SniperPage._toggle_mode 的存盘范式）。"""
+        live = bool(self.switch_ob.get())  # 1=实战
+        cfg = cfg_mod.load_config()
+        tc = cfg_mod.task_config(cfg, "organize_bag")
+        tc["dry_run"] = not live
+        cfg_mod.set_task_config(cfg, "organize_bag", tc)
+        cfg_mod.save_config(cfg)
+        self.app.cfg = self.cfg = cfg
+        if live:
+            self._log_line("⚠ 整理背包已切到实战模式：会真正使用/丢弃/出售物品，请谨慎！", "warn", "整理背包")
+        else:
+            self._log_line("整理背包已切回演练模式（安全，只识别不操作）。", "info", "整理背包")
+
+    def _start_organize(self):
+        if self.runner_ob and self.runner_ob.is_running():
+            self.runner_ob.stop()
+            self._log_line("正在停止整理…", "warn", "整理背包")
+            self.btn_ob.configure(text="停止中…", state="disabled")
+            return
+        # dry_run 由开关控制，这里不强改；只读最新配置开跑。
+        cfg = cfg_mod.load_config()
+        self.app.cfg = self.cfg = cfg
+        task_cls = get_task("organize_bag")
+        if task_cls is None:
+            self._log_line("找不到整理背包任务。", "error", "整理背包")
+            return
+        self.runner_ob = TaskRunner(task_cls(), self.app.cfg)
+        ok, problems = self.runner_ob.start()
+        if not ok:
+            for p in problems:
+                self._log_line("无法开始整理：" + p, "error", "整理背包")
+            self.runner_ob = None
+            return
+        self._log_line("开始一键整理背包…", "hit", "整理背包")
+        self.btn_ob.configure(text="■  停止整理", fg_color=T.DANGER, hover_color=T.DANGER_HOVER, state="normal")
+
+    def _on_ob_finished(self):
+        if self.btn_ob is not None:
+            self.btn_ob.configure(text="▶  一键整理", fg_color=T.ACCENT,
+                                  hover_color=T.ACCENT_HOVER, state="normal")
 
     def update_game_pill(self, connected, summary=""):
         # 通用页没有连接药丸；仅为满足 App 对可运行页的统一调用而存在。
         pass
 
-    def _log_line(self, msg, level="info"):
-        if self.log is None:
-            return
-        ts = datetime.datetime.now().strftime("%H:%M:%S")
-        self.log.configure(state="normal")
-        try:
-            self.log._textbox.insert("end", f"[{ts}] {msg}\n", level)
-        except Exception:
-            self.log.insert("end", f"[{ts}] {msg}\n")
-        self.log.see("end")
-        self.log.configure(state="disabled")
+    def _log_line(self, msg, level="info", source=None):
+        # 日志统一汇到 App 右侧全局面板；source 缺省用本页 LOG_SOURCE（「通用」），
+        # 组队/整理背包在 pump 与各自的开始/停止消息里显式传「组队」「整理背包」。
+        self.app.log_line(msg, level, source or self.LOG_SOURCE)
 
 
 # ----------------------------------------------------------------------
@@ -2459,6 +2508,7 @@ class DailyPage(ctk.CTkFrame):
     多开/单开与各任务的演练/实战、标定、参数全部沿用各自任务页，本页不另设这些开关。"""
 
     TASK_NAME = "daily"
+    LOG_SOURCE = "一条龙"
     RUN_LABEL = "▶  开始一条龙"
 
     # 各子任务「就绪」所需的区域/模板（与各任务页保持一致；仅用于状态显示）
@@ -2545,12 +2595,11 @@ class DailyPage(ctk.CTkFrame):
         net.pack(fill="x", pady=(5, 0))
         bind_wraplength(net)
 
-    # ---- 主体：左任务清单 + 右日志 ----
+    # ---- 主体：任务清单（铺满；日志已移到全局右栏）----
     def _build_body(self):
         body = ctk.CTkFrame(self, fg_color="transparent")
         body.grid(row=2, column=0, sticky="nsew", padx=4)
-        body.grid_columnconfigure(0, weight=2, uniform="b")
-        body.grid_columnconfigure(1, weight=3, uniform="b")
+        body.grid_columnconfigure(0, weight=1)   # 日志已移到全局右栏，主体内容独占整宽
         body.grid_rowconfigure(0, weight=1)
 
         # 左：任务清单（勾选 + 调序）
@@ -2570,25 +2619,7 @@ class DailyPage(ctk.CTkFrame):
         self.list_frame.grid_columnconfigure(0, weight=1)
         T.tune_scroll_speed(self.list_frame)
 
-        # 右：日志
-        right = Card(body)
-        right.grid(row=0, column=1, sticky="nsew", padx=(7, 0))
-        right.grid_rowconfigure(1, weight=1)
-        right.grid_columnconfigure(0, weight=1)
-        rhead = ctk.CTkFrame(right, fg_color="transparent")
-        rhead.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 8))
-        rhead.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(rhead, text="运行日志", font=self.fonts["h2"], text_color=T.TEXT).grid(row=0, column=0, sticky="w")
-        ctk.CTkButton(rhead, text="清空", font=self.fonts["small"], height=26, width=56,
-                      corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
-                      border_width=1, border_color=T.BORDER,
-                      command=self._clear_log).grid(row=0, column=1, sticky="e")
-        self.log = ctk.CTkTextbox(right, font=self.fonts["mono"], fg_color=T.SURFACE_2,
-                                  text_color=T.TEXT, corner_radius=T.RADIUS_SM, wrap="word")
-        self.log.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 12))
-        T.apply_log_tags(self.log._textbox)
-        self.log.configure(state="disabled")
-        self._log_line("界面就绪。勾选要串的任务并调序；各任务的标定/演练实战请到对应任务页设置。", "info")
+        # 日志已统一到 App 右侧的全局日志面板，本页不再单独建日志框。
 
     # ------------------------------------------------------------------
     # 刷新 / 渲染
@@ -2761,19 +2792,11 @@ class DailyPage(ctk.CTkFrame):
                 self._on_runner_finished()
 
     def _log_line(self, msg, level="info"):
-        ts = datetime.datetime.now().strftime("%H:%M:%S")
-        self.log.configure(state="normal")
-        try:
-            self.log._textbox.insert("end", f"[{ts}] {msg}\n", level)
-        except Exception:
-            self.log.insert("end", f"[{ts}] {msg}\n")
-        self.log.see("end")
-        self.log.configure(state="disabled")
+        # 日志统一汇到 App 右侧全局面板，按本页 LOG_SOURCE 打来源标签。
+        self.app.log_line(msg, level, getattr(self, "LOG_SOURCE", None))
 
     def _clear_log(self):
-        self.log.configure(state="normal")
-        self.log.delete("1.0", "end")
-        self.log.configure(state="disabled")
+        self.app.clear_log()
 
 
 # ----------------------------------------------------------------------
@@ -2796,8 +2819,8 @@ class App(ctk.CTk):
         mode = self.cfg.get("appearance", "dark")
         ctk.set_appearance_mode(mode if mode in ("dark", "light") else "dark")
         self.title("梦幻 · 时空 助手")
-        self.geometry("1020x680")
-        self.minsize(940, 620)
+        self.geometry("1360x720")
+        self.minsize(1180, 640)
         self.configure(fg_color=T.BG)
 
         self.fonts = T.build_fonts()
@@ -2806,9 +2829,11 @@ class App(ctk.CTk):
         self._game_connected = None   # 缓存连接状态，只在变化时刷新药丸
         self._locating = False        # 防止多个后台定位线程叠加
 
-        self.grid_columnconfigure(1, weight=1)
+        self.grid_columnconfigure(1, weight=1)   # 中间内容区随窗口拉伸
+        self.grid_columnconfigure(2, weight=0)   # 右侧全局日志列固定宽
         self.grid_rowconfigure(0, weight=1)
         self._build_sidebar()
+        self._build_log_panel()   # 先建日志面板：各页 _log_line 都往这写，必须先于建页
         self._build_pages()
         self._show("general")
 
@@ -2850,6 +2875,68 @@ class App(ctk.CTk):
         ctk.CTkLabel(bar, text="⚠ 脚本有封号风险\n请用小号测试", font=self.fonts["small"],
                      text_color=T.WARN, justify="left").grid(row=101, column=0, sticky="sw",
                                                              padx=22, pady=18)
+
+    # ---------------- 全局日志面板（常驻右侧，所有功能共用一处）----------------
+    def _build_log_panel(self):
+        """右侧常驻日志列：各页面/任务的日志统一汇到这里，按来源（秒装备/组队/整理背包…）打标签。
+        以前每个页面各有一个日志框，功能一多就散乱；现在收敛成这一处，谁产生的日志靠行首来源标签区分。"""
+        panel = ctk.CTkFrame(self, fg_color=T.SIDEBAR, corner_radius=0, width=340)
+        panel.grid(row=0, column=2, sticky="nsew")
+        panel.grid_propagate(False)
+        panel.grid_columnconfigure(0, weight=1)
+        panel.grid_rowconfigure(1, weight=1)
+
+        head = ctk.CTkFrame(panel, fg_color="transparent")
+        head.grid(row=0, column=0, sticky="ew", padx=14, pady=(16, 8))
+        head.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(head, text="运行日志", font=self.fonts["h2"], text_color=T.TEXT).grid(
+            row=0, column=0, sticky="w")
+        ctk.CTkButton(head, text="清空", font=self.fonts["small"], height=26, width=56,
+                      corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
+                      border_width=1, border_color=T.BORDER,
+                      command=self.clear_log).grid(row=0, column=1, sticky="e")
+
+        self.log = ctk.CTkTextbox(panel, font=self.fonts["mono"], fg_color=T.SURFACE_2,
+                                  text_color=T.TEXT, corner_radius=T.RADIUS_SM, wrap="word")
+        self.log.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 14))
+        T.apply_log_tags(self.log._textbox)
+        self.log.configure(state="disabled")
+        self.log_line("界面就绪。各功能的日志都会汇总到这里。", "info")
+
+    def log_line(self, msg, level="info", source=None):
+        """统一日志出口（所有页面/任务都调它）。source 非空时在行首加暗色来源标签，如「秒装备 ›」。
+        超过约 2000 行就裁掉最旧的，避免长时间运行把内存吃满。"""
+        log = getattr(self, "log", None)
+        if log is None:
+            return
+        ts = datetime.datetime.now().strftime("%H:%M:%S")
+        log.configure(state="normal")
+        try:
+            tb = log._textbox
+            tb.insert("end", f"[{ts}] ")
+            if source:
+                tb.insert("end", f"{source} › ", "src")
+            tb.insert("end", f"{msg}\n", level)
+            # 行数封顶：删掉最旧的若干行（int(index) 是行号，含末尾空行）
+            try:
+                nlines = int(tb.index("end-1c").split(".")[0])
+                if nlines > 2000:
+                    tb.delete("1.0", f"{nlines - 1800}.0")
+            except Exception:
+                pass
+        except Exception:
+            prefix = f"{source} › " if source else ""
+            log.insert("end", f"[{ts}] {prefix}{msg}\n")
+        log.see("end")
+        log.configure(state="disabled")
+
+    def clear_log(self):
+        log = getattr(self, "log", None)
+        if log is None:
+            return
+        log.configure(state="normal")
+        log.delete("1.0", "end")
+        log.configure(state="disabled")
 
     # 各页面对应的类。懒加载：启动只建默认页，其余等第一次切到才建——
     # 一次性建全部 9 个页面会瞬间绘制几百个 CTk 画布控件，正是启动「一块块慢慢刷出来」的根因。
@@ -2997,15 +3084,13 @@ class App(ctk.CTk):
         cfg["appearance"] = new
         cfg_mod.save_config(cfg)
         self.cfg = cfg
-        # 日志框走底层 tk tag_config，不随 set_appearance_mode 自动变，逐页重刷
-        for k in self.RUNNABLE_KEYS:
-            p = self.pages.get(k)
-            log = getattr(p, "log", None) if p else None
-            if log is not None:
-                try:
-                    T.apply_log_tags(log._textbox)
-                except Exception:
-                    pass
+        # 日志框走底层 tk tag_config，不随 set_appearance_mode 自动变，需手动重刷这一个全局面板
+        log = getattr(self, "log", None)
+        if log is not None:
+            try:
+                T.apply_log_tags(log._textbox)
+            except Exception:
+                pass
 
     def toast(self, msg):
         """简单的右下角浮层提示。"""
