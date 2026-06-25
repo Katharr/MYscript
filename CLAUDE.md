@@ -57,7 +57,7 @@ mhxy/
     context.py  TaskContext：打包 window/mouse/cfg/log/stop_event 给任务
     runner.py   TaskRunner：后台线程跑 Task + 线程安全日志队列
     rotation.py 多开轮转推进器：连续推进到等待点才让出；详见 docstring + memory rotation-engine
-    teaming.py  TeamFormation：跨窗口组队握手编排
+    teaming.py  TeamFormation：跨窗口组队握手编排 + run_disband() 解散队伍（每号同一套退队流程）
     inventory.py InventoryOrganizer：整理背包（翻包裹逐物使用/丢弃/出售）的可复用编排，只依赖 ctx；详见 memory organize-bag-task
   tasks/  可插拔任务
     base.py     Task 基类 + 注册表（register/get_task/all_tasks）+ _make_rotation()（包多开轮转）+ dungeon_tasks()
@@ -67,6 +67,8 @@ mhxy/
     secret_realm.py  SecretRealmTask（秘境降妖）：开活动→参加→挑战→盯「进入战斗」续战，可连跑 max_runs 轮
     dungeon.py       DungeonTask（组队/一键组队）：把所选多开窗口组成一队即停（通用页「一键组队」跑它，
                       角色参数存共享 tasks.teaming）。name 仍叫 "dungeon" 仅为兼容；刷副本页跑的是选中副本而非它。
+    disband.py       DisbandTask（解散队伍/一键解散）：让所选各号都退出当前队伍（每号同一套流程，不分队长队员），
+                      复用 teaming.run_disband；通用页「一键解散」跑它，副本勾「跑完解散队伍」也调它
     taohaiqu.py      TaohaiquTask（蹈海去·50，is_dungeon=True）：组队后队长跑完整条剧情战斗，跑一遍即停
     organize_bag.py  OrganizeBagTask（整理背包）：通用页可单独跑的共享能力封装，逐号 activate→core/inventory 整理；详见 memory organize-bag-task
   tools/

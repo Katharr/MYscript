@@ -47,15 +47,19 @@ TEAM_CALIBRATION = {
         ("team_arrow", "队长ID右侧箭头(可选)", "好友列表里ID右侧的箭头按钮；在命中右侧小范围内找它。"
                                           "不标则用固定偏移兜底点击"),
         ("leader_id", "队长ID", "队员据此在好友列表定位队长，框队长名字、要独特"),
+        ("team_quit", "解散·「退出队伍」按钮", "解散队伍用：队伍面板里的「退出队伍」按钮，框按钮本身、要独特"),
     ],
     "watchlist": False,
 }
 
 # 全部模板键
-_TPL_KEYS = ["team_create", "team_apply", "team_accept", "team_apply_join", "team_arrow", "leader_id"]
+_TPL_KEYS = ["team_create", "team_apply", "team_accept", "team_apply_join", "team_arrow",
+             "leader_id", "team_quit"]
 # preflight 用：必备区域 / 必备模板（team_arrow 可选，缺失走固定偏移兜底）
 TEAM_REQUIRED_REGIONS = ["team_panel", "friend_list"]
 TEAM_REQUIRED_TEMPLATES = ["team_create", "team_apply", "team_accept", "team_apply_join", "leader_id"]
+# 解散队伍必备模板（team_button 可选——缺则跳过那一步直接找「退出队伍」）
+DISBAND_REQUIRED_TEMPLATES = ["team_quit"]
 
 # 队长状态链
 C_OPEN_TEAM = "C_OPEN_TEAM"   # 发 open_team 开队伍面板
@@ -69,6 +73,9 @@ M_OPEN_FRIEND = "M_OPEN_FRIEND"   # 发 open_friend 开好友面板
 M_FIND_LEADER = "M_FIND_LEADER"   # 滚轮找队长ID → 点右侧箭头
 M_APPLY_JOIN = "M_APPLY_JOIN"     # 点「申请入队」
 M_CLOSE = "M_CLOSE"               # 右键关好友弹窗
+# 解散队伍状态链（每号同一套流程，不分队长队员）
+D_OPEN = "D_OPEN"                 # 发 open_team 开队伍面板
+D_QUIT = "D_QUIT"                 # 找「退出队伍」→ 点击 → 右键关面板；约1s 内找不到则直接关面板
 
 
 class TeamFormation:
@@ -377,6 +384,129 @@ class TeamFormation:
         ctx.log("队员：右键关闭好友弹窗，完成。", level="hit")
         rec["ok"] = True
         rec["done"] = True
+
+    # ------------------------------------------------------------------
+    # 解散队伍（每号同一套流程，不分队长队员；用通用轮转逐号推进）
+    # ------------------------------------------------------------------
+    def run_disband(self):
+        """解散队伍：每个窗口（无论队长队员）跑同一套流程——
+        开队伍面板 → 找「退出队伍」点击 → 右键关面板；约 1s 内找不到「退出队伍」则认为本就不在队、
+        直接关面板收尾。各号独立、无号间握手，故复用通用轮转推进器（每号一份 record、走
+        同一条 D_OPEN→D_QUIT 状态链）。返回 (ok, reason)：ok=所有在场号都已退队/收尾。"""
+        multi = self.cfg.get("targets", {}).get("multi", False)
+        switch_delay = self.cfg.get("targets", {}).get("switch_delay_sec", 0.15)
+        tick = self.loop.get("tick_interval_sec", 0.5)
+        overall = self.loop.get("disband_timeout_sec", 60) or 0
+
+        if self.dry_run:
+            return self._dry_run_disband(multi, switch_delay)
+
+        records = [self._new_disband_record(rec["ctx"]) for rec in self.records]
+
+        def on_window_gone(rec):
+            if not rec["dead_logged"]:
+                rec["ctx"].log("解散：窗口不见了，跳过该号（其余继续）。", level="warn")
+                rec["dead_logged"] = True
+            rec["done"] = True
+            return "done"
+
+        def on_activate_fail(rec):
+            if not rec["fg_warned"]:
+                rec["ctx"].log("解散：未能切到前台，本轮跳过、下轮重试。", level="warn")
+                rec["fg_warned"] = True
+
+        def step_once(rec):
+            rec["fg_warned"] = False
+            self._disband_step(rec)
+
+        rc = rotation.RotationConfig(
+            records=records, step_once=step_once,
+            should_stop=self.lead.should_stop, log=self.lead.log,
+            on_window_gone=on_window_gone, on_activate_fail=on_activate_fail,
+            multi=multi, switch_delay=switch_delay, tick=tick, overall_timeout=overall,
+            timeout_msg=f"解散队伍总超时 {overall}s → 结束。",
+            jitter_ratio=self.cfg.get("humanize", {}).get("interval_jitter", 0.4))
+        rotation.run_rotation(rc)
+
+        if self.lead.should_stop():
+            return False, "stopped"
+        done_n = sum(1 for r in records if r["ok"])
+        ok = done_n >= len(records) and len(records) > 0
+        self.lead.log(f"★ 解散队伍：{done_n}/{len(records)} 个号已退队/收尾。",
+                      level="hit" if ok else "warn")
+        return ok, "disbanded" if ok else "partial"
+
+    @staticmethod
+    def _new_disband_record(wctx):
+        return {"ctx": wctx, "role": None, "state": D_OPEN, "t_state": 0.0,
+                "done": False, "ok": False, "dead_logged": False, "fg_warned": False}
+
+    def _disband_step(self, rec):
+        """按该号当前 state 推进【一小步】后立刻返回（好轮转到下一个号）。"""
+        h = {D_OPEN: self._db_open, D_QUIT: self._db_quit}.get(rec["state"])
+        if h is not None:
+            h(rec)
+
+    def _db_open(self, rec):
+        ctx = rec["ctx"]
+        if not ctx.send_hotkey("open_team"):
+            ctx.log("解散：打不开队伍界面（open_team 未配置），跳过该号。", level="error")
+            rec["done"] = True
+            return
+        ctx.log("解散：已开队伍界面，找「退出队伍」…")
+        self._sleep(self._jitter(0.6))
+        self._goto(rec, D_QUIT)
+
+    def _db_quit(self, rec):
+        ctx = rec["ctx"]
+        hit = self._find_in_region(ctx, "team_panel", "team_quit")
+        if hit is not None:
+            ctx.mouse.click(hit[0], hit[1])
+            ctx.log(f"解散：点「退出队伍」（{hit[2]:.2f}），关面板收尾。", level="hit")
+            self._sleep(self._jitter(0.5))
+            self._close_panel(ctx, "team_panel")
+            rec["ok"] = True
+            rec["done"] = True
+            return
+        # 约 1s 内没找到「退出队伍」→ 认为本就不在队，直接关面板收尾（也算成功，结果都是「不在队」）。
+        if self._elapsed(rec) > self.loop.get("disband_quit_wait_sec", 1.0):
+            ctx.log("解散：没找到「退出队伍」（可能本就不在队），直接关面板收尾。", level="warn")
+            self._close_panel(ctx, "team_panel")
+            rec["ok"] = True
+            rec["done"] = True
+
+    def _dry_run_disband(self, multi, switch_delay):
+        keys = [("team_quit", "退出队伍")]
+        self.lead.log("解散演练：对每个号识别「退出队伍」标志，验证模板/阈值，不发快捷键/不点。", level="warn")
+        rounds = 0
+        while not self.lead.should_stop() and rounds < 1000:
+            rounds += 1
+            for rec in self.records:
+                if self.lead.should_stop():
+                    break
+                ctx = rec["ctx"]
+                if ctx.window.rect() is None:
+                    continue
+                if multi:
+                    ctx.window.activate()
+                rect = ctx.window.rect()
+                scene = win_mod.grab(rect) if rect else None
+                found = []
+                for tpl_key, label in keys:
+                    tpl = self.tpl.get(tpl_key)
+                    if tpl is None or scene is None:
+                        continue
+                    hit = vision.match(scene, tpl, self.threshold)
+                    if hit is not None:
+                        found.append(f"{label}({hit[2]:.2f})")
+                if found:
+                    ctx.log("识别到：" + "、".join(found), level="hit")
+                else:
+                    ctx.log("当前屏幕未识别到退队标志（请打开队伍面板再看）。")
+                if multi and len(self.records) > 1:
+                    self._sleep(self._jitter(switch_delay))
+            self._sleep(self._jitter(1.5))
+        return True, "dry_run"
 
     # ------------------------------------------------------------------
     # 识别/点击工具

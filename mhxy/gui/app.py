@@ -1077,6 +1077,9 @@ class DungeonPage(ctk.CTkFrame):
         self.switch_skip = ctk.CTkSwitch(skip, text="已组队（跳过组队，直接开刷）", font=self.fonts["body"],
                                          progress_color=T.ACCENT, command=self._toggle_skip)
         self.switch_skip.pack(anchor="w")
+        self.switch_disband = ctk.CTkSwitch(skip, text="跑完解散队伍（所有号退队）", font=self.fonts["body"],
+                                            progress_color=T.ACCENT, command=self._toggle_disband)
+        self.switch_disband.pack(anchor="w", pady=(6, 0))
 
         hint = ctk.CTkLabel(left, text="选要跑的副本，再从已选多开窗口里指定队长（按从左到右/上到下编号），其余号自动当队员。\n"
                                "「已组队」勾上=已自行组好队，直接由队长开刷、不再组队（此时不需要组队标定）。\n"
@@ -1110,6 +1113,7 @@ class DungeonPage(ctk.CTkFrame):
         (self.switch_mode.select if not dry else self.switch_mode.deselect)()
         self._render_mode_pill(dry)
         (self.switch_skip.select if sel_tc.get("skip_team", False) else self.switch_skip.deselect)()
+        (self.switch_disband.select if sel_tc.get("auto_disband", False) else self.switch_disband.deselect)()
         self._refresh_leader_btn()
         # 先用上次已知的号数即时渲染（窗口枚举很慢，不能每次切页都同步卡住）；再后台枚举刷新号数。
         self._render_team_status()
@@ -1234,6 +1238,23 @@ class DungeonPage(ctk.CTkFrame):
             self._log_line("已勾「已组队」：本次不再组队，直接由队长开刷（确保你已自行组好队、队长在副本入口）。", "info")
         else:
             self._log_line("已取消「已组队」：恢复先组队再开刷。", "info")
+
+    def _toggle_disband(self):
+        """切「跑完解散队伍」：写进选中副本自己的命名空间。勾上=副本跑完后让所有号自动退队。
+        退队的「退出队伍」按钮在「通用」页「标定（组队）」里标（共享 teaming 命名空间）。"""
+        if not self._selected:
+            return
+        auto = bool(self.switch_disband.get())
+        cfg = cfg_mod.load_config()
+        tc = cfg_mod.task_config(cfg, self._selected)
+        tc["auto_disband"] = auto
+        cfg_mod.set_task_config(cfg, self._selected, tc)
+        cfg_mod.save_config(cfg)
+        self.app.cfg = cfg
+        if auto:
+            self._log_line("已勾「跑完解散队伍」：副本结束后所有号自动退队（需在「通用」页标定「退出队伍」按钮）。", "info")
+        else:
+            self._log_line("已取消「跑完解散队伍」：副本跑完保留队伍。", "info")
 
     def _open_leader_gallery(self):
         """打开「队长ID 库」：当前+最近3历史可切换（共享 teaming.leader_id，与通用页同步）。"""
@@ -1918,6 +1939,7 @@ class GeneralPage(ctk.CTkFrame):
         self.fonts = app.fonts
         self.cfg = app.cfg
         self.runner = None          # 一键组队跑的后台任务（DungeonTask）
+        self.runner_db = None       # 一键解散跑的后台任务（DisbandTask），与组队互斥（同用鼠标/队伍面板）
         self.runner_ob = None       # 一键整理跑的后台任务（OrganizeBagTask），与组队并存互不干扰
         self._team_cal_dialog = None    # 「标定（组队）」去重槽（队长ID 走无弹窗直接标定，无需去重槽）
         self._ob_cal_dialog = None      # 「标定（整理背包）」去重槽
@@ -1925,6 +1947,7 @@ class GeneralPage(ctk.CTkFrame):
         self.switch_ob = None       # 整理背包实战/演练开关
         self._win_count = 0         # 已选多开窗口数（resolve_targets），供状态行显示
         self.btn_team = None
+        self.btn_disband = None     # 「一键解散」按钮（_refresh_body 每次重建）
         self.btn_leader = None      # 行内队长ID按钮（_refresh_body 每次重建）
         self._leader_thumbs = []    # 行内队长ID缩略图防 GC
         self.lbl_team_status = None
@@ -1936,7 +1959,7 @@ class GeneralPage(ctk.CTkFrame):
         head = ctk.CTkFrame(self, fg_color="transparent")
         head.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         ctk.CTkLabel(head, text="通用 / 工具", font=self.fonts["title"], text_color=T.TEXT).pack(anchor="w")
-        sub = ctk.CTkLabel(head, text="跨任务的通用功能：组队标定 + 一键组队 / 还原窗口尺寸。各任务专属的标定与「选择窗口」仍在对应任务页。",
+        sub = ctk.CTkLabel(head, text="跨任务的通用功能：组队标定 + 一键组队 / 一键解散 / 还原窗口尺寸。各任务专属的标定与「选择窗口」仍在对应任务页。",
                            font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left", anchor="w")
         sub.pack(fill="x", anchor="w", pady=(4, 0))
         bind_wraplength(sub)
@@ -2044,6 +2067,12 @@ class GeneralPage(ctk.CTkFrame):
                                       corner_radius=T.RADIUS_SM, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
                                       text_color=T.ON_ACCENT, command=self._start_teaming)
         self.btn_team.pack(side="left")
+        # 一键解散：让所选各号都退出当前队伍（开队伍面板→退出队伍→关面板，每号同一套流程）
+        self.btn_disband = ctk.CTkButton(act, text="⏏  一键解散", font=self.fonts["btn"], height=40, width=130,
+                                         corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER,
+                                         text_color=T.TEXT, border_width=1, border_color=T.BORDER,
+                                         command=self._start_disband)
+        self.btn_disband.pack(side="left", padx=(8, 0))
         # 「选择窗口」带缩略图，且队长就在这里选（卡片上勾「队长」）——下拉框「号123」看不出是哪个窗口，故移进来。
         ctk.CTkButton(act, text="选择窗口/队长", font=self.fonts["body"], height=36, width=120,
                       corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
@@ -2069,6 +2098,8 @@ class GeneralPage(ctk.CTkFrame):
         self._render_team_action()
         if self.runner and self.runner.is_running():
             self.btn_team.configure(text="■  停止组队", fg_color=T.DANGER, hover_color=T.DANGER_HOVER)
+        if self.runner_db and self.runner_db.is_running():
+            self.btn_disband.configure(text="■  停止解散", fg_color=T.DANGER, hover_color=T.DANGER_HOVER)
         self._kick_count_windows()
 
         # ── 整理背包（跨任务共享：任何任务流程都可穿插调用，这里可单独一键运行）──
@@ -2308,6 +2339,40 @@ class GeneralPage(ctk.CTkFrame):
             self.btn_team.configure(text="▶  一键组队", fg_color=T.ACCENT,
                                     hover_color=T.ACCENT_HOVER, state="normal")
 
+    def _start_disband(self):
+        if self.runner_db and self.runner_db.is_running():
+            self.runner_db.stop()
+            self._log_line("正在停止…", "warn", "解散")
+            self.btn_disband.configure(text="停止中…", state="disabled")
+            return
+        # 强制实战（一键解散是显式动作，不走演练）。窗口在「选择窗口/队长」里选定。
+        cfg = cfg_mod.load_config()
+        tc = cfg_mod.task_config(cfg, "teaming")
+        tc["dry_run"] = False
+        cfg_mod.set_task_config(cfg, "teaming", tc)
+        cfg_mod.save_config(cfg)
+        self.app.cfg = self.cfg = cfg
+
+        task_cls = get_task("disband")
+        if task_cls is None:
+            self._log_line("找不到解散队伍任务。", "error", "解散")
+            return
+        self.runner_db = TaskRunner(task_cls(), self.app.cfg)
+        ok, problems = self.runner_db.start()
+        if not ok:
+            for p in problems:
+                self._log_line("无法开始解散：" + p, "error", "解散")
+            self.runner_db = None
+            return
+        self._log_line("开始一键解散…", "hit", "解散")
+        self.btn_disband.configure(text="■  停止解散", fg_color=T.DANGER, hover_color=T.DANGER_HOVER,
+                                   state="normal")
+
+    def _on_disband_finished(self):
+        if self.btn_disband is not None:
+            self.btn_disband.configure(text="⏏  一键解散", fg_color=T.BTN, hover_color=T.BTN_HOVER,
+                                       text_color=T.TEXT, state="normal")
+
     # ---- 由 App._tick 驱动 ----
     def pump(self):
         if self.runner:
@@ -2318,6 +2383,14 @@ class GeneralPage(ctk.CTkFrame):
             if not self.runner.is_running() and self.btn_team is not None \
                     and self.btn_team.cget("text") != "▶  一键组队":
                 self._on_team_finished()
+        if self.runner_db:
+            q = self.runner_db.log_queue
+            while not q.empty():
+                level, msg = q.get()
+                self._log_line(msg, level, "解散")
+            if not self.runner_db.is_running() and self.btn_disband is not None \
+                    and self.btn_disband.cget("text") != "⏏  一键解散":
+                self._on_disband_finished()
         if self.runner_ob:
             q = self.runner_ob.log_queue
             while not q.empty():

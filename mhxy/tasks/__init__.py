@@ -12,6 +12,7 @@ from . import treasure_map   # noqa: F401,E402
 from . import escort         # noqa: F401,E402
 from . import secret_realm   # noqa: F401,E402
 from . import dungeon        # noqa: F401,E402
+from . import disband        # noqa: F401,E402
 from . import taohaiqu       # noqa: F401,E402
 from . import organize_bag   # noqa: F401,E402
 from . import daily          # noqa: F401,E402

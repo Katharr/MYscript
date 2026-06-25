@@ -30,7 +30,8 @@ import time
 from ..core import scan
 from ..core import vision
 from ..core import window as win_mod
-from ..core.teaming import (TeamFormation, TEAM_REQUIRED_REGIONS, TEAM_REQUIRED_TEMPLATES)
+from ..core.teaming import (TeamFormation, TEAM_REQUIRED_REGIONS, TEAM_REQUIRED_TEMPLATES,
+                            DISBAND_REQUIRED_TEMPLATES)
 from .base import Task, register
 
 # 本副本自身模板键（thq_ 前缀，存盘 templates/tm_thq_*.png，避免与别的任务同名互相覆盖）。
@@ -103,6 +104,14 @@ class TaohaiquTask(Task):
                 p = team_tc.get("templates", {}).get(tk)
                 if not p or vision.load_template(p) is None:
                     problems.append(f"组队模板『{tk}』缺失 —— 请在「通用」页点「标定（组队）」裁图")
+
+        # 自动解散队伍：勾了就需要共享 teaming 的「退出队伍」模板（不论是否 skip_team）
+        if tc.get("auto_disband", False):
+            team_tc = ctx.task_cfg("teaming")
+            for tk in DISBAND_REQUIRED_TEMPLATES:
+                p = team_tc.get("templates", {}).get(tk)
+                if not p or vision.load_template(p) is None:
+                    problems.append(f"勾了「跑完解散队伍」但退队模板『{tk}』缺失 —— 请在「通用」页点「标定（组队）」框选「退出队伍」")
 
         # 副本自身模板/区域
         regions = tc.get("regions", {})
@@ -190,6 +199,16 @@ class TaohaiquTask(Task):
         # —— 第二步：队长跑副本流程 ——
         self._interruptible_sleep(ctx, self._jitter(0.8, ctx))
         self._run_dungeon(cap_child, loop, regions, threshold)
+
+        # —— 第三步（可选）：副本跑完后自动解散队伍（所有号退队，不分队长队员同一套流程）——
+        if tc.get("auto_disband", False) and not ctx.should_stop():
+            ctx.log("副本结束，自动解散队伍（所有号退队）…", level="warn")
+            self._interruptible_sleep(ctx, self._jitter(0.8, ctx))
+            team_cfg = ctx.task_cfg("teaming")
+            team = TeamFormation(ctx, assignments, team_cfg, dry_run=False)
+            ok, _ = team.run_disband()
+            if ok:
+                ctx.log("队伍已解散。", level="hit")
 
     # ------------------------------------------------------------------
     # 队长副本流程（线性、阻塞式；每个轮询里勤查 should_stop）

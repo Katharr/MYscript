@@ -296,10 +296,12 @@ DEFAULT_CONFIG = {
                 "arrow_offset_x": 28,        # 箭头没匹配到时的兜底：点「名字右边缘 + 这么多像素」处
                 "arrow_card_ratio": 2.0,     # 好友【卡片】高 ≈ 队长ID模板高的几倍（撑开找箭头的竖直带、覆盖整张卡片）
                 "arrow_leader_pos": 0.4,     # 队长ID 在卡片内的纵向位置(从顶算占比，0.4=中上)；兜底点落到卡片纵向中心而非队长ID 的 Y
+                "disband_timeout_sec": 60,   # 解散队伍整体超时（安全网）：到点仍没让所有号退完就结束
+                "disband_quit_wait_sec": 1.0,# 开队伍面板后等「退出队伍」出现的短等待：超这么久没找到就认为本就不在队、直接关面板
                 "max_stuck_recover": 3       # 连续卡死多少次就放弃该号
             },
             "regions": {                 # 相对游戏窗口 [x,y,w,h]，标定向导写入
-                "team_panel": None,      # 队伍面板区（创建队伍/申请标签页/同意 都在这片找）
+                "team_panel": None,      # 队伍面板区（创建队伍/申请标签页/同意/退出队伍 都在这片找）
                 "friend_list": None      # 好友列表区（滚轮在此翻找队长ID）
             },
             "templates": {               # 组队全局模板（标定向导裁图写入，tm_ 前缀）
@@ -308,6 +310,7 @@ DEFAULT_CONFIG = {
                 "team_accept": None,         # 「同意」按钮（切到申请页后，队员申请那行右侧，见即点）
                 "team_apply_join": None,     # 队员点队长右侧箭头后弹出的「申请入队」按钮
                 "team_arrow": None,          # 好友列表里队长ID右侧的箭头按钮（在命中右侧小范围内找，可选）
+                "team_quit": None,           # 解散用：「退出队伍」按钮
                 "leader_id": None            # 队长ID（队员据此在好友列表定位队长）。由 leader_history 维护：
                                              #   历史非空→恒指 templates/tm_leader_id.png，历史空→None
             },
@@ -358,6 +361,7 @@ DEFAULT_CONFIG = {
         "taohaiqu": {
             "dry_run": True,             # true=演练：不组队、不点，只识别副本+组队模板自检
             "skip_team": False,          # true=「已组队」：跳过组队握手，直接由队长跑副本流程
+            "auto_disband": False,       # true=副本跑完后自动解散队伍（所有号退队）；用共享 teaming 的退队标定
             "captain_index": 0,          # 队长是「第几号」：所选多开窗口列表里的序号(0 起)；其余号自动当队员
             "loop": {
                 "match_threshold": 0.85,     # 标志模板匹配阈值
