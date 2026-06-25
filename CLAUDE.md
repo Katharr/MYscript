@@ -49,7 +49,10 @@ mhxy/
   core/   通用基础设施（与玩法无关）
     config.py   配置读写（DEFAULT_CONFIG / load/save / task_config / set_task_config）
     window.py   GameWindow（locate/rect/activate/坐标换算）+ grab() 截图 + set_dpi_aware()
-    vision.py   load_template / save_image / match()  （兼容中文路径）
+    vision.py   load_template / save_image / match() / frame_diff()（兼容中文路径）
+    scan.py     通用「滚动查找」scroll_search()：翻列表/翻包裹找目标的统一底层。先滚到顶→逐屏向下→
+                帧差判到底(滚不动=整段翻完)→max_tries 兜底。命中动作交 probe 回调返三态 ACCEPT/SCROLL/STAY。
+                六处滚动查找(宝图活动列表+背包/运镖/秘境/蹈海去/组队找队长)全接入；判到底阈值=loop.scroll_end_diff(小=保守)
     input.py    Mouse 类：SendInput 底层 + human_move/click/sleep/maybe_idle
     context.py  TaskContext：打包 window/mouse/cfg/log/stop_event 给任务
     runner.py   TaskRunner：后台线程跑 Task + 线程安全日志队列

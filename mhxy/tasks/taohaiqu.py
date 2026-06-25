@@ -26,6 +26,7 @@
 
 import time
 
+from ..core import scan
 from ..core import vision
 from ..core import window as win_mod
 from ..core.teaming import (TeamFormation, TEAM_REQUIRED_REGIONS, TEAM_REQUIRED_TEMPLATES)
@@ -253,33 +254,42 @@ class TaohaiquTask(Task):
         ctx.log("已打开活动，翻找蹈海去卡片…")
         self._interruptible_sleep(ctx, self._jitter(0.6, ctx))
         list_region = regions.get("activity_list")
-        max_tries = max(1, loop.get("scroll_max_tries", 8))
-        settle = loop.get("scroll_settle_sec", 0.35)
-        scrolls = 0
-        while not ctx.should_stop():
+
+        def grab_rect():
             rect = (ctx.window.region_to_screen_rect(list_region)
                     if list_region else ctx.window.rect())
-            if rect is None:
-                return False
-            scene = win_mod.grab(rect)
+            return rect
+
+        def probe(scene, rect):
             hit = vision.match(scene, self.flags.get("thq_entry"), threshold) if scene is not None else None
-            if hit is not None:
-                entry_xy = (rect[0] + hit[0], rect[1] + hit[1])
-                join = self._find_join_on_row(ctx, list_region, entry_xy, threshold, loop)
-                if join is not None:
-                    ctx.mouse.click(join[0], join[1])
-                    ctx.log(f"找到蹈海去卡片（{hit[2]:.3f}）→ 点「参加」（{join[2]:.3f}），等寻路到 NPC。", level="hit")
-                    self._interruptible_sleep(ctx, self._jitter(0.5, ctx))
-                    return True
-                ctx.log("认出卡片但没找到右侧「参加」（检查 thq_join 模板/阈值）。", level="warn")
-            else:
-                cx_c, cy_c = rect[0] + rect[2] // 2, rect[1] + rect[3] // 2
-                ctx.mouse.scroll(loop.get("scroll_step", -3), cx_c, cy_c)
-            scrolls += 1
-            if scrolls > max_tries:
-                ctx.log("翻找蹈海去卡片多次未果，中止。", level="error")
-                return False
-            self._interruptible_sleep(ctx, self._jitter(settle, ctx))
+            if hit is None:
+                return scan.SCROLL, None
+            entry_xy = (rect[0] + hit[0], rect[1] + hit[1])
+            join = self._find_join_on_row(ctx, list_region, entry_xy, threshold, loop)
+            if join is not None:
+                ctx.mouse.click(join[0], join[1])
+                ctx.log(f"找到蹈海去卡片（{hit[2]:.3f}）→ 点「参加」（{join[2]:.3f}），等寻路到 NPC。", level="hit")
+                return scan.ACCEPT, join
+            ctx.log("认出卡片但没找到右侧「参加」（检查 thq_join 模板/阈值）。", level="warn")
+            return scan.STAY, None
+
+        res = scan.scroll_search(
+            grab_rect=grab_rect, probe=probe, mouse=ctx.mouse,
+            should_stop=ctx.should_stop,
+            sleep=lambda s: self._interruptible_sleep(ctx, self._jitter(s, ctx)),
+            scroll_step=loop.get("scroll_step", -3),
+            max_tries=max(1, loop.get("scroll_max_tries", 8)),
+            settle_sec=loop.get("scroll_settle_sec", 0.35),
+            reset_to_top=loop.get("scroll_reset_top", True),
+            end_diff=loop.get("scroll_end_diff", 2.0),
+            reset_max=loop.get("scroll_reset_max", 20),
+            log=ctx.log, label="活动列表")
+        if res.found:
+            self._interruptible_sleep(ctx, self._jitter(0.5, ctx))
+            return True
+        if res.stopped:
+            return False
+        ctx.log("翻找蹈海去卡片多次未果，中止。", level="error")
         return False
 
     # ---- 点蹈海去「进入」：几个进入长得一样，只在比例框 enter_box 里找（靠位置区分）----

@@ -54,6 +54,14 @@ def match(scene_bgr, template_bgr, threshold):
     return None
 
 
+def frame_diff(a, b):
+    """两帧平均像素绝对差。形状不一致返回大值（视为仍在变化/不静止）。
+    用于「画面是否静止」和「列表滚不动了=到顶/到底」判定。"""
+    if a is None or b is None or a.shape != b.shape:
+        return 999.0
+    return float(np.abs(a.astype(np.int16) - b.astype(np.int16)).mean())
+
+
 def best_score(scene_bgr, template_bgr):
     """诊断用：返回 template 在 scene 里的【最高匹配分】(不卡阈值)及命中中心 (score, (cx, cy))。
     尺寸不符/空图返回 (0.0, None)。用来判断「模板根本不在画面里(分很低)」还是「在画面里但阈值太高」。"""

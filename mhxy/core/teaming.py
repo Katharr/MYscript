@@ -30,6 +30,7 @@ import random
 from . import vision
 from . import window as win_mod
 from . import rotation
+from . import scan
 
 
 # 组队标定 spec（单一真相源；calibrate_dialog 与 DungeonTask 都引用，避免漂移）
@@ -302,7 +303,7 @@ class TeamFormation:
         self._goto(rec, M_FIND_LEADER)
 
     def _mem_find(self, rec):
-        """滚轮找队长ID（内部 while 一气呵成跑完，不在搜索中途轮转别的号）。
+        """滚轮找队长ID（走通用 scan.scroll_search：先滚到顶→逐屏向下→帧差判到底/max_tries 兜底）。
         命中后点其右侧箭头按钮 → 进申请入队。翻完/超时仍找不到则放弃该号（不拖累其他队员）。"""
         ctx = rec["ctx"]
         leader_tpl = self.tpl.get("leader_id")
@@ -310,40 +311,51 @@ class TeamFormation:
             ctx.log("队员：leader_id 模板未标定，放弃该号。", level="error")
             rec["done"] = True
             return
-        max_tries = max(1, self.loop.get("scroll_max_tries", 10))
-        settle = self.loop.get("scroll_settle_sec", 0.35)
         deadline = rec["t_state"] + self.loop.get("find_leader_timeout_sec", 60)
-        while not self.lead.should_stop():
-            rect = self._region_rect(ctx, "friend_list")
-            if rect is None:
-                rec["done"] = True
-                return
-            scene = win_mod.grab(rect)
+
+        def probe(scene, rect):
             hit = vision.match(scene, leader_tpl, self.threshold) if scene is not None else None
-            if hit is not None:
-                lx, ly, score = rect[0] + hit[0], rect[1] + hit[1], hit[2]
-                arrow = self._find_arrow_on_row(ctx, "friend_list", (lx, ly))
-                if arrow is None:        # 仅当区域取不到（窗口没了）才会是 None
-                    rec["done"] = True
-                    return
-                ctx.mouse.click(arrow[0], arrow[1])
-                if arrow[2] > 0:
-                    ctx.log(f"队员：找到队长（{score:.2f}）→ 点右侧箭头（{arrow[2]:.2f}），准备申请入队。", level="hit")
-                else:
-                    ctx.log(f"队员：找到队长（{score:.2f}）→ 行内没匹配到箭头模板，按右侧固定偏移兜底点击。",
-                            level="warn")
-                self._sleep(self._jitter(0.5))
-                self._goto(rec, M_APPLY_JOIN)
-                return
+            if hit is None:
+                return scan.SCROLL, None
+            lx, ly, score = rect[0] + hit[0], rect[1] + hit[1], hit[2]
+            arrow = self._find_arrow_on_row(ctx, "friend_list", (lx, ly))
+            if arrow is None:        # 仅当区域取不到（窗口没了）才会是 None → 不滚，交下一轮 grab_rect=None 收尾
+                return scan.STAY, None
+            ctx.mouse.click(arrow[0], arrow[1])
+            if arrow[2] > 0:
+                ctx.log(f"队员：找到队长（{score:.2f}）→ 点右侧箭头（{arrow[2]:.2f}），准备申请入队。", level="hit")
             else:
-                cx_c, cy_c = rect[0] + rect[2] // 2, rect[1] + rect[3] // 2
-                ctx.mouse.scroll(self.loop.get("scroll_step", -3), cx_c, cy_c)
-            rec["scrolls"] += 1
-            if rec["scrolls"] > max_tries or time.time() > deadline:
+                ctx.log(f"队员：找到队长（{score:.2f}）→ 行内没匹配到箭头模板，按右侧固定偏移兜底点击。",
+                        level="warn")
+            self._sleep(self._jitter(0.5))
+            return scan.ACCEPT, arrow
+
+        res = scan.scroll_search(
+            grab_rect=lambda: self._region_rect(ctx, "friend_list"),
+            probe=probe,
+            mouse=ctx.mouse,
+            should_stop=lambda: self.lead.should_stop() or time.time() > deadline,
+            sleep=lambda s: self._sleep(self._jitter(s)),
+            scroll_step=self.loop.get("scroll_step", -3),
+            max_tries=max(1, self.loop.get("scroll_max_tries", 10)),
+            settle_sec=self.loop.get("scroll_settle_sec", 0.35),
+            reset_to_top=self.loop.get("scroll_reset_top", True),
+            end_diff=self.loop.get("scroll_end_diff", 2.0),
+            reset_max=self.loop.get("scroll_reset_max", 20),
+            log=ctx.log,
+            label="好友列表",
+        )
+        if res.found:
+            self._goto(rec, M_APPLY_JOIN)
+        elif self.lead.should_stop():
+            return            # 手动停止，保留状态
+        else:                 # exhausted / 超时 / 窗口没了 → 放弃该号
+            # 超时被折进 should_stop 后 scan 返回 stopped，故先单独判超时，避免这条提示被吞掉。
+            if time.time() > deadline:
+                ctx.log("队员：找队长ID超时，放弃该号。", level="warn")
+            elif res.outcome != "stopped":
                 ctx.log("队员：翻找队长ID多次未果，放弃该号。", level="warn")
-                rec["done"] = True
-                return
-            self._sleep(self._jitter(settle))
+            rec["done"] = True
 
     def _mem_apply(self, rec):
         ctx = rec["ctx"]

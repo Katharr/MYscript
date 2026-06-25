@@ -31,6 +31,7 @@ import time
 from ..core import vision
 from ..core import window as win_mod
 from ..core import rotation
+from ..core import scan
 from .base import Task, register
 
 # 每个号的状态机状态（非阻塞：每访问一次只推进一步）
@@ -272,38 +273,44 @@ class TreasureMapTask(Task):
     #   故用内部 while 把整段查找做完再返回；每滚一屏后自等 scroll_settle_sec 让画面落定。仍勤查 should_stop。
     def _do_find_card(self, ctx, rec, loop, regions, threshold):
         list_region = regions.get("activity_list")
-        max_tries = max(1, loop.get("scroll_max_tries", 8))
-        settle = loop.get("scroll_settle_sec", 0.35)
-        while not ctx.should_stop():
-            rect = (ctx.window.region_to_screen_rect(list_region)
+
+        def grab_rect():
+            return (ctx.window.region_to_screen_rect(list_region)
                     if list_region else ctx.window.rect())
-            if rect is None:
-                return
-            scene = win_mod.grab(rect)
+
+        def probe(scene, rect):
             hit = (vision.match(scene, self.flags.get("flag_treasure_entry"), threshold)
                    if scene is not None else None)
-            if hit is not None:
-                cx, cy, score = hit
-                entry_xy = (rect[0] + cx, rect[1] + cy)
-                join = self._find_join_on_row(ctx, list_region, entry_xy, threshold, loop)
-                if join is not None:
-                    ctx.mouse.click(join[0], join[1])
-                    ctx.log(f"找到「宝图任务」（{score:.3f}）→ 点「参加」（{join[2]:.3f}），开始传送找 NPC。",
-                            level="hit")
-                    self._goto(rec, S_DIALOG)
-                    return
-                ctx.log("认出「宝图任务」但没找到右侧「参加」（检查 flag_join 模板/阈值）。", level="warn")
-                # 认出条目但没找到参加：不滚动（会滚走目标），原地重试，超次数交给恢复
-            else:
-                # 没找到：在列表中心向下滚一屏
-                cx_c, cy_c = rect[0] + rect[2] // 2, rect[1] + rect[3] // 2
-                ctx.mouse.scroll(loop.get("scroll_step", -3), cx_c, cy_c)
-            rec["scrolls"] += 1
-            if rec["scrolls"] > max_tries:
-                ctx.log("活动列表里翻找「宝图任务」多次未果。", level="warn")
-                self._recover_window(ctx, rec, loop, regions)
-                return
-            self._interruptible_sleep(ctx, self._jitter(settle, ctx))
+            if hit is None:
+                return (scan.SCROLL, None)
+            entry_xy = (rect[0] + hit[0], rect[1] + hit[1])
+            join = self._find_join_on_row(ctx, list_region, entry_xy, threshold, loop)
+            if join is not None:
+                ctx.mouse.click(join[0], join[1])
+                ctx.log(f"找到「宝图任务」（{hit[2]:.3f}）→ 点「参加」（{join[2]:.3f}），开始传送找 NPC。",
+                        level="hit")
+                return (scan.ACCEPT, join)
+            ctx.log("认出「宝图任务」但没找到右侧「参加」（检查 flag_join 模板/阈值）。", level="warn")
+            return (scan.STAY, None)
+
+        res = scan.scroll_search(
+            grab_rect=grab_rect, probe=probe, mouse=ctx.mouse,
+            should_stop=ctx.should_stop,
+            sleep=lambda s: self._interruptible_sleep(ctx, self._jitter(s, ctx)),
+            scroll_step=loop.get("scroll_step", -3),
+            max_tries=max(1, loop.get("scroll_max_tries", 8)),
+            settle_sec=loop.get("scroll_settle_sec", 0.35),
+            reset_to_top=loop.get("scroll_reset_top", True),
+            end_diff=loop.get("scroll_end_diff", 2.0),
+            reset_max=loop.get("scroll_reset_max", 20),
+            log=ctx.log, label="活动列表")
+        if res.found:
+            self._goto(rec, S_DIALOG)
+            return
+        if res.stopped:
+            return
+        ctx.log("活动列表里翻找「宝图任务」多次未果。", level="warn")
+        self._recover_window(ctx, rec, loop, regions)
 
     # ---- 阶段 A：等对话框 → 点「听听无妨」（超时则恢复）----
     def _do_dialog(self, ctx, rec, loop, regions, threshold):
@@ -381,32 +388,39 @@ class TreasureMapTask(Task):
     #   每滚一屏后自等 scroll_settle_sec 让画面落定。仍勤查 should_stop。
     def _do_dig_find(self, ctx, rec, loop, regions, threshold):
         list_region = regions.get("bag_list")
-        max_tries = max(1, loop.get("scroll_max_tries", 8))
-        settle = loop.get("scroll_settle_sec", 0.35)
-        while not ctx.should_stop():
-            rect = (ctx.window.region_to_screen_rect(list_region)
+
+        def grab_rect():
+            return (ctx.window.region_to_screen_rect(list_region)
                     if list_region else ctx.window.rect())
-            if rect is None:
-                return
-            scene = win_mod.grab(rect)
+
+        def probe(scene, rect):
             hit = (vision.match(scene, self.flags.get("treasure_item"), threshold)
                    if scene is not None else None)
             if hit is not None:
-                cx, cy, score = hit
-                ctx.mouse.double_click(rect[0] + cx, rect[1] + cy)
-                ctx.log(f"双击使用藏宝图（{score:.3f}），自动传送挖宝。")
-                self._enter_monitor(rec, S_DIGGING)
-                return
-            # 没找到：在背包列表中心向下滚一屏
-            cx_c, cy_c = rect[0] + rect[2] // 2, rect[1] + rect[3] // 2
-            ctx.mouse.scroll(loop.get("scroll_step", -3), cx_c, cy_c)
-            rec["scrolls"] += 1
-            if rec["scrolls"] > max_tries:
-                ctx.log("背包已无藏宝图 → 全部挖完，关上背包。", level="hit")
-                self._close_bag(ctx)
-                rec["done"] = True
-                return
-            self._interruptible_sleep(ctx, self._jitter(settle, ctx))
+                ctx.mouse.double_click(rect[0] + hit[0], rect[1] + hit[1])
+                ctx.log(f"双击使用藏宝图（{hit[2]:.3f}），自动传送挖宝。")
+                return (scan.ACCEPT, hit)
+            return (scan.SCROLL, None)
+
+        res = scan.scroll_search(
+            grab_rect=grab_rect, probe=probe, mouse=ctx.mouse,
+            should_stop=ctx.should_stop,
+            sleep=lambda s: self._interruptible_sleep(ctx, self._jitter(s, ctx)),
+            scroll_step=loop.get("scroll_step", -3),
+            max_tries=max(1, loop.get("scroll_max_tries", 8)),
+            settle_sec=loop.get("scroll_settle_sec", 0.35),
+            reset_to_top=loop.get("scroll_reset_top", True),
+            end_diff=loop.get("scroll_end_diff", 2.0),
+            reset_max=loop.get("scroll_reset_max", 20),
+            log=ctx.log, label="背包")
+        if res.found:
+            self._enter_monitor(rec, S_DIGGING)
+            return
+        if res.stopped:
+            return
+        ctx.log("背包已无藏宝图 → 全部挖完，关上背包。", level="hit")
+        self._close_bag(ctx)
+        rec["done"] = True
 
     # ---- 阶段 B：挖宝监控（盯「下一张使用」续挖；长时间无弹窗且静止→这批挖完，回开背包确认）----
     def _do_digging(self, ctx, rec, loop, regions, threshold):
