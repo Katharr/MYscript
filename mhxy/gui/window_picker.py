@@ -30,11 +30,15 @@ except Exception:  # PIL 缺失时降级为无缩略图
 class WindowPickerDialog(ctk.CTkToplevel):
     THUMB_H = 84   # 缩略图高度（像素），宽按窗口宽高比缩放
 
-    def __init__(self, app, on_done=None):
+    def __init__(self, app, on_done=None, captain_ns=None):
+        """captain_ns: 不为 None 时，多开模式下每张窗口卡多一个「队长」单选——直接在带缩略图的
+        卡片上指定哪个号当队长（解决下拉框「号123」看不出是哪个窗口的问题）。确定时把队长在
+        所选窗口里的序号写入 cfg.tasks.<captain_ns>.captain_index（如组队走 captain_ns="teaming"）。"""
         super().__init__(app)
         self.app = app
         self.fonts = app.fonts
         self.on_done = on_done
+        self.captain_ns = captain_ns
 
         self.cfg = cfg_mod.load_config()
         self.targets = dict(self.cfg.get("targets", {}))
@@ -46,6 +50,8 @@ class WindowPickerDialog(ctk.CTkToplevel):
         self._multi = bool(self.targets.get("multi", False))
         self._single_var = ctk.IntVar(value=int(self.targets.get("single_index", 0) or 0))
         self._multi_vars = {}    # index -> BooleanVar
+        self._captain_var = ctk.IntVar(value=0)   # 队长的【绝对窗口序号】(0起)；仅 captain_ns 时用
+        self._captain_inited = False
 
         self.title("选择窗口")
         self.geometry("560x600")
@@ -73,8 +79,11 @@ class WindowPickerDialog(ctk.CTkToplevel):
         top = ctk.CTkFrame(self, fg_color="transparent")
         top.grid(row=0, column=0, sticky="ew", padx=20, pady=(16, 6))
         ctk.CTkLabel(top, text="选择窗口", font=self.fonts["title"], text_color=T.TEXT).pack(anchor="w")
-        sub = ctk.CTkLabel(top, text="单开选 1 个号，多开勾多个号轮流操作。号按屏幕从左到右编号。"
-                              "检测区可在「标定」里留空＝整窗，无需框大区域。",
+        base_hint = ("单开选 1 个号，多开勾多个号轮流操作。号按屏幕从左到右编号。"
+                     "检测区可在「标定」里留空＝整窗，无需框大区域。")
+        if self.captain_ns:
+            base_hint += "  组队请用「多开」，并在要当队长的那个号上勾「队长」。"
+        sub = ctk.CTkLabel(top, text=base_hint,
                      font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
         sub.pack(fill="x", pady=(4, 0))
         T.bind_wraplength(sub)
@@ -189,6 +198,15 @@ class WindowPickerDialog(ctk.CTkToplevel):
             self._single_var.set(0)
         sel_multi = set(self.targets.get("multi_indices") or [])
 
+        # 队长初值：把存的 captain_index（所选窗口里的序号）映射回【绝对窗口序号】，只算一次。
+        if self.captain_ns and not self._captain_inited:
+            team_tc = cfg_mod.task_config(self.cfg, self.captain_ns)
+            ci = int(team_tc.get("captain_index", 0) or 0)
+            sel = sorted(sel_multi) if sel_multi else list(range(len(self._wins)))
+            cap_abs = sel[ci] if 0 <= ci < len(sel) else (sel[0] if sel else 0)
+            self._captain_var.set(cap_abs)
+            self._captain_inited = True
+
         for i, (w, rect, thumb) in enumerate(self._wins):
             card = ctk.CTkFrame(self.body, fg_color=T.SURFACE, corner_radius=T.RADIUS_SM,
                                 border_width=1, border_color=T.BORDER)
@@ -236,6 +254,12 @@ class WindowPickerDialog(ctk.CTkToplevel):
                 ttl_lbl.pack(fill="x")
                 T.bind_wraplength(ttl_lbl)
 
+            # 队长单选（仅在带缩略图的卡上直接指定）——多开 + 需要选队长时才出现
+            if self.captain_ns and self._multi:
+                ctk.CTkRadioButton(card, text="队长", width=24, variable=self._captain_var, value=i,
+                                   font=self.fonts["small"], fg_color=T.ACCENT,
+                                   hover_color=T.ACCENT_HOVER).grid(row=0, column=3, padx=(6, 12))
+
         # 尺寸一致性提示（多开共用一套标定要求同尺寸）
         sizes = {(r[2], r[3]) for _, r, _ in self._wins if r}
         warn = "" if len(sizes) <= 1 else "  ⚠ 窗口尺寸不一致，多开共用标定可能点错，建议统一分辨率"
@@ -245,15 +269,27 @@ class WindowPickerDialog(ctk.CTkToplevel):
     # ------------------------------------------------------------------
     def _confirm(self):
         self.targets["multi"] = self._multi
+        captain_index = None
         if self._multi:
-            idxs = [i for i, v in self._multi_vars.items() if v.get()]
-            # 没勾任何号 → 视为「全部」（存空列表，运行时取全部）
-            self.targets["multi_indices"] = sorted(idxs) if len(idxs) != len(self._wins) else []
+            idxs = sorted(i for i, v in self._multi_vars.items() if v.get())
+            if not idxs:                       # 没勾任何号 → 视为「全部」
+                idxs = list(range(len(self._wins)))
+            # 存空列表＝运行时取全部；否则存所选绝对序号
+            self.targets["multi_indices"] = idxs if len(idxs) != len(self._wins) else []
+            if self.captain_ns:
+                cap_abs = self._captain_var.get()
+                if cap_abs not in idxs:        # 队长没在所选里 → 落到第一个所选号
+                    cap_abs = idxs[0] if idxs else 0
+                captain_index = idxs.index(cap_abs) if cap_abs in idxs else 0
         else:
             self.targets["single_index"] = int(self._single_var.get())
         # 读盘再写，避免覆盖其它地方刚改的配置
         cfg = cfg_mod.load_config()
         cfg["targets"] = {**cfg.get("targets", {}), **self.targets}
+        if captain_index is not None:
+            team_tc = cfg_mod.task_config(cfg, self.captain_ns)
+            team_tc["captain_index"] = captain_index
+            cfg_mod.set_task_config(cfg, self.captain_ns, team_tc)
         cfg_mod.save_config(cfg)
         self.app.cfg = cfg
         self._close()

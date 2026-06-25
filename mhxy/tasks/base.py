@@ -39,10 +39,18 @@ def all_tasks():
     return list(_REGISTRY.values())
 
 
+def dungeon_tasks():
+    """按注册顺序返回所有「副本」任务类（is_dungeon=True）。
+    刷副本页据此自动列出可选副本——新增副本只需在任务类上标 is_dungeon=True 即自动出现，
+    GUI 不用改。以后做「连续刷多个副本」时也以此为候选清单。"""
+    return [c for c in _REGISTRY.values() if getattr(c, "is_dungeon", False)]
+
+
 class Task:
     name = "base"          # 唯一标识（英文，作为 config.tasks 的键）
     title = "基础任务"      # 界面显示名
     description = ""        # 一句话说明
+    is_dungeon = False      # True=可在「刷副本」页被当作一个副本选中运行（见 dungeon_tasks）
 
     # 标定向导（calibrate_dialog）按此 spec 驱动渲染。子类覆盖：
     #   {"regions":  [(key, 显示名, 说明), ...],     # 框选区域，写入 tc["regions"][key]

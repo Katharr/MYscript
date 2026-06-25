@@ -1,27 +1,32 @@
 # -*- coding: utf-8 -*-
 """
-刷副本（第一版：只做组队）。
+组队（一键组队）。
 
-刷副本至少 3 人，第一版用 1 大号带 N 小号：在 GUI 指定一个号当队长、其余当队员，
-自动完成组队（队长建队→队员申请→队长接受→双方关窗），组队成功即结束（副本内战斗流程下一版做）。
+把「队长建队→队员申请→队长接受→双方关窗」这套组队握手单独做成一个可运行动作：
+在「通用 / 工具」页选好谁当队长、点「一键组队」即把所选多开窗口组成一队（建好即停）。
+任何副本本身都先组队再跑，这里只是把「单纯组个队」抽出来方便手动用。
 
-组队逻辑全在可复用的 core.teaming.TeamFormation 里（未来师门/帮派等任务都可复用）；
+组队逻辑全在可复用的 core.teaming.TeamFormation 里（副本/师门/帮派等都复用同一套）；
 本任务只负责：校验前置条件、按 captain_index 给所选窗口分配角色、把活儿交给 TeamFormation。
 
-组队的标定（模板/区域）走共享命名空间 tasks.teaming（GUI「标定（组队）」按钮）；
-本任务自身只存角色参数（captain_index / dry_run）在 tasks.dungeon。
+组队的标定（模板/区域）以及本动作的角色参数（captain_index / dry_run）都放共享命名空间
+tasks.teaming——组队是跨任务共享能力，参数也随它走，与具体副本解耦。
+（注意：任务名仍是 "dungeon" 只为兼容历史 get_task("dungeon")；「刷副本」页本身改成副本中枢，
+不再运行本任务，而是运行被选中的副本，见 gui/app.py DungeonPage。）
 """
 
 from ..core import vision
 from ..core.teaming import (TeamFormation, TEAM_REQUIRED_REGIONS, TEAM_REQUIRED_TEMPLATES)
 from .base import Task, register
 
+_PARAM_NS = "teaming"   # 角色参数（captain_index/dry_run）与组队标定共用 teaming 命名空间
+
 
 @register
 class DungeonTask(Task):
     name = "dungeon"
-    title = "刷副本"
-    description = "第一版：1 大号带 N 小号自动组队（队长建队→队员申请→接受→关窗），组队成功即结束"
+    title = "组队"
+    description = "把所选多开窗口自动组成一队（队长建队→队员申请→接受→关窗），组队成功即结束"
 
     # 本任务自身无标定项——组队资产标定走共享 teaming 命名空间（GUI 的「标定（组队）」按钮）
     CALIBRATION = {"regions": [], "templates": [], "watchlist": False}
@@ -32,13 +37,13 @@ class DungeonTask(Task):
         targets = ctx.cfg.get("targets", {})
         wins = ctx.select_windows()
         if not targets.get("multi"):
-            problems.append("刷副本组队需多开模式：请在「选择窗口」切到多开并选 3~5 个号")
-        if len(wins) < 3:
-            problems.append(f"组队至少 3 人，当前选中 {len(wins)} 个号（1 大号带≥2 小号）")
+            problems.append("组队需多开模式：请在「选择窗口」切到多开并选 2~5 个号")
+        if len(wins) < 2:
+            problems.append(f"组队至少 2 人，当前选中 {len(wins)} 个号（队长+≥1 队员）")
         elif len(wins) > 5:
             problems.append(f"最多 5 人，当前选中 {len(wins)} 个号，请减少")
 
-        dc = ctx.task_cfg(self.name)
+        dc = ctx.task_cfg(_PARAM_NS)
         cap = dc.get("captain_index", 0)
         if wins and not (0 <= cap < len(wins)):
             problems.append(f"队长序号 号{cap + 1} 越界（共 {len(wins)} 个号），请在下拉框重选队长")
@@ -67,12 +72,12 @@ class DungeonTask(Task):
 
     # ------------------------------------------------------------------
     def run(self, ctx):
-        dc = ctx.task_cfg(self.name)
-        dry_run = dc.get("dry_run", True)
+        dc = ctx.task_cfg(_PARAM_NS)
+        dry_run = dc.get("dry_run", False)
         cap = dc.get("captain_index", 0)
         wins = ctx.select_windows()
-        if len(wins) < 3:
-            ctx.log("选中窗口不足 3 个，已停止。", level="error")
+        if len(wins) < 2:
+            ctx.log("选中窗口不足 2 个（组队至少队长+1 队员），已停止。", level="error")
             return
         if not (0 <= cap < len(wins)):
             cap = 0
@@ -92,7 +97,7 @@ class DungeonTask(Task):
                 member_pairs.append((child, TeamFormation.ROLE_MEMBER))
         assignments = [cap_pair] + member_pairs
 
-        ctx.log(f"★ 刷副本·组队：队长=号{cap + 1}，队员 {len(wins) - 1} 人 ★", level="warn")
+        ctx.log(f"★ 一键组队：队长=号{cap + 1}，队员 {len(wins) - 1} 人 ★", level="warn")
         if dry_run:
             ctx.log("演练模式：只对各号识别组队标志、打日志，不发快捷键/不点。", level="warn")
 
@@ -102,6 +107,6 @@ class DungeonTask(Task):
         if dry_run:
             return
         if ok:
-            ctx.log("✔ 组队完成。第一版到此结束（副本内战斗流程下一版做）。", level="hit")
+            ctx.log("✔ 组队完成。", level="hit")
         else:
             ctx.log(f"组队未完成（{reason}）。", level="warn")

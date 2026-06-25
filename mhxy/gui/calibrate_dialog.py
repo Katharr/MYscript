@@ -27,8 +27,101 @@ from ..tasks import get_task
 _VIRTUAL_SPECS = {"teaming": ("组队（全局共享）", TEAM_CALIBRATION)}
 
 
+# ----------------------------------------------------------------------
+# 「无弹窗」直接标定：供「标定队长ID」这类只标一项的快捷入口复用——点一下就直接在
+# 当前屏幕框选，不再开 CalibrateDialog 窗口。逻辑与 CalibrateDialog._grab_roi 同源
+# （藏起界面→当前屏幕框选→按落点反查参照窗口算相对坐标），抽成模块级函数共享。
+# ----------------------------------------------------------------------
+def grab_roi_on_app(app, cfg, prompt, with_crop=False, toast=None, alpha_windows=None):
+    """在【当前屏幕】框选一块区域，返回 (rel_roi, crop)；失败/取消返回 (None, None)。
+    不激活/不切前台：你把哪个号摆在前面就标到哪个，框完按落点反查参照窗口算相对坐标。
+    toast: 可选回调 toast(msg, color)；alpha_windows: 框选期间临时隐身的窗口（默认仅 app）。"""
+    title = cfg.get("window_title", "梦幻西游")
+    offset = cfg.get("window_offset", [0, 0])
+    windows = alpha_windows or (app,)
+
+    def _set_alpha(a):
+        for w in windows:
+            try:
+                w.attributes("-alpha", a)
+            except Exception:
+                pass
+
+    hint_wins = win_mod.locate_all(title, offset)
+    if not hint_wins:
+        if toast:
+            toast(f"没找到游戏窗口（标题含「{title}」），请先打开游戏。", T.WARN)
+        return None, None
+    hr = hint_wins[0].rect()
+    center = (hr[0] + hr[2] // 2, hr[1] + hr[3] // 2) if hr else None
+
+    _set_alpha(0.0)
+    try:
+        app.update_idletasks()
+    except Exception:
+        pass
+    time.sleep(0.12)
+
+    try:
+        result = select_roi_on_screen(app, prompt, around_point=center, with_crop=with_crop)
+    finally:
+        _set_alpha(1.0)
+        try:
+            app.lift()
+            app.focus_force()
+        except Exception:
+            pass
+
+    if with_crop:
+        roi_abs, crop = result
+    else:
+        roi_abs, crop = result, None
+    if roi_abs is None:
+        return None, None
+
+    cx = roi_abs[0] + roi_abs[2] // 2
+    cy = roi_abs[1] + roi_abs[3] // 2
+    ref = win_mod.window_at_point(title, offset, cx, cy)
+    wr = ref.rect() if ref else None
+    if wr is None:
+        if toast:
+            toast("框选区域不在任何游戏窗口内：请把要标的窗口移到前面，框在它的画面里。", T.WARN)
+        return None, None
+    cfg.setdefault("targets", {})["base_size"] = [wr[2], wr[3]]
+    cfg_mod.save_config(cfg)
+    rel = [roi_abs[0] - wr[0], roi_abs[1] - wr[1], roi_abs[2], roi_abs[3]]
+    return rel, crop
+
+
+def calibrate_template_direct(app, task_name, key, name, toast=None):
+    """无弹窗直接框选并裁图存成模板，写入 cfg.tasks.<task_name>.templates[key]。返回 True=已保存。
+    供「标定队长ID」按钮直接调用（task_name="teaming", key="leader_id"）。"""
+    cfg = cfg_mod.load_config()
+    rel, crop = grab_roi_on_app(app, cfg, f"框选「{name}」（会裁下来存成模板图）",
+                                with_crop=True, toast=toast)
+    if rel is None:
+        return False
+    if crop is None or crop.size == 0:
+        if toast:
+            toast("截图失败，请重试。", T.DANGER)
+        return False
+    rel_path = f"templates/tm_{key}.png"
+    if not vision.save_image(rel_path, crop):
+        if toast:
+            toast("保存模板图失败。", T.DANGER)
+        return False
+    tc = cfg_mod.task_config(cfg, task_name)
+    tc.setdefault("templates", {})[key] = rel_path
+    cfg_mod.set_task_config(cfg, task_name, tc)
+    cfg_mod.save_config(cfg)
+    return True
+
+
 class CalibrateDialog(ctk.CTkToplevel):
-    def __init__(self, app, task_name="sniper", on_done=None):
+    def __init__(self, app, task_name="sniper", on_done=None, only=None, exclude=None):
+        """only: 可选的 key 白名单——只渲染这些区域/模板项（其余隐藏）。None=渲染全部项。
+        exclude: 可选的 key 黑名单——隐藏这些项（如组队全套标定排除 leader_id，因它已被
+        「标定队长ID」按钮单独标）。only 与 exclude 写入的都是同一命名空间，多处入口天然同步。"""
         super().__init__(app)
         self.app = app
         self.fonts = app.fonts
@@ -45,6 +138,21 @@ class CalibrateDialog(ctk.CTkToplevel):
         else:
             self.spec = {"regions": [], "templates": [], "watchlist": False}
             title_name = task_name
+
+        if only:
+            only = set(only)
+            self.spec = {
+                "regions": [it for it in self.spec.get("regions", []) if it[0] in only],
+                "templates": [it for it in self.spec.get("templates", []) if it[0] in only],
+                "watchlist": False,
+            }
+        if exclude:
+            exclude = set(exclude)
+            self.spec = {
+                "regions": [it for it in self.spec.get("regions", []) if it[0] not in exclude],
+                "templates": [it for it in self.spec.get("templates", []) if it[0] not in exclude],
+                "watchlist": self.spec.get("watchlist", False),
+            }
 
         self.title(f"标定 · {title_name}")
         self.geometry("680x640")
@@ -190,62 +298,14 @@ class CalibrateDialog(ctk.CTkToplevel):
         self.item_list.grid_columnconfigure(0, weight=1)
 
     # ------------------------------------------------------------------
-    # 框选：藏起自己 -> 激活游戏 -> 截图框选 -> 复原。返回 (rel_roi, crop)
+    # 框选：藏起自己 -> 截图框选 -> 复原。返回 (rel_roi, crop)
     # ------------------------------------------------------------------
-    def _set_alpha(self, a):
-        for w in (self.app, self):
-            try:
-                w.attributes("-alpha", a)
-            except Exception:
-                pass
-
     def _grab_roi(self, prompt, with_crop=False):
-        title = self.cfg.get("window_title", "梦幻西游")
-        offset = self.cfg.get("window_offset", [0, 0])
-        # 不激活/不切前台：标定只在【当前屏幕】上框选——之前强制 activate 会把配置选中的那个号顶到
-        # 前面、盖住你真正想标的窗口（“老是和想标的不一样”）。这里不动窗口层级，框完再按
-        # “框选区域落在哪个游戏窗口”反查参照窗口来算相对坐标，所以你把哪个号摆在前面、就标到哪个。
-        hint_wins = win_mod.locate_all(title, offset)
-        if not hint_wins:
-            self._toast(f"没找到游戏窗口（标题含「{title}」），请先打开游戏。", T.WARN)
-            return None, None
-        # around_point 仅用于决定在哪块显示器弹出框选层（不改变前后层级），取任一游戏窗口中心即可。
-        hr = hint_wins[0].rect()
-        center = (hr[0] + hr[2] // 2, hr[1] + hr[3] // 2) if hr else None
-
-        self._set_alpha(0.0)
-        self.update_idletasks()
-        time.sleep(0.12)
-
-        try:
-            result = select_roi_on_screen(self.app, prompt, around_point=center, with_crop=with_crop)
-        finally:
-            self._set_alpha(1.0)
-            self.lift()
-            self.focus_force()
-
-        if with_crop:
-            roi_abs, crop = result
-        else:
-            roi_abs, crop = result, None
-        if roi_abs is None:
-            return None, None
-
-        # 用「框选区域中心落在哪个游戏窗口」定参照窗口（= 你实际标的那个号），相对坐标/基准尺寸都按它算。
-        # 多开各号同尺寸共用标定（项目约定），故框任意一个号都通用。
-        cx = roi_abs[0] + roi_abs[2] // 2
-        cy = roi_abs[1] + roi_abs[3] // 2
-        ref = win_mod.window_at_point(title, offset, cx, cy)
-        wr = ref.rect() if ref else None
-        if wr is None:
-            self._toast("框选区域不在任何游戏窗口内：请把要标的窗口移到前面，框在它的画面里。", T.WARN)
-            return None, None
-        # 记录基准尺寸：标定时的窗口尺寸即「还原尺寸」按钮要拉回的目标（与模板/点位天然一致）。
-        # base_size 在顶层 targets，单独存 self.cfg（_save() 只存 task_config）。
-        self.cfg.setdefault("targets", {})["base_size"] = [wr[2], wr[3]]
-        cfg_mod.save_config(self.cfg)
-        rel = [roi_abs[0] - wr[0], roi_abs[1] - wr[1], roi_abs[2], roi_abs[3]]
-        return rel, crop
+        # 框选逻辑抽进模块级 grab_roi_on_app（与「无弹窗直接标定」共享）：不激活/不切前台，
+        # 只在【当前屏幕】框选，框完按落点反查参照窗口算相对坐标——你把哪个号摆前面就标到哪个。
+        # 这里多传 self 让对话框自身也一并隐身，且复用 self.cfg（_save() 随后会回存 task_config）。
+        return grab_roi_on_app(self.app, self.cfg, prompt, with_crop=with_crop,
+                               toast=self._toast, alpha_windows=(self.app, self))
 
     # ---- 区域标定 ----
     def _calibrate_region(self, key, name):

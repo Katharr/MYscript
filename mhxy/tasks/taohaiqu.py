@@ -43,6 +43,7 @@ class TaohaiquTask(Task):
     name = "taohaiqu"
     title = "蹈海去·50"
     description = "组队后由队长跑完整条蹈海去(50级)副本：参加→选副本→进入→三场剧情战斗→小闹钟收尾，跑一遍即停"
+    is_dungeon = True       # 「刷副本」页收录它作为可选副本之一
 
     CALIBRATION = {
         "regions": [
@@ -72,26 +73,33 @@ class TaohaiquTask(Task):
         tc = ctx.task_cfg(self.name)
         targets = ctx.cfg.get("targets", {})
         wins = ctx.select_windows()
+        skip_team = tc.get("skip_team", False)   # 「已组队」=跳过组队，直接由队长跑副本
 
-        # 组队前提：必须多开、至少 2 个号（队长 + ≥1 队员）
-        if not targets.get("multi"):
-            problems.append("蹈海去需先组队：请在「选择窗口」切到多开并选好队长+队员（≥2 个号）")
-        if len(wins) < 2:
-            problems.append(f"组队至少 2 人（队长+队员），当前选中 {len(wins)} 个号")
+        if skip_team:
+            # 已组队：只需队长那个号能定位；不要求多开、不查组队资产
+            if not wins:
+                problems.append("没找到/没选中目标窗口 —— 请先「选择窗口」选好队长所在的号")
+        else:
+            # 组队前提：必须多开、至少 2 个号（队长 + ≥1 队员）
+            if not targets.get("multi"):
+                problems.append("蹈海去需先组队：请在「选择窗口」切到多开并选好队长+队员（≥2 个号）")
+            if len(wins) < 2:
+                problems.append(f"组队至少 2 人（队长+队员），当前选中 {len(wins)} 个号")
 
         cap = tc.get("captain_index", 0)
         if wins and not (0 <= cap < len(wins)):
             problems.append(f"队长序号 号{cap + 1} 越界（共 {len(wins)} 个号），请在下拉框重选队长")
 
-        # 组队资产（共享 teaming 命名空间）
-        team_tc = ctx.task_cfg("teaming")
-        for rk in TEAM_REQUIRED_REGIONS:
-            if not team_tc.get("regions", {}).get(rk):
-                problems.append(f"组队区域『{rk}』未标定 —— 请在「通用」页点「标定（组队）」框选")
-        for tk in TEAM_REQUIRED_TEMPLATES:
-            p = team_tc.get("templates", {}).get(tk)
-            if not p or vision.load_template(p) is None:
-                problems.append(f"组队模板『{tk}』缺失 —— 请在「通用」页点「标定（组队）」裁图")
+        # 组队资产（共享 teaming 命名空间）——已组队则不需要
+        if not skip_team:
+            team_tc = ctx.task_cfg("teaming")
+            for rk in TEAM_REQUIRED_REGIONS:
+                if not team_tc.get("regions", {}).get(rk):
+                    problems.append(f"组队区域『{rk}』未标定 —— 请在「通用」页点「标定（组队）」框选")
+            for tk in TEAM_REQUIRED_TEMPLATES:
+                p = team_tc.get("templates", {}).get(tk)
+                if not p or vision.load_template(p) is None:
+                    problems.append(f"组队模板『{tk}』缺失 —— 请在「通用」页点「标定（组队）」裁图")
 
         # 副本自身模板/区域
         regions = tc.get("regions", {})
@@ -107,10 +115,11 @@ class TaohaiquTask(Task):
             problems.append("缺快捷键 open_activity（如 alt+c）—— 请在设置里填")
         if not ctx.hotkeys.get("open_task"):
             problems.append("缺快捷键 open_task（任务弹窗，如 alt+y）—— 请在设置里填")
-        if not ctx.hotkeys.get("open_team"):
-            problems.append("缺快捷键 open_team（如 alt+t）—— 组队要用")
-        if not ctx.hotkeys.get("open_friend"):
-            problems.append("缺快捷键 open_friend（如 alt+f）—— 组队要用")
+        if not skip_team:
+            if not ctx.hotkeys.get("open_team"):
+                problems.append("缺快捷键 open_team（如 alt+t）—— 组队要用")
+            if not ctx.hotkeys.get("open_friend"):
+                problems.append("缺快捷键 open_friend（如 alt+f）—— 组队要用")
 
         sizes = {tuple(w.rect()[2:4]) for w in wins if w.rect()}
         if len(sizes) > 1:
@@ -125,12 +134,16 @@ class TaohaiquTask(Task):
         regions = tc["regions"]
         threshold = loop["match_threshold"]
         dry_run = tc.get("dry_run", True)
+        skip_team = tc.get("skip_team", False)   # 「已组队」=跳过组队，直接由队长跑副本
         cap = tc.get("captain_index", 0)
         self.flags = self._load_flags(tc)
 
         wins = ctx.select_windows()
-        if len(wins) < 2:
-            ctx.log("选中窗口不足 2 个（组队至少队长+1 队员），已停止。", level="error")
+        if not wins:
+            ctx.log("没找到/没选中目标窗口，已停止。", level="error")
+            return
+        if not skip_team and len(wins) < 2:
+            ctx.log("选中窗口不足 2 个（组队至少队长+1 队员）；若已自行组好队，请勾选「已组队」。", level="error")
             return
         if not (0 <= cap < len(wins)):
             cap = 0
@@ -155,20 +168,23 @@ class TaohaiquTask(Task):
             self._dry_run_selfcheck(ctx, assignments, regions, threshold)
             return
 
-        # —— 第一步：组队 ——
-        ctx.log(f"★ 蹈海去·50：先组队（队长=号{cap + 1}，队员 {len(wins) - 1} 人），再由队长跑副本 ★",
-                level="warn")
-        team_cfg = ctx.task_cfg("teaming")
-        team = TeamFormation(ctx, assignments, team_cfg, dry_run=False)
-        ok, reason = team.run_until_formed()
-        if ctx.should_stop():
-            return
-        if not ok:
-            ctx.log(f"组队未完成（{reason}），蹈海去中止。", level="error")
-            return
+        # —— 第一步：组队（已勾选「已组队」则跳过，直接由队长跑）——
+        if skip_team:
+            ctx.log(f"★ 蹈海去·50：已组队，跳过组队，直接由队长（号{cap + 1}）跑副本 ★", level="warn")
+        else:
+            ctx.log(f"★ 蹈海去·50：先组队（队长=号{cap + 1}，队员 {len(wins) - 1} 人），再由队长跑副本 ★",
+                    level="warn")
+            team_cfg = ctx.task_cfg("teaming")
+            team = TeamFormation(ctx, assignments, team_cfg, dry_run=False)
+            ok, reason = team.run_until_formed()
+            if ctx.should_stop():
+                return
+            if not ok:
+                ctx.log(f"组队未完成（{reason}），蹈海去中止。", level="error")
+                return
+            ctx.log("组队完成，队长开始跑蹈海去副本流程…", level="hit")
 
         # —— 第二步：队长跑副本流程 ——
-        ctx.log("组队完成，队长开始跑蹈海去副本流程…", level="hit")
         self._interruptible_sleep(ctx, self._jitter(0.8, ctx))
         self._run_dungeon(cap_child, loop, regions, threshold)
 
