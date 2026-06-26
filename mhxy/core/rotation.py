@@ -68,7 +68,7 @@ class RotationConfig:
 
     def __init__(self, records, step_once, should_stop, log,
                  is_done=None, get_state=None, get_ctx=None,
-                 on_window_gone=None, on_activate_fail=None,
+                 on_window_gone=None, on_activate_fail=None, between_steps=None,
                  multi=False, switch_delay=0.15, tick=0.5, overall_timeout=0,
                  timeout_msg=None, jitter_ratio=0.4, barrier_states=None,
                  max_consec_steps=12, max_consec_sec=4.0):
@@ -81,6 +81,9 @@ class RotationConfig:
         self.get_ctx = get_ctx or (lambda r: r["ctx"])
         self.on_window_gone = on_window_gone or (lambda r: "skip")
         self.on_activate_fail = on_activate_fail or (lambda r: None)
+        # 每号切前台后、推进前调用一次（钩子）。用于「检测背包满→自动整理」等与任务语义无关的
+        # 跨任务穿插动作；推进器本身不懂它做什么。默认空操作。
+        self.between_steps = between_steps or (lambda r: None)
         self.multi = multi
         self.switch_delay = switch_delay
         self.tick = tick
@@ -156,6 +159,9 @@ def run_rotation(c):
                     continue
                 if wctx.should_stop():
                     break
+            c.between_steps(rec)          # 切前台后、推进前：跨任务穿插钩子（如背包满自动整理）
+            if c.should_stop():
+                break
             _drive_until_yield(c, rec)
             if c.multi and len(active) > 1:
                 _sleep(c, _jitter(c, c.switch_delay))

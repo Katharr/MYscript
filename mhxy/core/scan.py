@@ -12,9 +12,14 @@
 判定阈值 end_diff 取**小**值（默认 2.0）偏保守：图标有动画/高亮时帧差偏高→判不到「到底」→
 退回老的 max_tries 行为（最多多滚几屏，不会误判「没货了」而提前收工）。运行日志会打印真实帧差，便于调。
 
-谁来「匹配什么、命中做什么」由调用方的 probe 回调决定，返回三态之一：
+谁来「匹配什么、命中做什么」由调用方的 probe 回调决定，返回四态之一：
   ACCEPT —— 找到并已（在 probe 内）处理完目标（点了参加/双击了道具…），结束查找、成功返回。
   SCROLL —— 当前屏没有目标，向下滚一屏继续找。
+  HANDLED—— probe 在本屏就地处理完一个目标（卖/丢/用了一件物品，**改了画面**）但还要继续找下一个：
+            【原地不滚、重新 probe 找同屏剩下的可处理物品】，只有同屏确实没有可处理物品了（probe 改返回
+            SCROLL）才往下滚一屏——即用户拍板的「卖完一件别急着滚，等同屏找不到能操作的物品时才滚一段」。
+            仍计入 max_tries 作安全网：万一动作成功但物品没消失（如「使用」类不一定消失），不会原地死循环。
+            （早期曾让 HANDLED 也滚一屏，结果每卖一件就滚一屏太着急，故改成原地续找。）
   STAY   —— 找到了主目标但次级目标还没出现（如认出条目但右侧「参加」没匹配上）：**原地不滚**重试，
             仍计入 max_tries（超了按「翻完没找到」收尾，交回调用方恢复）。避免一滚就把目标滚走。
 
@@ -30,7 +35,8 @@ from . import vision
 from . import window as win_mod
 
 ACCEPT = "accept"   # probe 已处理完目标，查找成功结束
-SCROLL = "scroll"   # 本屏没有，向下滚一屏继续
+SCROLL = "scroll"   # 本屏没有，向下滚一屏继续（probe 无副作用，可拿滚前画面判到底）
+HANDLED = "handled" # probe 就地处理完一个目标（改了画面）但要继续找：原地不滚、重 probe 找同屏剩下的，找不到才滚
 STAY = "stay"       # 主目标在、次级目标缺：原地重试不滚（仍计入 max_tries）
 
 
@@ -123,8 +129,13 @@ def scroll_search(*, grab_rect, probe, mouse, should_stop, sleep,
         if decision == SCROLL:
             cx, cy = _center(rect)
             mouse.scroll(scroll_step, cx, cy)
-            pre_scroll_scene = scene        # 记下滚前画面，下一轮和滚后对比判到底
-        else:                               # STAY：原地不滚重试，清掉「刚滚过」标记
+            # SCROLL：probe 只看没动手 → 滚前画面干净，记下它，下一轮和滚后对比判到底。
+            pre_scroll_scene = scene
+        else:                               # HANDLED / STAY：都不滚，原地重 probe，清掉「刚滚过」标记
+            # HANDLED：probe 卖/丢/用了一件物品（改了画面）→ 不滚，原地再 probe 找同屏剩下的可处理物品，
+            #   只有同屏确实没有可处理物品了（probe 返回 SCROLL）才往下滚一屏（「卖完一件别急着滚」）。
+            #   注：被动作污染的画面不会被拿来判到底——因为没记进 pre_scroll_scene（保持 None）。
+            # STAY：主目标在、次级目标缺，原地重试。两者都计入 max_tries 作安全网（见上方 tries += 1）。
             pre_scroll_scene = None
 
         tries += 1

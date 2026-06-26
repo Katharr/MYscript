@@ -35,7 +35,10 @@ DEFAULT_CONFIG = {
                                          #   客户端 exe 改名了就改这里。见 core/window.set_game_process。
     "input_backend": "sendinput",        # sendinput(底层+拟人化, 推荐) / pyautogui / pydirectinput
     "window_offset": [0, 0],             # 整体点击偏移修正 [dx, dy]
-    "hotkey_toggle": "F5",               # 全局快捷键：开始/停止 秒装备（鼠标失控时随时叫停）
+    "hotkey_stop": "ctrl+alt+F12",       # 全局【急停】组合键：游戏前台也能按，按一下立刻停止一切正在跑的任务
+                                         #   （鼠标被脚本拉着失控时随时叫停）。设置里可改修饰键(Ctrl/Alt/Shift)+主键。
+    "failsafe_corner": "top_right",      # 失控急停：任务运行时把鼠标甩到屏幕哪个角即停（独立于鼠标后端，始终生效）。
+                                         #   top_right/top_left/bottom_right/bottom_left/off(关闭)。设置里可改。
     "appearance": "dark",                # 界面外观：dark(夜间) / light(白天)，侧栏可切换
 
     # ---- 目标窗口选择（基础特性，跨任务共享）----
@@ -328,9 +331,16 @@ DEFAULT_CONFIG = {
         #   标定的区域/按钮模板/物品清单都放共享命名空间 tasks.organize_bag，与具体任务解耦。
         "organize_bag": {
             "dry_run": True,
+            "auto_organize": False,              # true=「自动整理背包」：任何走多开轮转的任务流程(运镖/宝图/秘境/副本)
+                                                 #   每轮检测一次背包满图标(bag_full_icon)，命中即自动整理一遍。
+                                                 #   全局开关，通用页可勾。用整理背包自己的 dry_run 决定真整理/只识别。
             "loop": {
                 "match_threshold": 0.85,
+                "auto_check_interval_sec": 20,   # 自动整理：同一个号两次「检测背包满」之间的最小间隔(秒)，
+                                                 #   避免每轮都截图匹配、也避免战斗/过场频繁打断
                 "open_item_click": "right",      # 打开物品操作菜单的方式：right(右键,默认)/left/double
+                                                 #   注：商会/摆摊出售固定左键点物品弹详情，不看此项
+                "step_wait_sec": 0.4,            # 出售/处理多步序列里两步之间的默认等待（如点「商会出售」后等出售窗弹出）
                 "action_settle_sec": 0.4,        # 点物品后等操作菜单/面板出现
                 "confirm_timeout_sec": 6,        # 等丢弃/出售确认弹窗的超时
                 "passes": 1,                     # 整理几遍（丢/卖后列表会变，可多遍兜底）
@@ -345,10 +355,17 @@ DEFAULT_CONFIG = {
             "templates": {
                 "use_button": None,              # 操作菜单里「使用」按钮
                 "discard_button": None,          # 「丢弃」按钮
-                "sell_button": None,             # 「出售/售卖」按钮
-                "confirm_button": None           # 丢弃/出售的「确定」确认按钮（三种动作共用）
+                "more_button": None,             # 详情面板「更多」按钮（商会/摆摊出售前若有就点，展开更多选项；可不标）
+                "shop_sell_button": None,        # 「商会出售」按钮
+                "sell_full_button": None,        # 商会出售弹窗里把数量设满的「满」按钮
+                "sell_confirm_button": None,     # 商会出售弹窗里最终确认的「出售」按钮
+                "stall_sell_button": None,       # 「摆摊出售」按钮
+                "stall_shelf_button": None,      # 摆摊出售的「本服上架」按钮
+                "sell_button": None,             # 旧·笼统「出售」单按钮（兼容旧配置；新建议用商会/摆摊出售）
+                "confirm_button": None,          # 丢弃/旧出售的「确定」确认按钮
+                "bag_full_icon": None            # 背包满时常驻屏幕上的「满」图标（自动整理靠它判背包满）
             },
-            "items": []                          # [{name, template, action}]，action ∈ "use"/"discard"/"sell"
+            "items": []                          # [{name, template, action}]，action ∈ use/discard/shop_sell/stall_sell（兼容旧 sell）
                                                  # 物品图存 templates/ob_<name>.png
         },
 

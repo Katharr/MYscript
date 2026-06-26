@@ -11,7 +11,7 @@
 """
 
 from ..core import vision
-from ..core.inventory import InventoryOrganizer
+from ..core.inventory import InventoryOrganizer, required_templates
 from .base import Task, register
 
 _NS = "organize_bag"
@@ -30,8 +30,17 @@ class OrganizeBagTask(Task):
         "templates": [
             ("use_button", "「使用」按钮", "点中物品后弹出的操作菜单里的「使用」按钮，框按钮本身、要独特"),
             ("discard_button", "「丢弃」按钮", "操作菜单里的「丢弃」按钮"),
-            ("sell_button", "「出售」按钮", "操作菜单里的「出售/售卖」按钮"),
-            ("confirm_button", "「确定」按钮", "丢弃/出售弹出的确认「确定」按钮，三种动作共用"),
+            ("more_button", "「更多」按钮", "左键点物品弹出的详情面板里的「更多」按钮（商会/摆摊出售前若有就点它展开）；没有可不标"),
+            ("shop_sell_button", "「商会出售」按钮", "详情/更多里的「商会出售」按钮"),
+            ("sell_full_button", "出售窗「满」按钮", "商会出售弹窗里把数量设到最大的「满」按钮"),
+            ("sell_confirm_button", "出售窗「出售」按钮", "商会出售弹窗里最终确认的「出售」按钮"),
+            ("stall_sell_button", "「摆摊出售」按钮", "详情/更多里的「摆摊出售」按钮"),
+            ("stall_shelf_button", "「本服上架」按钮", "摆摊出售后弹窗里的「本服上架」按钮"),
+            ("confirm_button", "「确定」按钮", "丢弃弹出的确认「确定」按钮"),
+            ("sort_button", "游戏「整理」按钮", "背包界面里游戏自带的「整理」按钮，整理流程跑完会点它把背包重新排列收拢；"
+                                          "框按钮本身、要独特。没标=不点（不影响整理）"),
+            ("bag_full_icon", "背包「满」图标", "背包满时常驻在屏幕上的那个「满」标志/红点，框它独特部分；"
+                                            "开了「自动整理背包」后，任何任务检测到它就自动整理"),
         ],
         "watchlist": False,
     }
@@ -49,13 +58,15 @@ class OrganizeBagTask(Task):
             problems.append("缺快捷键 open_bag（如 alt+e）—— 请在设置里填")
         templates = tc.get("templates", {})
         used = {it.get("action", "use") for it in items}
-        need = {"use": "use_button", "discard": "discard_button", "sell": "sell_button"}
+        seen, missing = set(), []
         for act in used:
-            key = need.get(act)
-            if key and not templates.get(key):
-                problems.append(f"用到了「{act}」动作，但其按钮模板未标定 —— 请点「标定（整理背包）」")
-        if ({"discard", "sell"} & used) and not templates.get("confirm_button"):
-            problems.append("丢弃/出售需要「确定」确认按钮模板 —— 请点「标定（整理背包）」框选")
+            for key, lbl in required_templates(act):
+                if not templates.get(key) and key not in seen:
+                    seen.add(key)
+                    missing.append(f"「{lbl}」")
+        if missing:
+            problems.append("以下动作用到的按钮模板还没标定：" + "、".join(missing)
+                            + " —— 请点「标定（整理背包）」框选")
         if not ctx.select_windows():
             problems.append("没选到任何目标窗口 —— 请先「选择窗口」")
         return (len(problems) == 0), problems

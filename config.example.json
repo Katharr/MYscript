@@ -6,7 +6,8 @@
     0,
     0
   ],
-  "hotkey_toggle": "F5",
+  "hotkey_stop": "ctrl+alt+F12",
+  "failsafe_corner": "top_right",
   "appearance": "dark",
   "targets": {
     "multi": false,
@@ -459,7 +460,8 @@
         "use_button": null,
         "discard_button": null,
         "sell_button": null,
-        "confirm_button": null
+        "confirm_button": null,
+        "sort_button": null
       },
       "items": []
     },

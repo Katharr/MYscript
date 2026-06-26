@@ -19,6 +19,8 @@ from ..tasks import get_task
 from ..tasks.base import dungeon_tasks
 from ..tasks.daily import CHAINABLE
 from ..core.teaming import TEAM_REQUIRED_REGIONS, TEAM_REQUIRED_TEMPLATES
+from ..core.inventory import required_templates
+from ..core.input import get_cursor
 
 
 # ----------------------------------------------------------------------
@@ -32,6 +34,81 @@ HOTKEY_VK = {
     "Insert": 0x2D, "Delete": 0x2E, "`(~)": 0xC0,
 }
 HOTKEY_NAMES = list(HOTKEY_VK.keys())
+
+# 全局【急停】热键 = 若干修饰键 + 一个主键（上面的功能键），存成 "ctrl+alt+F12" 这样的字符串。
+# 默认 Ctrl+Alt+F12：组合键比单键更不易和游戏内操作误撞，按一下立刻停止一切正在跑的任务。
+MODIFIER_VK = {"ctrl": 0x11, "alt": 0x12, "shift": 0x10}
+DEFAULT_STOP_HOTKEY = "ctrl+alt+F12"
+
+
+def _parse_stop_hotkey(s):
+    """'ctrl+alt+F12' -> (修饰键VK列表, 主键VK)。主键缺失/不认得返回 ([], None)。修饰键名不区分大小写。"""
+    mods, key_vk = [], None
+    for part in str(s or "").split("+"):
+        p = part.strip()
+        if not p:
+            continue
+        low = p.lower()
+        if low in MODIFIER_VK:
+            mods.append(MODIFIER_VK[low])
+            continue
+        for name, vk in HOTKEY_VK.items():
+            if name.lower() == low:
+                key_vk = vk
+                break
+    return mods, key_vk
+
+
+def _compose_stop_hotkey(ctrl, alt, shift, key):
+    """(ctrl,alt,shift 勾选 + 主键名) -> 'ctrl+alt+F12' 字符串（修饰键在前、主键在后）。"""
+    parts = []
+    if ctrl:
+        parts.append("ctrl")
+    if alt:
+        parts.append("alt")
+    if shift:
+        parts.append("shift")
+    parts.append(key)
+    return "+".join(parts)
+
+
+def _split_stop_hotkey(s):
+    """'ctrl+alt+F12' -> (ctrl:bool, alt:bool, shift:bool, 主键名)，供设置 UI 回填；主键认不得回退 F12。"""
+    mods, key_vk = _parse_stop_hotkey(s)
+    key = "F12"
+    for name, vk in HOTKEY_VK.items():
+        if vk == key_vk:
+            key = name
+            break
+    return (MODIFIER_VK["ctrl"] in mods, MODIFIER_VK["alt"] in mods,
+            MODIFIER_VK["shift"] in mods, key)
+
+
+# 失控急停：任务运行时把鼠标甩到屏幕某个角(撞到角落)即停。内部值 <-> 中文显示，off=关闭。
+FAILSAFE_CORNERS = {
+    "top_right": "右上角", "top_left": "左上角",
+    "bottom_right": "右下角", "bottom_left": "左下角", "off": "关闭",
+}
+FAILSAFE_LABELS = list(FAILSAFE_CORNERS.values())
+FAILSAFE_VALUE_OF = {v: k for k, v in FAILSAFE_CORNERS.items()}
+DEFAULT_FAILSAFE = "top_right"
+
+
+def _in_failsafe_corner(cx, cy, corner, margin=3):
+    """光标 (cx,cy) 是否撞到所选屏幕角（off/未知一律 False）。用主屏像素尺寸判断。"""
+    if corner == "off" or cx is None or cy is None:
+        return False
+    try:
+        u = ctypes.windll.user32
+        W, H = u.GetSystemMetrics(0), u.GetSystemMetrics(1)   # SM_CXSCREEN / SM_CYSCREEN
+    except Exception:
+        return False
+    left, right = cx <= margin, cx >= W - 1 - margin
+    top, bottom = cy <= margin, cy >= H - 1 - margin
+    return {
+        "top_left": left and top, "top_right": right and top,
+        "bottom_left": left and bottom, "bottom_right": right and bottom,
+    }.get(corner, False)
 
 
 def _vk_down(vk):
@@ -1728,8 +1805,13 @@ class SettingsPage(ctk.CTkFrame):
         cfg = self.app.cfg
         self.var_title = ctk.StringVar(value=cfg.get("window_title", "梦幻西游"))
         self.var_backend = ctk.StringVar(value=cfg.get("input_backend", "sendinput"))
-        hk = cfg.get("hotkey_toggle", "F5")
-        self.var_hotkey = ctk.StringVar(value=hk if hk in HOTKEY_NAMES else "F5")
+        sc, sa, ss, sk = _split_stop_hotkey(cfg.get("hotkey_stop", DEFAULT_STOP_HOTKEY))
+        self.var_hk_ctrl = ctk.BooleanVar(value=sc)
+        self.var_hk_alt = ctk.BooleanVar(value=sa)
+        self.var_hk_shift = ctk.BooleanVar(value=ss)
+        self.var_hk_key = ctk.StringVar(value=sk)
+        fc = cfg.get("failsafe_corner", DEFAULT_FAILSAFE)
+        self.var_failsafe = ctk.StringVar(value=FAILSAFE_CORNERS.get(fc, "右上角"))
         self.var_threshold = ctk.DoubleVar(value=self._get_threshold())
 
         ctk.CTkLabel(card, text="基础", font=self.fonts["h2"], text_color=T.TEXT).grid(
@@ -1742,17 +1824,38 @@ class SettingsPage(ctk.CTkFrame):
                                     values=["sendinput", "pyautogui", "pydirectinput"],
                                     font=self.fonts["body"], fg_color=T.SURFACE_2,
                                     button_color=T.BORDER, button_hover_color=T.ACCENT, text_color=T.TEXT, dropdown_text_color=T.TEXT, width=240))
-        self._row(card, 3, "开始/停止 快捷键", self._build_hotkey(card), sticky="ew")
-        self._row(card, 4, "识别置信度（匹配阈值）", self._build_threshold(card), sticky="ew")
+        self._row(card, 3, "急停 快捷键（停止一切）", self._build_hotkey(card), sticky="ew")
+        self._row(card, 4, "失控急停（甩鼠标到屏幕角）", self._build_failsafe(card), sticky="ew")
+        self._row(card, 5, "识别置信度（匹配阈值）", self._build_threshold(card), sticky="ew")
 
     def _build_hotkey(self, parent):
         box = ctk.CTkFrame(parent, fg_color="transparent")
-        ctk.CTkOptionMenu(box, variable=self.var_hotkey, values=HOTKEY_NAMES,
+        row = ctk.CTkFrame(box, fg_color="transparent")
+        row.pack(anchor="w")
+        for txt, var in (("Ctrl", self.var_hk_ctrl), ("Alt", self.var_hk_alt), ("Shift", self.var_hk_shift)):
+            ctk.CTkCheckBox(row, text=txt, variable=var, font=self.fonts["body"],
+                            text_color=T.TEXT, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
+                            checkbox_width=20, checkbox_height=20).pack(side="left", padx=(0, 14))
+        ctk.CTkOptionMenu(row, variable=self.var_hk_key, values=HOTKEY_NAMES,
                           font=self.fonts["body"], fg_color=T.SURFACE_2,
-                          button_color=T.BORDER, button_hover_color=T.ACCENT, text_color=T.TEXT, dropdown_text_color=T.TEXT,
-                          width=240).pack(anchor="w")
-        hint = ctk.CTkLabel(box, text="全局热键：游戏在前台也能按。鼠标被脚本拉着失控时，按一下立刻停。改完记得保存。",
-                     font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
+                          button_color=T.BORDER, button_hover_color=T.ACCENT, text_color=T.TEXT,
+                          dropdown_text_color=T.TEXT, width=120).pack(side="left")
+        hint = ctk.CTkLabel(box, text="全局急停：游戏在前台也能按，按一下立刻停止所有正在跑的任务（鼠标被脚本"
+                                      "拉着失控时随时叫停）。默认 Ctrl+Alt+F12；建议带修饰键，避免和游戏内按键误撞。改完记得保存。",
+                            font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
+        hint.pack(fill="x", pady=(4, 0))
+        bind_wraplength(hint)
+        return box
+
+    def _build_failsafe(self, parent):
+        box = ctk.CTkFrame(parent, fg_color="transparent")
+        ctk.CTkOptionMenu(box, variable=self.var_failsafe, values=FAILSAFE_LABELS,
+                          font=self.fonts["body"], fg_color=T.SURFACE_2,
+                          button_color=T.BORDER, button_hover_color=T.ACCENT, text_color=T.TEXT,
+                          dropdown_text_color=T.TEXT, width=160).pack(anchor="w")
+        hint = ctk.CTkLabel(box, text="任务运行时，把鼠标猛甩到所选屏幕角（撞到角落）立刻急停。独立于鼠标后端、"
+                                      "始终生效。选「关闭」则只靠停止按钮 / 急停热键。改完记得保存。",
+                            font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
         hint.pack(fill="x", pady=(4, 0))
         bind_wraplength(hint)
         return box
@@ -1861,7 +1964,10 @@ class SettingsPage(ctk.CTkFrame):
         cfg = cfg_mod.load_config()
         cfg["window_title"] = self.var_title.get().strip() or "梦幻西游"
         cfg["input_backend"] = self.var_backend.get()
-        cfg["hotkey_toggle"] = self.var_hotkey.get()
+        cfg["hotkey_stop"] = _compose_stop_hotkey(
+            self.var_hk_ctrl.get(), self.var_hk_alt.get(),
+            self.var_hk_shift.get(), self.var_hk_key.get())
+        cfg["failsafe_corner"] = FAILSAFE_VALUE_OF.get(self.var_failsafe.get(), DEFAULT_FAILSAFE)
 
         hz = cfg.setdefault("humanize", {})
         tc = cfg_mod.task_config(cfg, SniperPage.TASK_NAME)
@@ -1885,8 +1991,13 @@ class SettingsPage(ctk.CTkFrame):
     def refresh(self):
         self.var_title.set(self.app.cfg.get("window_title", "梦幻西游"))
         self.var_backend.set(self.app.cfg.get("input_backend", "sendinput"))
-        hk = self.app.cfg.get("hotkey_toggle", "F5")
-        self.var_hotkey.set(hk if hk in HOTKEY_NAMES else "F5")
+        sc, sa, ss, sk = _split_stop_hotkey(self.app.cfg.get("hotkey_stop", DEFAULT_STOP_HOTKEY))
+        self.var_hk_ctrl.set(sc)
+        self.var_hk_alt.set(sa)
+        self.var_hk_shift.set(ss)
+        self.var_hk_key.set(sk)
+        fc = self.app.cfg.get("failsafe_corner", DEFAULT_FAILSAFE)
+        self.var_failsafe.set(FAILSAFE_CORNERS.get(fc, "右上角"))
         thr = self._get_threshold()
         self.var_threshold.set(thr)
         if hasattr(self, "thr_value"):
@@ -1945,6 +2056,7 @@ class GeneralPage(ctk.CTkFrame):
         self._ob_cal_dialog = None      # 「标定（整理背包）」去重槽
         self.btn_ob = None          # 「一键整理」按钮（_refresh_body 每次重建）
         self.switch_ob = None       # 整理背包实战/演练开关
+        self.switch_auto_ob = None  # 「自动整理背包」开关（任何任务检测到背包满自动整理）
         self._win_count = 0         # 已选多开窗口数（resolve_targets），供状态行显示
         self.btn_team = None
         self.btn_disband = None     # 「一键解散」按钮（_refresh_body 每次重建）
@@ -2424,16 +2536,11 @@ class GeneralPage(ctk.CTkFrame):
         items = ob_tc.get("items", []) or []
         tpl = ob_tc.get("templates", {}) or {}
 
-        # 被 items 用到的动作 → 所需按钮键。任一 discard/sell 还需 confirm_button（三动作共用确认）。
+        # 被 items 用到的动作 → 所需按钮键（单一来源 core.inventory.required_templates，含各动作步骤+确认框）。
         need = set()
         for it in items:
-            act = it.get("action")
-            if act == "use":
-                need.add("use_button")
-            elif act == "discard":
-                need.add("discard_button"); need.add("confirm_button")
-            elif act == "sell":
-                need.add("sell_button"); need.add("confirm_button")
+            for key, _lbl in required_templates(it.get("action", "use")):
+                need.add(key)
         done = sum(1 for k in need if tpl.get(k))
         total = len(need)
         ready = (total > 0 and done == total)
@@ -2486,6 +2593,25 @@ class GeneralPage(ctk.CTkFrame):
             self.switch_ob.select()
         else:
             self.switch_ob.deselect()
+
+        # 「自动整理背包」：跨任务全局开关。开了后，任何走多开轮转的任务（运镖/宝图/秘境/副本）
+        # 运行中每隔一会儿检测一次背包「满」图标，满了就自动整理一遍（真整理/只识别跟随上面的实战开关）。
+        auto_row = ctk.CTkFrame(c, fg_color="transparent")
+        auto_row.pack(fill="x", padx=16, pady=(0, 12))
+        self.switch_auto_ob = ctk.CTkSwitch(auto_row, text="自动整理背包（任何任务检测到背包满就自动清）",
+                                            font=self.fonts["body"], command=self._toggle_auto_organize)
+        self.switch_auto_ob.pack(anchor="w")
+        if ob_tc.get("auto_organize"):
+            self.switch_auto_ob.select()
+        else:
+            self.switch_auto_ob.deselect()
+        auto_hint = ctk.CTkLabel(auto_row, text="开启后，运镖 / 宝图 / 秘境 / 副本等任务运行中会每隔一会儿检测一次背包"
+                                                "「满」图标，满了就自动整理一遍 —— 需先在「标定（整理背包）」里框选"
+                                                "『背包满图标』，否则无从判断、不会触发。",
+                                 font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
+        auto_hint.pack(fill="x", anchor="w", pady=(2, 0))
+        bind_wraplength(auto_hint)
+
         # 重建后：若整理在跑，恢复「停止整理」文案/颜色（照 btn_team 的恢复写法）
         if self.runner_ob and self.runner_ob.is_running():
             self.btn_ob.configure(text="■  停止整理", fg_color=T.DANGER, hover_color=T.DANGER_HOVER)
@@ -2534,6 +2660,23 @@ class GeneralPage(ctk.CTkFrame):
             self._log_line("⚠ 整理背包已切到实战模式：会真正使用/丢弃/出售物品，请谨慎！", "warn", "整理背包")
         else:
             self._log_line("整理背包已切回演练模式（安全，只识别不操作）。", "info", "整理背包")
+
+    def _toggle_auto_organize(self):
+        """「自动整理背包」开关：存 tasks.organize_bag.auto_organize（任何任务流程检测到背包满自动整理）。"""
+        on = bool(self.switch_auto_ob.get())
+        cfg = cfg_mod.load_config()
+        tc = cfg_mod.task_config(cfg, "organize_bag")
+        tc["auto_organize"] = on
+        cfg_mod.set_task_config(cfg, "organize_bag", tc)
+        cfg_mod.save_config(cfg)
+        self.app.cfg = self.cfg = cfg
+        if on:
+            tpl_ok = bool((tc.get("templates", {}) or {}).get("bag_full_icon"))
+            self._log_line("已开启「自动整理背包」：任务流程中检测到背包满会自动整理。"
+                           + ("" if tpl_ok else " ⚠ 但还没标定『背包满图标』，请先去「标定（整理背包）」框选，否则不会触发。"),
+                           "warn" if not tpl_ok else "info", "整理背包")
+        else:
+            self._log_line("已关闭「自动整理背包」。", "info", "整理背包")
 
     def _start_organize(self):
         if self.runner_ob and self.runner_ob.is_running():
@@ -3281,34 +3424,62 @@ class App(ctk.CTk):
             except Exception:
                 pass
 
-    # ---- 全局快捷键轮询：上升沿触发开始/停止 ----
+    # ---- 全局急停轮询：鼠标甩到屏幕左上角 或 急停组合键 → 停止一切任务 ----
     def _poll_hotkey(self):
-        name = self.cfg.get("hotkey_toggle", "F5")
-        vk = HOTKEY_VK.get(name)
-        if vk is not None:
-            down = _vk_down(vk)
-            if down and not self._hotkey_down:   # 按下瞬间触发一次
-                self._trigger_hotkey(name)
+        # ① 物理急停：鼠标甩到所选屏幕角（默认右上角，设置里可改/可关）。注意——默认 sendinput 后端走
+        #    SendInput 底层注入，【不经过 pyautogui，没有内置 FAILSAFE】，故必须在这里用真实光标位置自己兜
+        #    （覆盖所有后端）。仅在有任务跑时生效，避免空触发；任务停了 _any_running 转 False 不再重复触发。
+        corner = self.cfg.get("failsafe_corner", DEFAULT_FAILSAFE)
+        if corner != "off":
+            try:
+                cx, cy = get_cursor()
+            except Exception:
+                cx, cy = None, None
+            if _in_failsafe_corner(cx, cy, corner) and self._any_running():
+                self._emergency_stop(f"鼠标甩到{FAILSAFE_CORNERS.get(corner, '角落')}")
+        # ② 急停组合键（默认 Ctrl+Alt+F12）：所有修饰键+主键同时按下的瞬间触发一次。
+        mods, key_vk = _parse_stop_hotkey(self.cfg.get("hotkey_stop", DEFAULT_STOP_HOTKEY))
+        if key_vk is not None:
+            down = all(_vk_down(m) for m in mods) and _vk_down(key_vk)
+            if down and not self._hotkey_down:
+                self._emergency_stop()
             self._hotkey_down = down
         else:
             self._hotkey_down = False
         self.after(60, self._poll_hotkey)
 
-    def _trigger_hotkey(self, name):
-        # 全局热键只作用于「当前可见」的可运行任务页，避免同时启停多个任务
-        key = getattr(self, "_current_key", "sniper")
-        page = self.pages.get(key)
-        if page is None or not hasattr(page, "_toggle_run"):
-            return
-        was_running = bool(getattr(page, "runner", None) and page.runner.is_running())
-        page._toggle_run()
-        self.toast(f"[{name}] {'已停止' if was_running else '已开始'}")
+    def _emergency_stop(self, reason=None):
+        """急停：停掉所有页面正在跑的后台任务，弹提示。reason 标明来源（甩角/热键）。"""
+        tag = reason or f"[{self.cfg.get('hotkey_stop', DEFAULT_STOP_HOTKEY)}]"
+        n = self.stop_all_tasks()
+        if n:
+            self.toast(f"{tag} 急停：已停止 {n} 个运行中的任务")
+        else:
+            self.toast(f"{tag} 急停（当前没有正在跑的任务）")
+
+    def _any_running(self):
+        """是否有任意页面的后台任务在跑（供甩角失控急停判断，避免空触发）。"""
+        for page in self.pages.values():
+            for v in vars(page).values():
+                if isinstance(v, TaskRunner) and v.is_running():
+                    return True
+        return False
+
+    def stop_all_tasks(self):
+        """遍历所有页面，停掉其上任意正在运行的 TaskRunner（runner / runner_ob 等都覆盖到）。返回停了几个。"""
+        n = 0
+        for page in self.pages.values():
+            for v in list(vars(page).values()):
+                if isinstance(v, TaskRunner) and v.is_running():
+                    try:
+                        v.stop()
+                        n += 1
+                    except Exception:
+                        pass
+        return n
 
     def _on_close(self):
-        for k in self.RUNNABLE_KEYS:
-            p = self.pages.get(k)
-            if p and getattr(p, "runner", None) and p.runner.is_running():
-                p.runner.stop()
+        self.stop_all_tasks()
         self.destroy()
 
 

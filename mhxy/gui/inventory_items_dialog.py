@@ -20,11 +20,11 @@ import customtkinter as ctk
 from . import theme as T
 from ..core import config as cfg_mod
 from ..core import vision
+# 动作内部值/显示名/下拉顺序单一来源在 core.inventory（_ACTION_SPECS），避免两处不一致。
+from ..core.inventory import ACTION_LABELS, ACTION_ORDER
 
-# 动作内部值 <-> 界面显示（契约固定：use/discard/sell ↔ 使用/丢弃/出售）
-ACTION_LABELS = {"use": "使用", "discard": "丢弃", "sell": "出售"}
+# 界面显示 -> 内部值（含旧 sell，便于把遗留配置的「出售」反查回去）
 ACTION_VALUES = {v: k for k, v in ACTION_LABELS.items()}
-ACTION_ORDER = ["use", "discard", "sell"]
 
 
 class InventoryItemsDialog(ctk.CTkToplevel):

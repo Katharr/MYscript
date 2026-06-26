@@ -116,7 +116,11 @@ mhxy/
 
 ## 怎么跑
 - 用户侧：双击 `启动.bat`，界面里「标定/加装备」→ 演练看 captures/ → 开「实战」开关再跑。
-- 停止：界面「停止」按钮，或鼠标甩屏幕左上角（pyautogui/SendInput FAILSAFE）。
+- 停止：界面「停止」按钮，或**急停热键**（默认 Ctrl+Alt+F12，设置里可改），或**鼠标甩到屏幕角**
+  （默认右上角，设置 `failsafe_corner` 可改/可关）。
+  ⚠ 甩角急停由 **GUI 轮询真实光标位置**实现（`app._poll_hotkey` + `_in_failsafe_corner`），不是 pyautogui
+  FAILSAFE——默认 sendinput 后端走 SendInput 底层注入、**根本不经过 pyautogui、没有内置 FAILSAFE**，故必须
+  GUI 自己兜。三种急停都走 `app.stop_all_tasks()`（停所有页面所有 TaskRunner），只能停在两次原子动作之间，单次拟人化移动/点击会先走完。
 - ⚠ 改动多止于代码层验证（py_compile / example.json 合法 / 纯逻辑模拟）；识别/点击/多开轮转的真实手感
   需用户开 2~3 个号自测。报 bug 时按「哪个任务的哪一步点歪/没识别」定位。
 
