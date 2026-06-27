@@ -451,7 +451,7 @@ class SniperPage(ctk.CTkFrame):
 
 
 # ----------------------------------------------------------------------
-# 刷副本·宝图 页面
+# 宝图 页面
 # ----------------------------------------------------------------------
 class TreasureMapPage(ctk.CTkFrame):
     TASK_NAME = "treasure_map"
@@ -477,7 +477,7 @@ class TreasureMapPage(ctk.CTkFrame):
         bar = ctk.CTkFrame(self, fg_color="transparent")
         bar.grid(row=0, column=0, sticky="ew", padx=4, pady=(2, 14))
         bar.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(bar, text="刷副本 · 宝图", font=self.fonts["title"], text_color=T.TEXT).grid(
+        ctk.CTkLabel(bar, text="宝图", font=self.fonts["title"], text_color=T.TEXT).grid(
             row=0, column=0, sticky="w")
         right = ctk.CTkFrame(bar, fg_color="transparent")
         right.grid(row=0, column=1, sticky="e")
@@ -2742,6 +2742,8 @@ class DailyPage(ctk.CTkFrame):
         self.fonts = app.fonts
         self.runner = None
         self._steps = []          # [{"task","enabled"}]，有序
+        self._rows = []           # 与 _steps 对齐的行控件 [{"frame","name","badge"}]
+        self._drag = None         # 拖动中的状态 {"idx": 当前下标}
 
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(2, weight=1)
@@ -2826,10 +2828,14 @@ class DailyPage(ctk.CTkFrame):
         head = ctk.CTkFrame(left, fg_color="transparent")
         head.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 8))
         head.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(head, text="任务清单（勾选 + 调序）", font=self.fonts["h2"],
+        ctk.CTkLabel(head, text="任务清单", font=self.fonts["h2"],
                      text_color=T.TEXT).grid(row=0, column=0, sticky="w")
         self.lbl_count = ctk.CTkLabel(head, text="", font=self.fonts["small"], text_color=T.TEXT_DIM)
         self.lbl_count.grid(row=0, column=1, sticky="e")
+        hint = ctk.CTkLabel(head, text="按住左侧 ⠿ 上下拖动排序　·　右侧开关启用 / 停用　·　序号即执行先后",
+                            font=self.fonts["small"], text_color=T.TEXT_DIM, anchor="w")
+        hint.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        bind_wraplength(hint)
         self.list_frame = ctk.CTkScrollableFrame(left, fg_color="transparent")
         self.list_frame.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 12))
         self.list_frame.grid_columnconfigure(0, weight=1)
@@ -2861,12 +2867,27 @@ class DailyPage(ctk.CTkFrame):
                 seen.append(t)
         return out
 
+    def _selected_dungeon(self):
+        """副本中枢当前选中的副本名（tasks.dungeon.selected）；非法/缺失退回第一个已收录副本。"""
+        names = [c.name for c in dungeon_tasks()]
+        if not names:
+            return None
+        sel = cfg_mod.task_config(self.app.cfg, "dungeon").get("selected")
+        return sel if sel in names else names[0]
+
     def _task_title(self, name):
+        if name == "dungeon":
+            sel = self._selected_dungeon()
+            cls = get_task(sel) if sel else None
+            return f"刷副本 · {cls.title}" if cls else "刷副本（未收录副本）"
         cls = get_task(name)
         return cls.title if cls else name
 
     def _task_status(self, name):
-        """返回 (模式串, 是否已就绪)。模式=演练/实战；就绪=必要区域+模板都已标定。"""
+        """返回 (模式串, 是否已就绪)。模式=演练/实战；就绪=必要区域+模板都已标定。
+        「刷副本」步特殊：读选中副本自身命名空间，就绪=副本标定齐 +（未勾「已组队」时）组队标定齐。"""
+        if name == "dungeon":
+            return self._dungeon_step_status()
         sub = cfg_mod.task_config(self.app.cfg, name)
         mode = "演练" if sub.get("dry_run", True) else "实战"
         if name == "treasure_map":
@@ -2881,6 +2902,26 @@ class DailyPage(ctk.CTkFrame):
         ready = all(regions.get(k) for k in need_r) and all(templates.get(k) for k in need_t)
         return mode, ready
 
+    def _dungeon_step_status(self):
+        """「刷副本」步的 (模式, 就绪)：模式/标定都看选中副本自身；多开≥2 是运行期条件，留给链内 preflight。"""
+        sel = self._selected_dungeon()
+        if not sel:
+            return "演练", False
+        sub = cfg_mod.task_config(self.app.cfg, sel)
+        mode = "演练" if sub.get("dry_run", True) else "实战"
+        spec = getattr(get_task(sel), "CALIBRATION", {}) or {}
+        need_r = [t[0] for t in spec.get("regions", []) if not (len(t) >= 4 and t[3])]
+        need_t = [t[0] for t in spec.get("templates", [])]
+        regions, templates = sub.get("regions", {}), sub.get("templates", {})
+        self_ok = all(regions.get(k) for k in need_r) and all(templates.get(k) for k in need_t)
+        if sub.get("skip_team", False):     # 已勾「已组队」：不查组队标定
+            return mode, self_ok
+        team = cfg_mod.task_config(self.app.cfg, "teaming")
+        treg, ttpl = team.get("regions", {}), team.get("templates", {})
+        team_ok = (all(treg.get(k) for k in TEAM_REQUIRED_REGIONS)
+                   and all(ttpl.get(k) for k in TEAM_REQUIRED_TEMPLATES))
+        return mode, (self_ok and team_ok)
+
     def _render_steps(self):
         # 内容/各任务就绪状态没变就别重建：切页时 refresh 反复调到这里，整段重画是「切页卡顿」来源之一。
         # 状态串纳入签名——别处页面刚标定/切换演练实战，切回来时这里要能反映出最新状态。
@@ -2890,66 +2931,133 @@ class DailyPage(ctk.CTkFrame):
         self._steps_sig = sig
         for w in self.list_frame.winfo_children():
             w.destroy()
+        self._rows = []
+        self._drag = None
+        for i, step in enumerate(self._steps):
+            self._rows.append(self._build_row(i, step))
+        self._renumber()
+
+    def _build_row(self, i, step):
+        """一张任务卡：左=拖动手柄，左二=执行序号徽标，中=标题+状态，右=启用开关。
+        左键按住手柄上下拖动即可排序（见 _drag_*）。"""
+        name = step["task"]
+        row = ctk.CTkFrame(self.list_frame, fg_color=T.SURFACE_2, corner_radius=T.RADIUS_SM)
+        row.grid(row=i, column=0, sticky="ew", pady=5, padx=4)
+        row.grid_columnconfigure(2, weight=1)
+
+        # 左：拖动手柄（按住左键上下拖动整行排序）。光标设成移动样式（失败不致命）。
+        grip = ctk.CTkLabel(row, text="⠿", font=self.fonts["h2"], text_color=T.TEXT_DIM, width=22)
+        grip.grid(row=0, column=0, rowspan=2, sticky="ns", padx=(10, 2), pady=8)
+        try:
+            grip.configure(cursor="fleur")
+        except Exception:
+            pass
+        grip.bind("<Button-1>", lambda e, r=row: self._drag_start(e, r))
+        grip.bind("<B1-Motion>", self._drag_motion)
+        grip.bind("<ButtonRelease-1>", self._drag_end)
+
+        # 左二：执行序号圆形徽标（启用=蓝底数字按先后编号；停用=灰底圆点，_renumber 里填）
+        badge = ctk.CTkLabel(row, text="", font=self.fonts["body_b"], width=26, height=26,
+                             corner_radius=13, text_color=T.ON_ACCENT, fg_color=T.ACCENT)
+        badge.grid(row=0, column=1, rowspan=2, padx=(2, 12), pady=8)
+
+        # 中：标题（可换行）+ 状态条（演练/实战药丸 + 就绪提示），独占可伸展列
+        mid = ctk.CTkFrame(row, fg_color="transparent")
+        mid.grid(row=0, column=2, rowspan=2, sticky="ew", pady=8)
+        mid.grid_columnconfigure(0, weight=1)
+        title = ctk.CTkLabel(mid, text=self._task_title(name), font=self.fonts["body_b"],
+                             text_color=T.TEXT, anchor="w")
+        title.grid(row=0, column=0, sticky="ew")
+        bind_wraplength(title)
+
+        mode, ready = self._task_status(name)
+        bar = ctk.CTkFrame(mid, fg_color="transparent")
+        bar.grid(row=1, column=0, sticky="w", pady=(5, 0))
+        dry = (mode == "演练")
+        ctk.CTkLabel(bar, text=f"  {mode}  ", font=self.fonts["small"], height=20,
+                     corner_radius=T.RADIUS_PILL,
+                     fg_color=(T.PILL_OK_BG if dry else T.PILL_DANGER_BG),
+                     text_color=(T.SUCCESS if dry else T.DANGER)).pack(side="left")
+        ctk.CTkLabel(bar, text=("✓ 已就绪" if ready else "⚠ 还需标定"), font=self.fonts["small"],
+                     text_color=(T.SUCCESS if ready else T.WARN)).pack(side="left", padx=(8, 0))
+
+        # 右：启用 / 停用开关（按任务名定位，拖动后下标会变，故 _toggle_step 用 name 不用 idx）
+        var = ctk.BooleanVar(value=step["enabled"])
+        sw = ctk.CTkSwitch(row, text="", variable=var, width=44,
+                           progress_color=T.ACCENT, fg_color=T.BTN, button_color=T.ON_ACCENT,
+                           command=lambda nm=name, v=var: self._toggle_step(nm, v))
+        sw.grid(row=0, column=3, rowspan=2, padx=(8, 14), pady=8)
+
+        return {"frame": row, "name": name, "badge": badge}
+
+    def _renumber(self):
+        """按当前顺序刷新各行的执行序号徽标与「已勾选 x/y」计数（_rows 与 _steps 始终对齐）。"""
+        order = 0
+        for r, step in zip(self._rows, self._steps):
+            if step["enabled"]:
+                order += 1
+                r["badge"].configure(text=str(order), fg_color=T.ACCENT, text_color=T.ON_ACCENT)
+            else:
+                r["badge"].configure(text="·", fg_color=T.SURFACE, text_color=T.TEXT_DIM)
         n_on = sum(1 for s in self._steps if s["enabled"])
         self.lbl_count.configure(text=f"已勾选 {n_on}/{len(self._steps)}")
 
-        order = 0
-        for i, step in enumerate(self._steps):
-            name = step["task"]
-            row = ctk.CTkFrame(self.list_frame, fg_color=T.SURFACE_2, corner_radius=T.RADIUS_SM)
-            row.grid(row=i, column=0, sticky="ew", pady=4, padx=4)
-            row.grid_columnconfigure(1, weight=1)
-
-            var = ctk.BooleanVar(value=step["enabled"])
-            seq = ""
-            if step["enabled"]:
-                order += 1
-                seq = f"{order}. "
-            # 第一行：勾选框（左，撑开） + ↑↓ 调序（右）
-            cb = ctk.CTkCheckBox(row, text=seq + self._task_title(name), font=self.fonts["body_b"],
-                                 variable=var, text_color=T.TEXT,
-                                 fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
-                                 command=lambda idx=i, v=var: self._toggle_step(idx, v))
-            cb.grid(row=0, column=0, sticky="w", padx=(12, 8), pady=(10, 0))
-
-            up = ctk.CTkButton(row, text="↑", font=self.fonts["body"], width=30, height=28,
-                               corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER,
-                               text_color=T.TEXT, border_width=1, border_color=T.BORDER,
-                               command=lambda idx=i: self._move(idx, -1))
-            up.grid(row=0, column=1, padx=(0, 4), pady=(8, 0))
-            down = ctk.CTkButton(row, text="↓", font=self.fonts["body"], width=30, height=28,
-                                 corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER,
-                                 text_color=T.TEXT, border_width=1, border_color=T.BORDER,
-                                 command=lambda idx=i: self._move(idx, 1))
-            down.grid(row=0, column=2, padx=(0, 10), pady=(8, 0))
-            if i == 0:
-                up.configure(state="disabled")
-            if i == len(self._steps) - 1:
-                down.configure(state="disabled")
-
-            # 第二行：状态单独占整行（sticky=ew + 自动换行），避免被窗口右缘/调序按钮挤窄切掉
-            mode, ready = self._task_status(name)
-            status = f"{mode} · " + ("✓ 已就绪" if ready else "⚠ 还需标定")
-            slbl = ctk.CTkLabel(row, text=status, font=self.fonts["small"], anchor="w", justify="left",
-                                text_color=T.SUCCESS if ready else T.WARN)
-            slbl.grid(row=1, column=0, columnspan=3, sticky="ew", padx=(14, 10), pady=(2, 10))
-            bind_wraplength(slbl)
-
     # ------------------------------------------------------------------
-    # 勾选 / 调序 / 保存
+    # 启用切换 / 左键拖动排序 / 保存
     # ------------------------------------------------------------------
-    def _toggle_step(self, idx, var):
-        if 0 <= idx < len(self._steps):
-            self._steps[idx]["enabled"] = bool(var.get())
-            self._save()
-            self._render_steps()
+    def _toggle_step(self, name, var):
+        for s in self._steps:
+            if s["task"] == name:
+                s["enabled"] = bool(var.get())
+                break
+        self._save()
+        self._render_steps()
 
-    def _move(self, idx, delta):
-        j = idx + delta
-        if 0 <= idx < len(self._steps) and 0 <= j < len(self._steps):
-            self._steps[idx], self._steps[j] = self._steps[j], self._steps[idx]
-            self._save()
-            self._render_steps()
+    def _drag_start(self, event, row):
+        idx = next((k for k, r in enumerate(self._rows) if r["frame"] is row), None)
+        if idx is None:
+            return
+        self._drag = {"idx": idx}
+        row.configure(fg_color=T.BTN)   # 提起高亮
+        row.tkraise()
+
+    def _drag_motion(self, event):
+        if not self._drag:
+            return
+        cur = self._drag["idx"]
+        tgt = self._index_at_pointer()
+        if 0 <= tgt < len(self._rows) and tgt != cur:
+            self._reorder(cur, tgt)
+            self._drag["idx"] = tgt
+
+    def _drag_end(self, event):
+        if not self._drag:
+            return
+        idx = self._drag["idx"]
+        self._drag = None
+        if 0 <= idx < len(self._rows):
+            self._rows[idx]["frame"].configure(fg_color=T.SURFACE_2)
+        self._save()
+        self._steps_sig = None      # 顺序已变，强制下次干净重建
+        self._render_steps()
+
+    def _index_at_pointer(self):
+        """指针当前落在第几行（按各行竖直中线判定）；不销毁控件，故拖动中 winfo 几何有效。"""
+        py = self.list_frame.winfo_pointery()
+        for idx, r in enumerate(self._rows):
+            f = r["frame"]
+            if py < f.winfo_rooty() + f.winfo_height() / 2:
+                return idx
+        return len(self._rows) - 1
+
+    def _reorder(self, frm, to):
+        """把第 frm 行移到第 to 位：_steps/_rows 同步搬动，再按新次序重排 grid 与序号。
+        全程不销毁控件——被按住的手柄控件存活，隐式 grab 不丢，B1-Motion 才能持续触发。"""
+        self._steps.insert(to, self._steps.pop(frm))
+        self._rows.insert(to, self._rows.pop(frm))
+        for idx, r in enumerate(self._rows):
+            r["frame"].grid_configure(row=idx)
+        self._renumber()
 
     def _save(self):
         """把当前勾选/顺序/时间上限写回配置（读盘再改，避免覆盖别处刚写入的配置）。"""
@@ -3021,7 +3129,7 @@ class DailyPage(ctk.CTkFrame):
 class App(ctk.CTk):
     NAV = [("general", "🧰  通用 / 工具"),
            ("daily", "🐉  日常一条龙"),
-           ("sniper", "🗡  秒装备"), ("treasure_map", "🗺  刷副本·宝图"),
+           ("sniper", "🗡  秒装备"), ("treasure_map", "🗺  宝图"),
            ("escort", "🚚  运镖"), ("secret_realm", "👹  秘境降妖"),
            ("dungeon", "🏰  刷副本"),
            ("settings", "⚙  设置"), ("about", "ⓘ  关于")]

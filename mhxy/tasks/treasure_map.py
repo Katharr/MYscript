@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-刷副本 · 宝图任务（两阶段状态机，支持多开逐号轮转）。
+宝图任务（两阶段状态机，支持多开逐号轮转）。
 
 游戏自带「自动战斗」全托管，脚本只做导航 + 状态监控 + 关键点击：
 
@@ -64,7 +64,7 @@ _REQUIRED_FLAGS = ["flag_treasure_entry", "flag_join", "flag_tingting",
 @register
 class TreasureMapTask(Task):
     name = "treasure_map"
-    title = "刷副本·宝图"
+    title = "宝图"
     description = "自动开活动→收藏宝图→挖宝→领奖，一条龙（战斗交给游戏自动，支持多开轮转）"
 
     CALIBRATION = {

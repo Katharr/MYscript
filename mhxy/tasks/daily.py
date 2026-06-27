@@ -1,6 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-日常一条龙：把已有任务（宝图/运镖/秘境降妖）按用户勾选的顺序串起来，一次性跑完。
+日常一条龙：把已有任务（宝图/运镖/秘境降妖/刷副本）按用户勾选的顺序串起来，一次性跑完。
+
+「刷副本」是个特殊步：它指向**副本中枢当前选中的那个副本**（tasks.dungeon.selected，is_dungeon），
+跑的是该副本自己的「先组队再跑流程」，而不是 DungeonTask 本身（那只组队即停）。选哪个副本/队长/
+演练实战/标定都在「刷副本」页设置，本任务只在跑到这步时把它解析出来照跑。
 
 设计原则（用户拍板）：完全套用每个子任务【已经做好的流程】，本任务只做「串联」——
   · 子任务列表与顺序存 tasks.daily.steps（有序，每项 {task, enabled}），界面可勾选 + 上下调序；
@@ -15,17 +19,18 @@
 
 import time
 
-from .base import Task, register, get_task
+from .base import Task, register, get_task, dungeon_tasks
 
 # 可进一条龙的任务（这些都有明确「完成条件」、会自动结束）。秒装备 sniper 不在此列。
-CHAINABLE = ["treasure_map", "escort", "secret_realm"]
+# "dungeon" 是「刷副本」中枢步：跑时解析成 tasks.dungeon.selected 选中的那个副本（见 _resolve）。
+CHAINABLE = ["treasure_map", "escort", "secret_realm", "dungeon"]
 
 
 @register
 class DailyTask(Task):
     name = "daily"
     title = "日常一条龙"
-    description = "勾选已有任务（宝图/运镖/秘境降妖）按顺序一次跑完；多开/单开与各自演练/实战设置完全沿用"
+    description = "勾选已有任务（宝图/运镖/秘境降妖/刷副本）按顺序一次跑完；多开/单开与各自演练/实战设置完全沿用"
 
     # 本任务没有自己的标定（全部沿用各子任务）；calibrate_dialog 据此不渲染任何标定项。
     CALIBRATION = {"regions": [], "templates": [], "watchlist": False}
@@ -51,7 +56,7 @@ class DailyTask(Task):
         start_ts = time.time()
         deadline = start_ts + time_limit * 60 if time_limit > 0 else None
 
-        titles = " → ".join(self._title_of(n) for n in steps)
+        titles = " → ".join(self._title_of(n, ctx) for n in steps)
         ctx.log(f"★ 日常一条龙启动：按顺序跑 {len(steps)} 个任务 → {titles} ★", level="warn")
         if time_limit > 0:
             ctx.log(f"整体时间上限 {time_limit:g} 分钟（仅安全网；正常会按各任务自身条件跑完）。")
@@ -65,10 +70,10 @@ class DailyTask(Task):
                 ctx.log(f"已达整体时间上限 {time_limit:g} 分钟，停止。", level="warn")
                 break
 
-            title = self._title_of(name)
-            task_cls = get_task(name)
+            title = self._title_of(name, ctx)
+            eff_name, task_cls = self._resolve(name, ctx)
             if task_cls is None:
-                ctx.log(f"[{idx}/{len(steps)}] 未知任务「{name}」，跳过。", level="warn")
+                ctx.log(f"[{idx}/{len(steps)}] 「{title}」无可跑任务（未选/未收录副本），跳过。", level="warn")
                 continue
             task = task_cls()
 
@@ -97,10 +102,33 @@ class DailyTask(Task):
     # ------------------------------------------------------------------
     # 配置读取
     # ------------------------------------------------------------------
+    @classmethod
+    def _title_of(cls, name, ctx):
+        if name == "dungeon":
+            sel = cls._selected_dungeon(ctx)
+            scls = get_task(sel) if sel else None
+            return f"刷副本 · {scls.title}" if scls else "刷副本（未收录副本）"
+        c = get_task(name)
+        return c.title if c else name
+
     @staticmethod
-    def _title_of(name):
-        cls = get_task(name)
-        return cls.title if cls else name
+    def _selected_dungeon(ctx):
+        """读副本中枢选中的副本名（tasks.dungeon.selected）；非法/缺失则退回第一个已收录副本。"""
+        names = [c.name for c in dungeon_tasks()]
+        if not names:
+            return None
+        sel = ctx.task_cfg("dungeon").get("selected")
+        return sel if sel in names else names[0]
+
+    @classmethod
+    def _resolve(cls, name, ctx):
+        """把链步名解析成真正可跑的 (任务名, 任务类)。
+        'dungeon' 是副本中枢步：跑的是 tasks.dungeon.selected 选中的那个副本（is_dungeon），
+        而非 DungeonTask 本身（它只组队即停）。其余任务名直接返回自身。"""
+        if name != "dungeon":
+            return name, get_task(name)
+        sel = cls._selected_dungeon(ctx)
+        return sel, (get_task(sel) if sel else None)
 
     def _enabled_steps(self, ctx):
         """返回【按存储顺序】、已勾选且可串联的任务名列表。"""
