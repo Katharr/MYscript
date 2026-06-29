@@ -234,7 +234,8 @@ DEFAULT_CONFIG = {
         "secret_realm": {
             "dry_run": True,             # true=演练：只识别+打日志，不发快捷键/不点关键操作
             "loop": {
-                "time_limit_min": 30,        # 时间上限（分钟）安全网，0=不限；每轮主终止是 失败/离开 或 时长判超时
+                "time_limit_min": 45,        # 时间上限（分钟）安全网，0=不限；每轮主终止是 失败/离开 或 时长判超时。
+                                             # ⚠ 必须 > battle_timeout_sec/60（单轮上限），否则多开时最后扛住的号永远等不到自己那轮自然结束就被总上限砍掉
                 "match_threshold": 0.85,     # 标志模板匹配阈值
                 "max_runs": 1,               # 每个号连跑几轮秘境（每轮=开活动→挑战→直到 失败/超时离开）
                 "tick_interval_sec": 0.5,    # 多开轮转节拍：所有号各推进一步后的间隔（带抖动）
@@ -353,7 +354,7 @@ DEFAULT_CONFIG = {
             },
             "regions": {"bag_list": None},       # 背包列表区（留空=整窗检测）
             "templates": {
-                "use_button": None,              # 操作菜单里「使用」按钮
+                # 「使用」=直接左键双击物品，无需任何按钮模板（见 core/inventory._ACTION_SPECS["use"]）。
                 "discard_button": None,          # 「丢弃」按钮
                 "more_button": None,             # 详情面板「更多」按钮（商会/摆摊出售前若有就点，展开更多选项；可不标）
                 "shop_sell_button": None,        # 「商会出售」按钮

@@ -47,8 +47,11 @@ from . import scan
 # 加新出售/处理方式只需在此加一项 + 在 config/CALIBRATION 注册对应按钮模板，core 其余与 GUI 全不动。
 _ACTION_SPECS = {
     "use": {
-        "label": "使用", "open": None, "confirm": False, "close": "panel",
-        "steps": [{"tpl": "use_button", "label": "使用"}],
+        # 「使用」= 直接【左键双击】物品就用掉（不弹右键菜单、没有「使用」按钮可点）。
+        # 故 open=double、steps 为空；双击后画面不残留菜单，close=auto + 空 steps → _cleanup 不发任何键
+        # （绝不发 ESC，否则会误关包裹，与 shop_sell 同坑）。
+        "label": "使用", "open": "double", "confirm": False, "close": "auto",
+        "steps": [],
     },
     "discard": {
         "label": "丢弃", "open": None, "confirm": True, "close": "panel",
