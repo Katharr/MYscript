@@ -66,6 +66,7 @@ class TreasureMapTask(Task):
     name = "treasure_map"
     title = "宝图"
     description = "自动开活动→收藏宝图→挖宝→领奖，一条龙（战斗交给游戏自动，支持多开轮转）"
+    CHAINS_PER_WINDOW = True   # 可做「日常一条龙·每窗口独立链」
 
     CALIBRATION = {
         "regions": [
@@ -195,6 +196,24 @@ class TreasureMapTask(Task):
             ctx.log("未挖完：" + desc + "。若卡在『等对话框』，多为多开节奏慢(传送没到)或"
                     "「听听无妨」相似度低于阈值——看上面诊断行的最佳相似度，必要时重标 flag_tingting "
                     "或调大 dialog_timeout_sec。", level="warn")
+
+    # ------------------------------------------------------------------
+    # 日常一条龙·每窗口独立链：暴露「单窗口一份 record + 单步推进函数」
+    # ------------------------------------------------------------------
+    def make_chain_driver(self, wctx):
+        """给定单窗口上下文，返回 (record, step_fn)。step_fn() 推进该窗口本任务状态机一步
+        （沿用 run() 同款 _step_once），record["done"]=本任务在该窗口完成。
+        与 run() 共用 _new_record/_step_once，不自跑 rotation、不切前台（由一条龙总轮转统一切）。
+        注意：_new_record 依赖 self._skip_collect/_start_state，须先在此设好（同 run() 开头）。"""
+        tc = wctx.task_cfg(self.name)
+        loop = tc["loop"]
+        regions = tc["regions"]
+        threshold = loop["match_threshold"]
+        self.flags = self._load_flags(tc)
+        self._skip_collect = tc.get("skip_collect", False)
+        self._start_state = S_DIG_OPEN_BAG if self._skip_collect else S_OPEN_ACTIVITY
+        rec = self._new_record(wctx)
+        return rec, (lambda: self._step_once(wctx, rec, loop, regions, threshold))
 
     # ------------------------------------------------------------------
     # 多开轮转：上下文与每号状态记录

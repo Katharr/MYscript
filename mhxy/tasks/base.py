@@ -51,6 +51,10 @@ class Task:
     title = "基础任务"      # 界面显示名
     description = ""        # 一句话说明
     is_dungeon = False      # True=可在「刷副本」页被当作一个副本选中运行（见 dungeon_tasks）
+    # True=支持「日常一条龙·多开每窗口独立链」：实现 make_chain_driver(wctx) 暴露
+    #   「每窗口一份 record + 单步推进函数」，与本任务自己的 run()/轮转共用同一套状态机。
+    #   需跨窗口协作的任务（如组队副本）保持 False，由一条龙当「集体屏障」处理。
+    CHAINS_PER_WINDOW = False
 
     # 标定向导（calibrate_dialog）按此 spec 驱动渲染。子类覆盖：
     #   {"regions":  [(key, 显示名, 说明), ...],     # 框选区域，写入 tc["regions"][key]

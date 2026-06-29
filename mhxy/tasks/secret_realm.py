@@ -58,6 +58,7 @@ class SecretRealmTask(Task):
     name = "secret_realm"
     title = "秘境降妖"
     description = "自动开活动→参加→秘境降妖→选副本/确定/继续挑战/挑战→盯进入战斗续战，失败/超时自动离开（支持多开轮转）"
+    CHAINS_PER_WINDOW = True   # 可做「日常一条龙·每窗口独立链」
 
     CALIBRATION = {
         "regions": [
@@ -161,6 +162,22 @@ class SecretRealmTask(Task):
             ctx.log("所有号都已跑满轮数/结束。")
         total = sum(r["runs"] for r in records)
         ctx.log(f"已停止。共完成 {total} 轮秘境，用时 {(time.time() - start_ts) / 60:.1f} 分钟。")
+
+    # ------------------------------------------------------------------
+    # 日常一条龙·每窗口独立链：暴露「单窗口一份 record + 单步推进函数」
+    # ------------------------------------------------------------------
+    def make_chain_driver(self, wctx):
+        """给定单窗口上下文，返回 (record, step_fn)。step_fn() 推进该窗口本任务状态机一步
+        （沿用 run() 同款 _step_once），record["done"]=本任务在该窗口完成。
+        与 run() 共用 _new_record/_step_once，不自跑 rotation、不切前台（由一条龙总轮转统一切）。"""
+        tc = wctx.task_cfg(self.name)
+        loop = tc["loop"]
+        regions = tc["regions"]
+        threshold = loop["match_threshold"]
+        self.flags = self._load_flags(tc)
+        self.max_runs = max(1, int(loop.get("max_runs", 1)))
+        rec = self._new_record(wctx)
+        return rec, (lambda: self._step_once(wctx, rec, loop, regions, threshold))
 
     # ------------------------------------------------------------------
     # 多开轮转：上下文与每号状态记录
