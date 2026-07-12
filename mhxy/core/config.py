@@ -434,6 +434,52 @@ DEFAULT_CONFIG = {
             "loop": {
                 "time_limit_min": 0          # 整条龙的时间上限(分钟)安全网，0=不限；正常按各子任务自身条件跑完
             }
+        },
+
+        # ---- 一键五开（自动启动5个游戏窗口并登录账号）----
+        #   通过运行Windows计划任务启动游戏客户端，自动点击开始游戏按钮，
+        #   处理上限提示框，选择账号并登录，等待排队结束，关闭开屏广告。
+        #   完整流程：启动客户端 → 开窗 → 选账号 → 登录 → 排队 → 关闭广告。
+        "five_start": {
+            "dry_run": True,                # true=演练：只识别模板，不执行真实点击
+            "task_name": "mhxy",            # Windows计划任务名称：用于启动游戏客户端
+            "launcher_process": "MyPCLauncher_x64r",  # 启动器进程名（用于参考）
+            "launcher_window_title": "MyPCLauncher_x64r",  # 启动器窗口标题（用于窗口检测和激活）
+            "auto_arrange": True,           # 一键五开完成后是否自动排列窗口（从左到右水平布局）
+            "arrange_gap": 10,              # 窗口排列间距（像素）
+            "account_count": 5,             # 账号数量：启动多少个账号（默认5开）
+            "start_wait_sec": 5,            # 客户端启动等待时间(秒)：运行计划任务后等待多久
+            "queue_timeout_sec": 300,       # 排队等待超时(秒)：排队超过此时间则跳过该账号继续下一个
+            "login_interval_sec": 2,        # 账号登录间隔(秒)：两个账号登录操作之间的间隔
+            "launcher_launch_wait_sec": 5.0,    # 启动器启动游戏窗口后的等待时间(秒)：等待游戏窗口完全启动再启动下一个启动器
+            "loop": {
+                "match_threshold": 0.85,    # 模板匹配阈值
+                "account_match_threshold": 0.9,  # 账号识别专用阈值（因为邮箱账号用户名是递增数字，容易选错）
+                "tick_interval_sec": 0.5,   # 状态检测间隔(秒，带抖动)
+                "click_retry_sec": 1.0,     # 点击失败后重试间隔(秒)
+                "window_detect_sec": 2.0,   # 窗口检测间隔(秒)
+                "account_scroll_step": -3,   # 账号列表滚动步数（负数=向下）
+                "account_scroll_max_tries": 8,  # 账号列表最大滚动次数
+                "account_scroll_settle_sec": 0.35  # 账号列表滚动后等待稳定时间(秒)
+            },
+            "regions": {                    # 相对登录器窗口 [x,y,w,h]，标定向导写入
+                "scene": None               # 主识别区（整窗或大半屏，所有按钮/对话框都在这里找）
+            },
+            "templates": {                  # 状态标志模板路径（标定向导裁图写入，tm_ 前缀）
+                "start_game_btn": None,     # 「开始游戏」按钮
+                "limit_dialog": None,       # 窗口上限提示框
+                "limit_confirm": None,      # 上限提示框的「确定」按钮
+                "account_dropdown": None,   # 登录账号下拉列表
+                "account_1": None,          # 号1账号选项（下拉列表展开后）
+                "account_2": None,          # 号2账号选项
+                "account_3": None,          # 号3账号选项
+                "account_4": None,          # 号4账号选项
+                "account_5": None,          # 号5账号选项
+                "enter_game_btn": None,     # 「进入游戏」按钮
+                "login_game_btn": None,     # 「登录游戏」按钮
+                "exit_queue_btn": None,     # 「退出排队」按钮（用于检测排队状态）
+                "welcome_screen": None      # 开屏宣传广告（可选）
+            }
         }
     }
 }

@@ -1740,6 +1740,378 @@ class SecretRealmPage(ctk.CTkFrame):
 
 
 # ----------------------------------------------------------------------
+# 捉鬼 页面
+# ----------------------------------------------------------------------
+class CatchGhostPage(ctk.CTkFrame):
+    TASK_NAME = "catch_ghost"
+    LOG_SOURCE = "捉鬼"
+    RUN_LABEL = "▶  开始捉鬼"
+
+    def __init__(self, master, app):
+        super().__init__(master, fg_color="transparent")
+        self.app = app
+        self.fonts = app.fonts
+        self.runner = None
+        self._cal_dialog = None
+        self._win_count = 0  # 记录当前选中的窗口数量，用于队长下拉框更新
+
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(2, weight=1)
+
+        self._build_header()
+        self._build_control()
+        self._build_body()
+        self.refresh()
+
+    def _build_header(self):
+        bar = ctk.CTkFrame(self, fg_color="transparent")
+        bar.grid(row=0, column=0, sticky="ew", padx=4, pady=(2, 14))
+        bar.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(bar, text="捉鬼", font=self.fonts["title"], text_color=T.TEXT).grid(
+            row=0, column=0, sticky="w")
+        right = ctk.CTkFrame(bar, fg_color="transparent")
+        right.grid(row=0, column=1, sticky="e")
+        self.pill_game = Pill(right, self.fonts)
+        self.pill_game.pack(side="left", padx=(0, 8))
+        self.pill_mode = Pill(right, self.fonts)
+        self.pill_mode.pack(side="left")
+        sub = ctk.CTkLabel(bar, text="组队后由队长自动捉鬼：开活动→参加→循环捉鬼多轮（寻路+战斗交给游戏自动），支持已组队模式",
+                           font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left", anchor="w")
+        sub.grid(row=1, column=0, sticky="ew", pady=(2, 0))
+        bind_wraplength(sub)
+
+    def _build_control(self):
+        card = Card(self)
+        card.grid(row=1, column=0, sticky="ew", padx=4, pady=(0, 14))
+        card.grid_columnconfigure(0, weight=1)
+
+        top = ctk.CTkFrame(card, fg_color="transparent")
+        top.grid(row=0, column=0, sticky="ew", padx=16, pady=(16, 10))
+        top.grid_columnconfigure(1, weight=1)
+        self.btn_run = ctk.CTkButton(top, text=self.RUN_LABEL, font=self.fonts["btn"],
+                                     height=46, width=200, corner_radius=T.RADIUS_SM,
+                                     fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER, text_color=T.ON_ACCENT,
+                                     command=self._toggle_run)
+        self.btn_run.grid(row=0, column=0, sticky="w")
+        tools = ctk.CTkFrame(top, fg_color="transparent")
+        tools.grid(row=0, column=2, sticky="e")
+        ctk.CTkButton(tools, text="选择窗口", font=self.fonts["body"], height=36, width=104,
+                      corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
+                      border_width=1, border_color=T.BORDER,
+                      command=lambda: self.app.open_window_picker(self.refresh)).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(tools, text="标定", font=self.fonts["body"], height=36, width=104,
+                      corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
+                      border_width=1, border_color=T.BORDER,
+                      command=self._open_calibrate).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(tools, text="刷新配置", font=self.fonts["body"], height=36, width=104,
+                      corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
+                      border_width=1, border_color=T.BORDER,
+                      command=self.refresh).pack(side="left")
+
+        ctk.CTkFrame(card, fg_color=T.BORDER, height=1).grid(
+            row=1, column=0, sticky="ew", padx=16, pady=(0, 4))
+
+        opts = ctk.CTkFrame(card, fg_color="transparent")
+        opts.grid(row=2, column=0, sticky="ew", padx=16, pady=(8, 16))
+        opts.grid_columnconfigure(0, weight=1, uniform="o")
+        opts.grid_columnconfigure(1, weight=1, uniform="o")
+
+        box1 = ctk.CTkFrame(opts, fg_color="transparent")
+        box1.grid(row=0, column=0, sticky="ew")
+        self.switch_mode = ctk.CTkSwitch(box1, text="实战模式", font=self.fonts["body"],
+                                         progress_color=T.DANGER, command=self._toggle_mode)
+        self.switch_mode.pack(anchor="w")
+        desc_mode = ctk.CTkLabel(box1, text="关 = 演练（只识别自检，安全）　开 = 真组队/真捉鬼",
+                                 font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
+        desc_mode.pack(fill="x", pady=(5, 0))
+        bind_wraplength(desc_mode)
+
+        box2 = ctk.CTkFrame(opts, fg_color="transparent")
+        box2.grid(row=0, column=1, sticky="ew", padx=(16, 0))
+        self.switch_skip = ctk.CTkSwitch(box2, text="已组队", font=self.fonts["body"],
+                                         progress_color=T.ACCENT, command=self._toggle_skip)
+        self.switch_skip.pack(anchor="w")
+        desc_skip = ctk.CTkLabel(box2, text="跳过组队流程，直接由队长跑捉鬼",
+                                 font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
+        desc_skip.pack(fill="x", pady=(5, 0))
+        bind_wraplength(desc_skip)
+
+    def _build_body(self):
+        body = ctk.CTkFrame(self, fg_color="transparent")
+        body.grid(row=2, column=0, sticky="nsew", padx=4)
+        body.grid_columnconfigure(0, weight=1)
+        body.grid_rowconfigure(0, weight=1)
+
+        left = Card(body)
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 7))
+        left.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(left, text="运行参数", font=self.fonts["h2"], text_color=T.TEXT).grid(
+            row=0, column=0, sticky="w", padx=16, pady=(14, 6))
+
+        # 队长选择
+        cap = ctk.CTkFrame(left, fg_color="transparent")
+        cap.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 6))
+        ctk.CTkLabel(cap, text="谁当队长", font=self.fonts["body"], text_color=T.TEXT).pack(side="left")
+        self.var_captain = ctk.StringVar(value="号1")
+        self.opt_captain = ctk.CTkOptionMenu(cap, variable=self.var_captain, values=["号1"],
+                                             font=self.fonts["body"], fg_color=T.SURFACE_2,
+                                             button_color=T.BORDER, button_hover_color=T.ACCENT,
+                                             text_color=T.TEXT, dropdown_text_color=T.TEXT, width=120,
+                                             command=self._on_captain)
+        self.opt_captain.pack(side="left", padx=(8, 0))
+
+        # 轮数设置
+        cnt = ctk.CTkFrame(left, fg_color="transparent")
+        cnt.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 6))
+        ctk.CTkLabel(cnt, text="捉鬼轮数（跑满即停）", font=self.fonts["body"],
+                     text_color=T.TEXT).pack(side="left")
+        self.var_count = ctk.StringVar(value="10")
+        ctk.CTkEntry(cnt, textvariable=self.var_count, width=70, font=self.fonts["body"],
+                     fg_color=T.SURFACE_2, border_color=T.BORDER).pack(side="left", padx=(8, 0))
+
+        # 时间上限
+        lim = ctk.CTkFrame(left, fg_color="transparent")
+        lim.grid(row=3, column=0, sticky="ew", padx=16, pady=(0, 6))
+        ctk.CTkLabel(lim, text="时间上限(分钟，0=不限)", font=self.fonts["body"],
+                     text_color=T.TEXT).pack(side="left")
+        self.var_limit = ctk.StringVar(value="60")
+        ctk.CTkEntry(lim, textvariable=self.var_limit, width=70, font=self.fonts["body"],
+                     fg_color=T.SURFACE_2, border_color=T.BORDER).pack(side="left", padx=(8, 0))
+
+        hint = ctk.CTkLabel(left, text="进入捉鬼后游戏自动寻路+战斗；脚本只监控「捉鬼中」标志和对话框。\n"
+                               "每轮终止条件是对话框消失（一轮结束）或捉鬼中标志消失（全部结束）。\n"
+                               "时间上限只是安全网。鼠标甩到屏幕左上角可紧急停止。",
+                     font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
+        hint.grid(row=4, column=0, sticky="ew", padx=16, pady=(2, 8))
+        bind_wraplength(hint)
+
+        self.lbl_calib = ctk.CTkLabel(left, text="", font=self.fonts["small"], text_color=T.TEXT_DIM,
+                                      justify="left")
+        self.lbl_calib.grid(row=5, column=0, sticky="ew", padx=16, pady=(2, 14))
+        bind_wraplength(self.lbl_calib)
+
+    def refresh(self):
+        self.app.cfg = cfg_mod.load_config()
+        tc = cfg_mod.task_config(self.app.cfg, self.TASK_NAME)
+
+        # 模式开关
+        dry = tc.get("dry_run", True)
+        (self.switch_mode.select if not dry else self.switch_mode.deselect)()
+        self._render_mode_pill(dry)
+
+        # 已组队开关
+        skip_team = tc.get("skip_team", False)
+        (self.switch_skip.select if skip_team else self.switch_skip.deselect)()
+
+        # 轮数和时间上限
+        loopc = tc.get("loop", {})
+        self.var_count.set(str(loopc.get("max_rounds", 10)))
+        self.var_limit.set(str(loopc.get("time_limit_min", 60)))
+
+        # 队长选择（先用缓存的窗口数渲染，再后台枚举刷新）
+        self._render_team_status()
+        self._kick_count_windows()
+
+        # 标定状态
+        regions = tc.get("regions", {})
+        templates = tc.get("templates", {})
+        need_r = ["activity_list"]
+        need_t = ["ghost_entry", "ghost_join", "ghost_accept_task", "ghost_task", "ghost_round_end", "ghost_confirm"]
+        rdone = sum(1 for k in need_r if regions.get(k))
+        tdone = sum(1 for k in need_t if templates.get(k))
+        # 组队标定（非已组队时需要）
+        team_tc = cfg_mod.task_config(self.app.cfg, "teaming")
+        team_need_r = TEAM_REQUIRED_REGIONS if not skip_team else []
+        team_need_t = TEAM_REQUIRED_TEMPLATES if not skip_team else []
+        team_rdone = sum(1 for k in team_need_r if team_tc.get("regions", {}).get(k))
+        team_tdone = sum(1 for k in team_need_t if team_tc.get("templates", {}).get(k))
+        calib_text = f"捉鬼标定：区域 {rdone}/{len(need_r)}，模板 {tdone}/{len(need_t)}"
+        if not skip_team:
+            calib_text += f"；组队标定：区域 {team_rdone}/{len(team_need_r)}，模板 {team_tdone}/{len(team_need_t)}"
+        all_done = (rdone == len(need_r) and tdone == len(need_t) and
+                    (skip_team or (team_rdone == len(team_need_r) and team_tdone == len(team_need_t))))
+        calib_text += "　✓ 可运行" if all_done else "　（还需标定）"
+        self.lbl_calib.configure(text=calib_text)
+
+    def _render_team_status(self):
+        """据当前窗口数渲染队长下拉（纯本地数据，秒回）。"""
+        n = getattr(self, "_win_count", 0)
+        opts = [f"号{i + 1}" for i in range(n)] if n >= 1 else ["（未选窗口）"]
+        self.opt_captain.configure(values=opts)
+        tc = cfg_mod.task_config(self.app.cfg, self.TASK_NAME)
+        cap = tc.get("captain_index", 0)
+        if not (0 <= cap < n):
+            cap = 0
+        self.var_captain.set(f"号{cap + 1}" if n else "（未选窗口）")
+
+    def _kick_count_windows(self):
+        """后台枚举已选窗口数，变了再回主线程重渲染。token 丢弃过期结果。"""
+        title = self.app.cfg.get("window_title", "梦幻西游")
+        offset = self.app.cfg.get("window_offset", [0, 0])
+        targets = self.app.cfg.get("targets", {})
+        token = object()
+        self._count_token = token
+
+        def work():
+            try:
+                n = len(win_mod.resolve_targets(title, offset, targets))
+            except Exception:
+                n = 0
+
+            def apply():
+                if token is not getattr(self, "_count_token", None):
+                    return
+                if n != getattr(self, "_win_count", -1):
+                    self._win_count = n
+                    self._render_team_status()
+
+            self.after(0, apply)
+
+        from threading import Thread
+        Thread(target=work, daemon=True).start()
+
+    def _render_mode_pill(self, dry):
+        if dry:
+            self.pill_mode.configure(text="演练", fg_color=T.PILL_OK_BG, text_color=T.SUCCESS)
+        else:
+            self.pill_mode.configure(text="实战", fg_color=T.PILL_DANGER_BG, text_color=T.DANGER)
+
+    def update_game_pill(self, connected, summary=""):
+        if connected:
+            self.pill_game.configure(text="● " + (summary or "目标窗口已连接"),
+                                     fg_color=T.PILL_OK_BG, text_color=T.SUCCESS)
+        else:
+            self.pill_game.configure(text="○ 未检测到目标窗口", fg_color=T.SURFACE_2, text_color=T.TEXT_DIM)
+
+    def _toggle_run(self):
+        if self.runner and self.runner.is_running():
+            self.runner.stop()
+            self._log_line("正在停止…", "warn")
+            self.btn_run.configure(text="停止中…", state="disabled")
+            return
+        self._apply_params()
+        self.app.cfg = cfg_mod.load_config()
+        task_cls = get_task(self.TASK_NAME)
+        self.runner = TaskRunner(task_cls(), self.app.cfg)
+        ok, problems = self.runner.start()
+        if not ok:
+            for p in problems:
+                self._log_line("无法启动：" + p, "error")
+            self.runner = None
+            return
+        self.btn_run.configure(text="■  停止", fg_color=T.DANGER, hover_color=T.DANGER_HOVER, state="normal")
+
+    def _apply_params(self):
+        """启动前把「运行参数」里可调项写回配置。"""
+        cfg = cfg_mod.load_config()
+        tc = cfg_mod.task_config(cfg, self.TASK_NAME)
+        loopc = tc.setdefault("loop", {})
+        try:
+            loopc["max_rounds"] = max(1, int(float(self.var_count.get())))
+        except (TypeError, ValueError):
+            pass
+        try:
+            loopc["time_limit_min"] = max(0.0, round(float(self.var_limit.get()), 1))
+        except (TypeError, ValueError):
+            pass
+        # 队长序号
+        cap_opts = [f"号{i + 1}" for i in range(self._win_count)] if self._win_count >= 1 else ["号1"]
+        cap_str = self.var_captain.get()
+        try:
+            cap_idx = cap_opts.index(cap_str)
+        except ValueError:
+            cap_idx = 0
+        tc["captain_index"] = cap_idx
+        cfg_mod.set_task_config(cfg, self.TASK_NAME, tc)
+        cfg_mod.save_config(cfg)
+        self.app.cfg = cfg
+
+    def _on_captain(self, val):
+        """队长下拉框切换时立即写回配置。"""
+        cfg = cfg_mod.load_config()
+        tc = cfg_mod.task_config(cfg, self.TASK_NAME)
+        cap_opts = [f"号{i + 1}" for i in range(self._win_count)] if self._win_count >= 1 else ["号1"]
+        try:
+            cap_idx = cap_opts.index(val)
+        except ValueError:
+            cap_idx = 0
+        tc["captain_index"] = cap_idx
+        cfg_mod.set_task_config(cfg, self.TASK_NAME, tc)
+        cfg_mod.save_config(cfg)
+        self.app.cfg = cfg
+        self._log_line(f"队长已设为 {val}。", "info")
+
+    def _on_runner_finished(self):
+        self.btn_run.configure(text=self.RUN_LABEL, fg_color=T.ACCENT,
+                               hover_color=T.ACCENT_HOVER, state="normal")
+
+    def _toggle_mode(self):
+        live = bool(self.switch_mode.get())
+        cfg = cfg_mod.load_config()
+        tc = cfg_mod.task_config(cfg, self.TASK_NAME)
+        tc["dry_run"] = not live
+        cfg_mod.set_task_config(cfg, self.TASK_NAME, tc)
+        cfg_mod.save_config(cfg)
+        self.app.cfg = cfg
+        self._render_mode_pill(not live)
+        if live:
+            self._log_line("⚠ 已切到实战：会真组队、真捉鬼，请用小号！", "warn")
+        else:
+            self._log_line("已切回演练（只识别自检，安全）。", "info")
+
+    def _toggle_skip(self):
+        skip = bool(self.switch_skip.get())
+        cfg = cfg_mod.load_config()
+        tc = cfg_mod.task_config(cfg, self.TASK_NAME)
+        tc["skip_team"] = skip
+        cfg_mod.set_task_config(cfg, self.TASK_NAME, tc)
+        cfg_mod.save_config(cfg)
+        self.app.cfg = cfg
+        self.refresh()
+        if skip:
+            self._log_line("已开启「已组队」：将跳过组队流程，直接由队长跑捉鬼。", "info")
+        else:
+            self._log_line("已关闭「已组队」：恢复完整流程（先组队再捉鬼）。", "info")
+
+    def _open_calibrate(self):
+        if getattr(self, "_cal_dialog", None) is not None:
+            try:
+                if self._cal_dialog.winfo_exists():
+                    self._cal_dialog.lift()
+                    self._cal_dialog.focus_force()
+                    return
+            except Exception:
+                pass
+        from .calibrate_dialog import CalibrateDialog
+
+        def _after():
+            self._cal_dialog = None
+            self.refresh()
+            self._log_line("标定完成，配置已更新。", "info")
+
+        try:
+            self._cal_dialog = CalibrateDialog(self.app, task_name=self.TASK_NAME, on_done=_after)
+        except Exception as e:
+            self._cal_dialog = None
+            self._log_line(f"打开标定向导失败：{e}", "error")
+
+    def pump(self):
+        if self.runner:
+            q = self.runner.log_queue
+            while not q.empty():
+                level, msg = q.get()
+                self._log_line(msg, level)
+            if not self.runner.is_running() and self.btn_run.cget("text") != self.RUN_LABEL:
+                self._on_runner_finished()
+
+    def _log_line(self, msg, level="info"):
+        self.app.log_line(msg, level, getattr(self, "LOG_SOURCE", None))
+
+    def _clear_log(self):
+        self.app.clear_log()
+
+
+# ----------------------------------------------------------------------
 # 设置页面
 # ----------------------------------------------------------------------
 class SettingsPage(ctk.CTkFrame):
@@ -2052,17 +2424,21 @@ class GeneralPage(ctk.CTkFrame):
         self.runner = None          # 一键组队跑的后台任务（DungeonTask）
         self.runner_db = None       # 一键解散跑的后台任务（DisbandTask），与组队互斥（同用鼠标/队伍面板）
         self.runner_ob = None       # 一键整理跑的后台任务（OrganizeBagTask），与组队并存互不干扰
+        self.runner_fs = None       # 一键五开跑的后台任务（FiveStartTask）
         self._team_cal_dialog = None    # 「标定（组队）」去重槽（队长ID 走无弹窗直接标定，无需去重槽）
         self._ob_cal_dialog = None      # 「标定（整理背包）」去重槽
+        self._fs_cal_dialog = None      # 「标定（五开）」去重槽
         self.btn_ob = None          # 「一键整理」按钮（_refresh_body 每次重建）
         self.switch_ob = None       # 整理背包实战/演练开关
         self.switch_auto_ob = None  # 「自动整理背包」开关（任何任务检测到背包满自动整理）
         self._win_count = 0         # 已选多开窗口数（resolve_targets），供状态行显示
         self.btn_team = None
         self.btn_disband = None     # 「一键解散」按钮（_refresh_body 每次重建）
+        self.btn_five_start = None  # 「一键五开」按钮（_refresh_body 每次重建）
         self.btn_leader = None      # 行内队长ID按钮（_refresh_body 每次重建）
         self._leader_thumbs = []    # 行内队长ID缩略图防 GC
         self.lbl_team_status = None
+        self.windows_dropdown = None    # 窗口标题下拉列表（列出所有窗口）
         self._build()
 
     def _build(self):
@@ -2133,6 +2509,95 @@ class GeneralPage(ctk.CTkFrame):
         else:
             self.app.toast(f"已把 {ok} 个号还原到基准尺寸 {bw}×{bh}")
         self.refresh()
+
+    def _arrange_windows(self):
+        """手动触发：排列所有游戏窗口从左到右水平布局"""
+        cfg = cfg_mod.load_config()
+        self.cfg = cfg
+        self.app.cfg = cfg
+        base = (cfg.get("targets") or {}).get("base_size")
+        if not base or len(base) < 2:
+            self.app.toast("请先设置基准尺寸（在窗口列表点「设为基准」）")
+            return
+
+        title = cfg.get("window_title", "梦幻西游")
+        offset = cfg.get("window_offset", [0, 0])
+        try:
+            wins = win_mod.locate_all(title, offset)
+        except Exception:
+            wins = []
+
+        if not wins:
+            self.app.toast(f"没检测到游戏窗口（标题含「{title}」），请先打开游戏")
+            return
+
+        # 导入排列模块
+        from ..core import arrange
+
+        # 获取间距配置（默认10像素）
+        gap = 10
+
+        # 检查是否能排列
+        can_arrange, msg = arrange.get_arrangement_info(base, len(wins), gap)
+        if not can_arrange:
+            self.app.toast(f"无法排列：{msg}")
+            return
+
+        # 执行排列
+        ok = arrange.arrange_windows(wins, base, screen_gap=gap)
+        if ok < len(wins):
+            self.app.toast(f"已排列 {ok}/{len(wins)} 个窗口；部分窗口可能锁了分辨率")
+        else:
+            self.app.toast(f"已排列 {ok} 个窗口（从左到右水平布局）")
+        self.refresh()
+
+    def _list_all_windows(self):
+        """列出当前所有窗口的标题，方便调试"""
+        try:
+            import pygetwindow as gw
+            all_windows = gw.getAllWindows()
+            self.app.log("=== 当前所有窗口标题 ===", level="warn")
+            for i, w in enumerate(all_windows, 1):
+                try:
+                    title = w.title or "(无标题)"
+                    size = f"{w.width}x{w.height}" if w.width and w.height else "未知尺寸"
+                    minimized = "已最小化" if w.isMinimized else "正常"
+                    self.app.log(f"  [{i}] {title} ({size}, {minimized})")
+                except Exception:
+                    self.app.log(f"  [{i}] (无法获取窗口信息)")
+            self.app.log(f"=== 共 {len(all_windows)} 个窗口 ===", level="warn")
+        except Exception as e:
+            self.app.log(f"列出窗口失败：{e}", level="error")
+
+    def _get_all_window_titles(self):
+        """获取所有窗口标题列表，用于下拉列表"""
+        try:
+            import pygetwindow as gw
+            all_windows = gw.getAllWindows()
+            titles = []
+            for w in all_windows:
+                try:
+                    title = w.title or ""
+                    if title and len(title) > 0:
+                        # 格式：标题（尺寸，状态）
+                        size = f"{w.width}x{w.height}" if w.width and w.height else "未知"
+                        minimized = "最小化" if w.isMinimized else "正常"
+                        display_title = f"{title} ({size}, {minimized})"
+                        titles.append(display_title)
+                except Exception:
+                    continue
+            return titles if titles else ["无窗口"]
+        except Exception:
+            return ["获取失败"]
+
+    def _refresh_windows_dropdown(self):
+        """刷新桌面窗口下拉列表"""
+        if self.windows_dropdown:
+            titles = self._get_all_window_titles()
+            self.windows_dropdown.configure(values=titles)
+            if titles:
+                self.windows_dropdown.set(titles[0])
+            self.app.toast(f"已刷新窗口列表（共 {len(titles)} 个窗口）")
 
     def _refresh_body(self):
         for w in self.body.winfo_children():
@@ -2214,6 +2679,9 @@ class GeneralPage(ctk.CTkFrame):
             self.btn_disband.configure(text="■  停止解散", fg_color=T.DANGER, hover_color=T.DANGER_HOVER)
         self._kick_count_windows()
 
+        # ── 一键五开（自动启动游戏客户端并完成5个账号的登录流程）──
+        self._build_five_start_card()
+
         # ── 整理背包（跨任务共享：任何任务流程都可穿插调用，这里可单独一键运行）──
         self._build_organize_card()
 
@@ -2238,10 +2706,49 @@ class GeneralPage(ctk.CTkFrame):
         ctk.CTkButton(btns2, text="还原尺寸", font=self.fonts["body"], height=36, width=100,
                       corner_radius=T.RADIUS_SM, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER, text_color=T.ON_ACCENT,
                       command=self._normalize_now).pack(pady=(0, 6))
+        ctk.CTkButton(btns2, text="排列窗口", font=self.fonts["body"], height=30, width=100,
+                      corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
+                      border_width=1, border_color=T.BORDER,
+                      command=self._arrange_windows).pack(pady=(0, 6))
         ctk.CTkButton(btns2, text="刷新", font=self.fonts["body"], height=30, width=100,
                       corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
                       border_width=1, border_color=T.BORDER,
                       command=self.refresh).pack()
+
+        # ── 桌面窗口列表（下拉列表）──
+        win_list_frame = ctk.CTkFrame(c2, fg_color="transparent")
+        win_list_frame.pack(fill="x", padx=16, pady=(12, 4))
+        ctk.CTkLabel(win_list_frame, text="桌面所有窗口（用于确定窗口标题）：",
+                     font=self.fonts["small"], text_color=T.TEXT_DIM).pack(anchor="w", pady=(0, 4))
+
+        dropdown_frame = ctk.CTkFrame(win_list_frame, fg_color="transparent")
+        dropdown_frame.pack(fill="x", pady=(2, 0))
+        dropdown_frame.grid_columnconfigure(0, weight=1)
+
+        # 获取所有窗口标题作为下拉列表选项
+        window_titles = self._get_all_window_titles()
+        self.windows_dropdown = ctk.CTkComboBox(
+            dropdown_frame,
+            values=window_titles,
+            font=self.fonts["body"],
+            height=28,
+            corner_radius=T.RADIUS_SM,
+            border_width=1,
+            border_color=T.BORDER,
+            button_color=T.BTN,
+            button_hover_color=T.BTN_HOVER,
+            dropdown_fg_color=T.BTN,
+            dropdown_hover_color=T.BTN_HOVER
+        )
+        self.windows_dropdown.grid(row=0, column=0, sticky="ew", padx=(0, 8))
+        if window_titles:
+            self.windows_dropdown.set(window_titles[0])
+
+        # 刷新按钮
+        ctk.CTkButton(dropdown_frame, text="刷新窗口", font=self.fonts["small"], height=28, width=80,
+                      corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
+                      border_width=1, border_color=T.BORDER,
+                      command=self._refresh_windows_dropdown).grid(row=0, column=1)
 
         if not (base and len(base) >= 2):
             ctk.CTkLabel(c2, text="基准尺寸尚未设置：在下方窗口列表点「设为基准」即可。",
@@ -2485,6 +2992,47 @@ class GeneralPage(ctk.CTkFrame):
             self.btn_disband.configure(text="⏏  一键解散", fg_color=T.BTN, hover_color=T.BTN_HOVER,
                                        text_color=T.TEXT, state="normal")
 
+    def _start_five_start(self):
+        """启动/停止一键五开任务"""
+        if self.runner_fs and self.runner_fs.is_running():
+            # 正在运行，执行停止
+            self.runner_fs.stop()
+            self._log_line("正在停止…", "warn", "五开")
+            self.btn_five_start.configure(text="停止中…", state="disabled")
+            return
+        # 启动一键五开
+        cfg = cfg_mod.load_config()
+        # 从配置读取演练/实战模式（允许用户在配置或标定页面设置）
+        tc = cfg_mod.task_config(cfg, "five_start")
+        # 默认演练模式（安全）
+        dry_run = tc.get("dry_run", True)
+        tc["dry_run"] = dry_run
+        cfg_mod.set_task_config(cfg, "five_start", tc)
+        cfg_mod.save_config(cfg)
+        self.app.cfg = self.cfg = cfg
+
+        task_cls = get_task("five_start")
+        if task_cls is None:
+            self._log_line("找不到一键五开任务。", "error", "五开")
+            return
+        self.runner_fs = TaskRunner(task_cls(), self.app.cfg)
+        ok, problems = self.runner_fs.start()
+        if not ok:
+            for p in problems:
+                self._log_line("无法开始五开：" + p, "error", "五开")
+            self.runner_fs = None
+            return
+        mode_str = "演练" if dry_run else "实战"
+        self._log_line(f"开始一键五开（{mode_str}模式）…", "hit", "五开")
+        self.btn_five_start.configure(text="■  停止五开", fg_color=T.DANGER, hover_color=T.DANGER_HOVER,
+                                      state="normal")
+
+    def _on_five_start_finished(self):
+        """一键五开任务完成时恢复按钮状态"""
+        if self.btn_five_start is not None:
+            self.btn_five_start.configure(text="▶  一键五开", fg_color=T.ACCENT,
+                                          hover_color=T.ACCENT_HOVER, state="normal")
+
     # ---- 由 App._tick 驱动 ----
     def pump(self):
         if self.runner:
@@ -2503,6 +3051,14 @@ class GeneralPage(ctk.CTkFrame):
             if not self.runner_db.is_running() and self.btn_disband is not None \
                     and self.btn_disband.cget("text") != "⏏  一键解散":
                 self._on_disband_finished()
+        if self.runner_fs:
+            q = self.runner_fs.log_queue
+            while not q.empty():
+                level, msg = q.get()
+                self._log_line(msg, level, "五开")
+            if not self.runner_fs.is_running() and self.btn_five_start is not None \
+                    and self.btn_five_start.cget("text") != "▶  一键五开":
+                self._on_five_start_finished()
         if self.runner_ob:
             q = self.runner_ob.log_queue
             while not q.empty():
@@ -2523,6 +3079,106 @@ class GeneralPage(ctk.CTkFrame):
         i = targets.get("single_index", 0)
         i = i if isinstance(i, int) and i >= 0 else 0
         return f"单开 · 号{i + 1}"
+
+    # ------------------------------------------------------------------
+    # 一键五开（自动启动游戏客户端并完成5个账号的登录流程）
+    # ------------------------------------------------------------------
+    def _build_five_start_card(self):
+        """在组队卡片之后渲染「一键五开」卡片：标定状态 + 说明 + 按钮行。
+        日志统一写到 App 右侧的全局日志面板（来源标签「五开」）。"""
+        cfg = self.cfg
+        fs_tc = cfg_mod.task_config(cfg, "five_start")
+        tpl = fs_tc.get("templates", {}) or {}
+
+        # 必需模板（参考five_start.py的_REQUIRED_FLAGS）
+        required_keys = ["start_game_btn", "limit_dialog", "limit_confirm",
+                        "account_dropdown", "enter_game_btn", "login_game_btn",
+                        "exit_queue_btn"]
+        done = sum(1 for k in required_keys if tpl.get(k))
+        total = len(required_keys)
+        ready = (total > 0 and done == total)
+
+        c = self._card()
+        head = ctk.CTkFrame(c, fg_color="transparent")
+        head.pack(fill="x", padx=16, pady=(14, 4))
+        head.grid_columnconfigure(0, weight=1)
+        txt = ctk.CTkFrame(head, fg_color="transparent")
+        txt.grid(row=0, column=0, sticky="ew")
+        ctk.CTkLabel(txt, text="一键五开", font=self.fonts["h2"], text_color=T.TEXT).pack(anchor="w")
+        ctk.CTkLabel(txt, text=f"模板 {done}/{total} 已标定"
+                              + ("　✓ 已就绪" if ready else "　（还需标定）"),
+                     font=self.fonts["body"],
+                     text_color=T.SUCCESS if ready else T.WARN).pack(anchor="w", pady=(4, 0))
+        sub = ctk.CTkLabel(txt, text="运行计划任务启动游戏客户端 → 点击开始游戏 → "
+                                    "处理上限提示框 → 选择账号 → 登录 → 等待排队 → 关闭广告。",
+                           font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
+        sub.pack(fill="x", pady=(2, 0))
+        bind_wraplength(sub)
+        btns = ctk.CTkFrame(head, fg_color="transparent")
+        btns.grid(row=0, column=1, padx=(12, 0))
+        ctk.CTkButton(btns, text="标定（五开）", font=self.fonts["body"], height=36, width=120,
+                      corner_radius=T.RADIUS_SM, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
+                      text_color=T.ON_ACCENT, command=self._open_five_start_calibrate).pack()
+
+        ctk.CTkFrame(c, fg_color=T.BORDER, height=1).pack(fill="x", padx=16, pady=(10, 0))
+        act = ctk.CTkFrame(c, fg_color="transparent")
+        act.pack(fill="x", padx=16, pady=(10, 14))
+        self.btn_five_start = ctk.CTkButton(act, text="▶  一键五开", font=self.fonts["btn"], height=40, width=150,
+                                            corner_radius=T.RADIUS_SM, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
+                                            text_color=T.ON_ACCENT, command=self._start_five_start)
+        self.btn_five_start.pack(side="left")
+        ctk.CTkButton(act, text="选择窗口", font=self.fonts["body"], height=36, width=104,
+                      corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
+                      border_width=1, border_color=T.BORDER,
+                      command=lambda: self.app.open_window_picker(self.refresh)).pack(side="right")
+
+        # 演练/实战开关
+        self.switch_fs = ctk.CTkSwitch(act, text="实战模式（真的会启动客户端和点击）", font=self.fonts["body"],
+                                       command=self._toggle_five_start_mode, progress_color=T.DANGER)
+        self.switch_fs.pack(side="left", padx=(16, 0))
+        if not fs_tc.get("dry_run", True):
+            self.switch_fs.select()
+        else:
+            self.switch_fs.deselect()
+
+        # 恢复按钮状态（runner还在运行）
+        if self.runner_fs and self.runner_fs.is_running():
+            self.btn_five_start.configure(text="■  停止五开", fg_color=T.DANGER, hover_color=T.DANGER_HOVER)
+
+    def _toggle_five_start_mode(self):
+        """切换演练/实战模式"""
+        cfg = cfg_mod.load_config()
+        fs_tc = cfg.setdefault("tasks", {}).setdefault("five_start", {})
+        dry = not self.switch_fs.get()
+        fs_tc["dry_run"] = dry
+        cfg_mod.save_config(cfg)
+        self.app.cfg = cfg
+        mode_str = "实战" if not dry else "演练"
+        self.app.toast(f"已切回{mode_str}（{mode_str}模式）")
+        self._log_line(f"已切换{mode_str}模式（{mode_str}）。", "info", "五开")
+
+    def _open_five_start_calibrate(self):
+        """打开五开标定（命名空间 five_start），按 _fs_cal_dialog 去重。"""
+        existing = self._fs_cal_dialog
+        if existing is not None:
+            try:
+                if existing.winfo_exists():
+                    existing.lift()
+                    existing.focus_force()
+                    return
+            except Exception:
+                pass
+        from .calibrate_dialog import CalibrateDialog
+
+        def _after():
+            self._fs_cal_dialog = None
+            self.refresh()
+
+        try:
+            self._fs_cal_dialog = CalibrateDialog(self.app, task_name="five_start", on_done=_after)
+        except Exception as e:
+            self._fs_cal_dialog = None
+            self.app.toast(f"打开五开标定失败：{e}")
 
     # ------------------------------------------------------------------
     # 整理背包（跨任务共享：core.InventoryOrganizer + tasks.OrganizeBagTask；
@@ -3131,11 +3787,12 @@ class App(ctk.CTk):
            ("daily", "🐉  日常一条龙"),
            ("sniper", "🗡  秒装备"), ("treasure_map", "🗺  宝图"),
            ("escort", "🚚  运镖"), ("secret_realm", "👹  秘境降妖"),
+           ("catch_ghost", "👻  捉鬼"),
            ("dungeon", "🏰  刷副本"),
            ("settings", "⚙  设置"), ("about", "ⓘ  关于")]
     # 可运行任务页（有 runner/pump/update_game_pill），App 的定时器/热键/关闭钩子按此遍历。
     # general 也在内：它的「一键组队」会跑后台任务，需要 pump 抽日志、关闭时停 runner。
-    RUNNABLE_KEYS = ("general", "daily", "sniper", "treasure_map", "escort", "secret_realm", "dungeon")
+    RUNNABLE_KEYS = ("general", "daily", "sniper", "treasure_map", "escort", "secret_realm", "catch_ghost", "dungeon")
 
     def __init__(self):
         super().__init__()
@@ -3272,6 +3929,7 @@ class App(ctk.CTk):
         "treasure_map": TreasureMapPage,
         "escort": EscortPage,
         "secret_realm": SecretRealmPage,
+        "catch_ghost": CatchGhostPage,
         "dungeon": DungeonPage,
         "general": GeneralPage,
         "settings": SettingsPage,

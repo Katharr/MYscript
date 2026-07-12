@@ -378,7 +378,15 @@ def _get_sct():
 
 
 def grab(rect):
-    """截取屏幕矩形 [left, top, w, h]，返回 OpenCV BGR 图像。"""
+    """截取屏幕矩形 [left, top, w, h]，返回 OpenCV BGR 图像。rect=None 时截取整个屏幕。"""
+    if rect is None:
+        # 截取整个屏幕（使用 mss 的 monitor 1）
+        sct = _get_sct()
+        monitor = sct.monitors[1]  # monitor 1 = 全屏（包含所有显示器）
+        raw = sct.grab(monitor)
+        img = np.array(raw)  # BGRA
+        return cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+
     left, top, w, h = rect
     raw = _get_sct().grab({"left": int(left), "top": int(top),
                            "width": int(w), "height": int(h)})

@@ -32,10 +32,11 @@ _VIRTUAL_SPECS = {"teaming": ("组队（全局共享）", TEAM_CALIBRATION)}
 # 当前屏幕框选，不再开 CalibrateDialog 窗口。逻辑与 CalibrateDialog._grab_roi 同源
 # （藏起界面→当前屏幕框选→按落点反查参照窗口算相对坐标），抽成模块级函数共享。
 # ----------------------------------------------------------------------
-def grab_roi_on_app(app, cfg, prompt, with_crop=False, toast=None, alpha_windows=None):
+def grab_roi_on_app(app, cfg, prompt, with_crop=False, toast=None, alpha_windows=None, no_game_window=False):
     """在【当前屏幕】框选一块区域，返回 (rel_roi, crop)；失败/取消返回 (None, None)。
     不激活/不切前台：你把哪个号摆在前面就标到哪个，框完按落点反查参照窗口算相对坐标。
-    toast: 可选回调 toast(msg, color)；alpha_windows: 框选期间临时隐身的窗口（默认仅 app）。"""
+    toast: 可选回调 toast(msg, color)；alpha_windows: 框选期间临时隐身的窗口（默认仅 app）。
+    no_game_window: True时跳过游戏窗口检测，直接截取整个屏幕（用于启动器界面标定）。"""
     title = cfg.get("window_title", "梦幻西游")
     offset = cfg.get("window_offset", [0, 0])
     windows = alpha_windows or (app,)
@@ -47,13 +48,16 @@ def grab_roi_on_app(app, cfg, prompt, with_crop=False, toast=None, alpha_windows
             except Exception:
                 pass
 
-    hint_wins = win_mod.locate_all(title, offset)
-    if not hint_wins:
-        if toast:
-            toast(f"没找到游戏窗口（标题含「{title}」），请先打开游戏。", T.WARN)
-        return None, None
-    hr = hint_wins[0].rect()
-    center = (hr[0] + hr[2] // 2, hr[1] + hr[3] // 2) if hr else None
+    # no_game_window模式下跳过游戏窗口检测，直接在屏幕中心框选
+    center = None
+    if not no_game_window:
+        hint_wins = win_mod.locate_all(title, offset)
+        if not hint_wins:
+            if toast:
+                toast(f"没找到游戏窗口（标题含「{title}」），请先打开游戏。", T.WARN)
+            return None, None
+        hr = hint_wins[0].rect()
+        center = (hr[0] + hr[2] // 2, hr[1] + hr[3] // 2) if hr else None
 
     _set_alpha(0.0)
     try:
@@ -79,6 +83,10 @@ def grab_roi_on_app(app, cfg, prompt, with_crop=False, toast=None, alpha_windows
     if roi_abs is None:
         return None, None
 
+    # no_game_window模式下返回绝对坐标（相对于屏幕），不计算相对游戏窗口坐标
+    if no_game_window:
+        return roi_abs, crop
+
     cx = roi_abs[0] + roi_abs[2] // 2
     cy = roi_abs[1] + roi_abs[3] // 2
     ref = win_mod.window_at_point(title, offset, cx, cy)
@@ -97,8 +105,15 @@ def calibrate_template_direct(app, task_name, key, name, toast=None):
     """无弹窗直接框选并裁图存成模板，写入 cfg.tasks.<task_name>.templates[key]。返回 True=已保存。
     供「标定队长ID」按钮直接调用（task_name="teaming", key="leader_id"）。"""
     cfg = cfg_mod.load_config()
+    # 检查任务的CALIBRATION是否有no_game_window标志
+    task_cls = get_task(task_name)
+    no_game_window = False
+    if task_cls is not None:
+        spec = getattr(task_cls, "CALIBRATION", {})
+        no_game_window = spec.get("no_game_window", False)
+
     rel, crop = grab_roi_on_app(app, cfg, f"框选「{name}」（会裁下来存成模板图）",
-                                with_crop=True, toast=toast)
+                                with_crop=True, toast=toast, no_game_window=no_game_window)
     if rel is None:
         return False
     if crop is None or crop.size == 0:
@@ -157,12 +172,16 @@ class CalibrateDialog(ctk.CTkToplevel):
             self.spec = {"regions": [], "templates": [], "watchlist": False}
             title_name = task_name
 
+        # 提取no_game_window标志（用于启动器界面标定）
+        self.no_game_window = self.spec.get("no_game_window", False)
+
         if only:
             only = set(only)
             self.spec = {
                 "regions": [it for it in self.spec.get("regions", []) if it[0] in only],
                 "templates": [it for it in self.spec.get("templates", []) if it[0] in only],
                 "watchlist": False,
+                "no_game_window": self.no_game_window,
             }
         if exclude:
             exclude = set(exclude)
@@ -170,6 +189,7 @@ class CalibrateDialog(ctk.CTkToplevel):
                 "regions": [it for it in self.spec.get("regions", []) if it[0] not in exclude],
                 "templates": [it for it in self.spec.get("templates", []) if it[0] not in exclude],
                 "watchlist": self.spec.get("watchlist", False),
+                "no_game_window": self.no_game_window,
             }
 
         self.cfg = cfg_mod.load_config()
@@ -339,7 +359,8 @@ class CalibrateDialog(ctk.CTkToplevel):
         # 只在【当前屏幕】框选，框完按落点反查参照窗口算相对坐标——你把哪个号摆前面就标到哪个。
         # 这里多传 self 让对话框自身也一并隐身，且复用 self.cfg（_save() 随后会回存 task_config）。
         return grab_roi_on_app(self.app, self.cfg, prompt, with_crop=with_crop,
-                               toast=self._toast, alpha_windows=(self.app, self))
+                               toast=self._toast, alpha_windows=(self.app, self),
+                               no_game_window=self.no_game_window)
 
     # ---- 区域标定 ----
     def _calibrate_region(self, key, name):
@@ -501,12 +522,74 @@ class CalibrateDialog(ctk.CTkToplevel):
             ctk.CTkLabel(holder, text="○ 未标定", font=self.fonts["small"],
                          text_color=T.TEXT_DIM).grid(row=0, column=0)
 
-        ctk.CTkButton(card, text=btn_text, font=self.fonts["small"], height=30,
+        # 按钮行：重新标定 + 调试（并排）
+        btn_row = ctk.CTkFrame(card, fg_color="transparent")
+        btn_row.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 10))
+        btn_row.grid_columnconfigure(0, weight=1)
+        btn_row.grid_columnconfigure(1, weight=1)
+
+        # 左按钮：重新标定/删除
+        ctk.CTkButton(btn_row, text=btn_text, font=self.fonts["small"], height=30,
                       corner_radius=T.RADIUS_SM, text_color=T.TEXT,
                       fg_color=("transparent" if danger_btn else T.BTN),
                       hover_color=(T.DANGER if danger_btn else T.BTN_HOVER),
                       border_width=1, border_color=T.BORDER,
-                      command=btn_cmd).grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 10))
+                      command=btn_cmd).grid(row=0, column=0, sticky="ew", padx=(0, 4))
+
+        # 右按钮：调试（仅在模板已标定时显示）
+        if ok and not danger_btn:
+            ctk.CTkButton(btn_row, text="调试", font=self.fonts["small"], height=30, width=56,
+                          corner_radius=T.RADIUS_SM, text_color=T.TEXT,
+                          fg_color="transparent", hover_color=T.BORDER,
+                          border_width=1, border_color=T.BORDER,
+                          command=lambda r=rel, n=name: self._debug_template(r, n)).grid(
+                              row=0, column=1, sticky="ew")
+
+    # ------------------------------------------------------------------
+    def _debug_template(self, template_path, name):
+        """调试：在当前游戏窗口中尝试匹配模板，显示结果。"""
+        if not template_path:
+            self._toast(f"「{name}」未标定，无法调试。", T.WARN)
+            return
+
+        # 加载模板
+        tpl = vision.load_template(template_path)
+        if tpl is None:
+            self._toast(f"模板图加载失败：{template_path}", T.DANGER)
+            return
+
+        # 找游戏窗口
+        title = self.cfg.get("window_title", "梦幻西游")
+        offset = self.cfg.get("window_offset", [0, 0])
+        windows = win_mod.locate_all(title, offset)
+        if not windows:
+            self._toast(f"没找到游戏窗口（标题含「{title}」）", T.WARN)
+            return
+
+        # 截取第一个窗口
+        win = windows[0]
+        rect = win.rect()
+        scene = win_mod.grab(rect)
+        if scene is None:
+            self._toast("截图失败", T.DANGER)
+            return
+
+        # 尝试匹配
+        threshold = 0.85
+        hit = vision.match(scene, tpl, threshold)
+        if hit:
+            cx, cy, score = hit
+            screen_x = rect[0] + cx
+            screen_y = rect[1] + cy
+            self._toast(f"✓ 找到「{name}」：匹配度 {score:.3f}，坐标 ({screen_x}, {screen_y})", T.SUCCESS)
+        else:
+            # 降低阈值再试
+            hit_low = vision.match(scene, tpl, 0.70)
+            if hit_low:
+                cx, cy, score = hit_low
+                self._toast(f"⚠ 低阈值(0.70)找到「{name}」：{score:.3f} < 0.85，建议降低阈值或重新标定", T.WARN)
+            else:
+                self._toast(f"❌ 未找到「{name}」：模板可能不准确或不在当前窗口中", T.DANGER)
 
     def _save(self):
         cfg_mod.set_task_config(self.cfg, self.task_name, self.tc)

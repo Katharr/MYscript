@@ -35,7 +35,7 @@ from .base import Task, register, get_task, dungeon_tasks
 
 # 可进一条龙的任务（这些都有明确「完成条件」、会自动结束）。秒装备 sniper 不在此列。
 # "dungeon" 是「刷副本」中枢步：跑时解析成 tasks.dungeon.selected 选中的那个副本（见 _resolve）。
-CHAINABLE = ["treasure_map", "escort", "secret_realm", "dungeon"]
+CHAINABLE = ["treasure_map", "escort", "secret_realm", "dungeon", "catch_ghost"]
 
 
 @register
