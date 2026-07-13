@@ -8,6 +8,7 @@ import os
 import sys
 import json
 import copy
+import tempfile
 from pathlib import Path
 
 # 数据根目录：config.json / templates / captures 都存这里。
@@ -165,7 +166,7 @@ DEFAULT_CONFIG = {
                 "collect_timeout_sec": 600,  # 整个收集阶段上限（自动战斗可能很久，给足）
                 "dig_timeout_sec": 120,      # 单张挖宝（含战斗）超时
                 "scroll_step": -3,           # 每次滚轮格数（负=向下翻）
-                "scroll_max_tries": 8,       # 滑动找目标最多翻几屏，超了仍没找到→兜底
+                "scroll_max_tries": 30,      # 滑动找目标最多翻几屏（默认30=适配背包长列表），超了仍没找到→兜底
                 "scroll_settle_sec": 0.35,   # 每滚一屏后等画面落定再重找的间隔（带抖动）。
                                              #   滚轮查找会在【同一个号】上一气呵成跑完（找到/翻完才轮转下个号），
                                              #   故这里要自等画面静止，别太小（否则截到滚动动画中途、漏识别）
@@ -463,8 +464,20 @@ def load_config():
 
 def save_config(cfg):
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, ensure_ascii=False, indent=2)
+    # 原子写入：写 temp → rename，防止进程崩溃导致 config.json 损坏。
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", dir=str(CONFIG_PATH.parent),
+        prefix=".config_tmp_", suffix=".json", delete=False)
+    try:
+        json.dump(cfg, tmp, ensure_ascii=False, indent=2)
+        tmp.close()
+        os.replace(tmp.name, str(CONFIG_PATH))
+    except Exception:
+        try:
+            os.unlink(tmp.name)
+        except Exception:
+            pass
+        raise
 
 
 def task_config(cfg, task_name):

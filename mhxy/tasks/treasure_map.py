@@ -222,7 +222,7 @@ class TreasureMapTask(Task):
         phase_b：是否已进入挖宝阶段（决定卡死兜底回开活动还是回重开背包）。
         last/still_since/t0/t_diag：收集/挖宝监控的逐帧状态（原内部 while 循环搬到这里、跨访问保留）。"""
         return {"ctx": wctx, "state": self._start_state, "t_state": time.time(),
-                "scrolls": 0, "dug": 0, "phase_b": self._skip_collect,
+                "dug": 0, "phase_b": self._skip_collect,
                 "last": None, "still_since": None, "t0": 0.0, "t_diag": 0.0,
                 "recover": 0, "done": False, "dead_logged": False}
 
@@ -264,7 +264,6 @@ class TreasureMapTask(Task):
             return
         ctx.log("已打开活动，滚轮翻找「宝图任务」…")
         self._interruptible_sleep(ctx, self._jitter(0.6, ctx))
-        rec["scrolls"] = 0
         self._goto(rec, S_FIND_CARD)
 
     # ---- 阶段 A：找卡片 → 点「参加」（每访问一次：找不到就滚一屏，超 scroll_max_tries 屏则恢复）----
@@ -298,7 +297,7 @@ class TreasureMapTask(Task):
             should_stop=ctx.should_stop,
             sleep=lambda s: self._interruptible_sleep(ctx, self._jitter(s, ctx)),
             scroll_step=loop.get("scroll_step", -3),
-            max_tries=max(1, loop.get("scroll_max_tries", 8)),
+            max_tries=max(1, loop.get("scroll_max_tries", 30)),
             settle_sec=loop.get("scroll_settle_sec", 0.35),
             reset_to_top=loop.get("scroll_reset_top", True),
             end_diff=loop.get("scroll_end_diff", 2.0),
@@ -380,7 +379,6 @@ class TreasureMapTask(Task):
         ctx.log("打开背包，翻找藏宝图…")
         self._interruptible_sleep(ctx, self._jitter(0.6, ctx))
         rec["phase_b"] = True
-        rec["scrolls"] = 0
         self._goto(rec, S_DIG_FIND)
 
     # ---- 阶段 B：找藏宝图 → 双击用；翻完整背包都没有=该号挖完（关背包结束）----
@@ -407,7 +405,7 @@ class TreasureMapTask(Task):
             should_stop=ctx.should_stop,
             sleep=lambda s: self._interruptible_sleep(ctx, self._jitter(s, ctx)),
             scroll_step=loop.get("scroll_step", -3),
-            max_tries=max(1, loop.get("scroll_max_tries", 8)),
+            max_tries=max(1, loop.get("scroll_max_tries", 30)),
             settle_sec=loop.get("scroll_settle_sec", 0.35),
             reset_to_top=loop.get("scroll_reset_top", True),
             end_diff=loop.get("scroll_end_diff", 2.0),
@@ -478,7 +476,6 @@ class TreasureMapTask(Task):
         self._focus(ctx)
         if ctx.send_hotkey("close_panel"):
             self._interruptible_sleep(ctx, self._jitter(0.25, ctx))
-        rec["scrolls"] = 0
         self._goto(rec, S_DIG_OPEN_BAG if rec["phase_b"] else self._start_state)
 
     # ------------------------------------------------------------------

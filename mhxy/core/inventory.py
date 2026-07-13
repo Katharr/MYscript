@@ -260,7 +260,7 @@ class InventoryOrganizer:
         step_timeout = self.loop.get("step_find_timeout_sec", 1.5)        # 必需按钮：吸收子菜单淡入/掉帧
         # 可选按钮（如「更多」）默认用与必需步同样长的超时：若它确实存在、只是详情面板渲染慢，
         # 给够时间等出来再决定跳过，避免「面板没渲染完→更多被过早判没有→后续出售按钮因子菜单未展开必然 miss」。
-        opt_timeout = self.loop.get("optional_find_timeout_sec", step_timeout)
+        opt_timeout = self.loop.get("optional_find_timeout_sec", 3.0)
         opt_settle = self.loop.get("optional_skip_settle_sec",
                                    self.loop.get("action_settle_sec", 0.3))
         # ② 逐步在整窗里找并点序列按钮；可选步骤缺了就跳过，必需步骤缺了就放弃该物品并收尾。

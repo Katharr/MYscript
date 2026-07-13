@@ -88,8 +88,14 @@ def select_roi_on_screen(master, title="拖动鼠标框住目标，松开完成"
     mag_coord.pack()
     mag_top.withdraw()              # 初始隐藏，_update_magnifier 里再显示
     mag_photo = None
+    _last_mag_pos = (-999, -999)    # 上次光标位置，用于限流（3px 内不重绘）
 
     def _update_magnifier(mx, my):
+        nonlocal mag_photo, _last_mag_pos
+        # 光标移动不足 3px 时跳过刷新，减少主线程 ImageDraw 负载
+        if abs(mx - _last_mag_pos[0]) < 3 and abs(my - _last_mag_pos[1]) < 3:
+            return
+        _last_mag_pos = (mx, my)
         mag_top.deiconify()         # 首次移动即显示
         r = MAG_VIEW // 2
         sx0 = max(0, mx - r); sy0 = max(0, my - r)

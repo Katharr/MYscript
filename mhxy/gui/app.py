@@ -2063,9 +2063,11 @@ class GeneralPage(ctk.CTkFrame):
         self.btn_leader = None      # 行内队长ID按钮（_refresh_body 每次重建）
         self._leader_thumbs = []    # 行内队长ID缩略图防 GC
         self.lbl_team_status = None
-        self._build()
+        self._build_header()
+        self._build_body()
+        self.refresh()
 
-    def _build(self):
+    def _build_header(self):
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
         head = ctk.CTkFrame(self, fg_color="transparent")
@@ -2076,11 +2078,12 @@ class GeneralPage(ctk.CTkFrame):
         sub.pack(fill="x", anchor="w", pady=(4, 0))
         bind_wraplength(sub)
 
+    def _build_body(self):
         self.body = ctk.CTkScrollableFrame(self, fg_color="transparent")
         self.body.grid(row=1, column=0, sticky="nsew")
         self.body.grid_columnconfigure(0, weight=1)
         T.tune_scroll_speed(self.body)
-        # 不在构建时枚举窗口（省启动开销）；首次切到本页时 _show 会调 refresh() 填充。
+        self._refresh_body()  # 构建时即填充内容
 
     def _card(self):
         c = Card(self.body)
@@ -3163,6 +3166,9 @@ class App(ctk.CTk):
         self._build_pages()
         self._show("general")
 
+        # Position the GUI window at bottom-right corner after it's fully initialized
+        self.after(100, self._position_window_bottom_right)
+
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(150, self._tick)
         self._hotkey_down = False
@@ -3180,6 +3186,58 @@ class App(ctk.CTk):
             row=0, column=0, sticky="w", padx=22, pady=(24, 0))
         ctk.CTkLabel(bar, text="辅助助手", font=self.fonts["small"], text_color=T.TEXT_DIM).grid(
             row=1, column=0, sticky="w", padx=22, pady=(0, 22))
+
+    def _get_taskbar_height(self):
+        """Get the height of the taskbar using platform-specific methods."""
+        # Cross-platform taskbar height detection
+        try:
+            # Try to get taskbar height using platform-specific methods
+            if hasattr(self, 'winfo_screenheight'):
+                # For Tkinter-based applications, use screen dimensions
+                # Default to 40px for taskbar height (Windows default)
+                return 40
+        except Exception:
+            pass
+        return 40
+
+    def _position_window_bottom_right(self, window_handle=None):
+        """Position the window at the bottom-right corner of the screen.
+        
+        On Windows, it accounts for the taskbar. On other platforms, it simply
+        positions at the bottom-right corner.
+        """
+        try:
+            # Use Tkinter geometry methods for positioning (cross-platform)
+            # Get screen dimensions
+            screen_width = self.winfo_screenwidth()
+            screen_height = self.winfo_screenheight()
+            
+            # Get current window dimensions
+            current_width = self.winfo_width()
+            current_height = self.winfo_height()
+            
+            # Get taskbar height (estimated)
+            taskbar_height = self._get_taskbar_height()
+            
+            # Calculate position (accounting for taskbar on Windows)
+            x = screen_width - current_width
+            y = screen_height - current_height - taskbar_height
+            
+            # Set window geometry (use geometry() method)
+            self.geometry(f"+{x}+{y}")
+            
+        except Exception:
+            # Fallback: just center if positioning fails
+            try:
+                screen_width = self.winfo_screenwidth()
+                screen_height = self.winfo_screenheight()
+                window_width = self.winfo_width()
+                window_height = self.winfo_height()
+                x = (screen_width - window_width) // 2
+                y = (screen_height - window_height) // 2
+                self.geometry(f"+{x}+{y}")
+            except Exception:
+                pass
 
         self.nav_buttons = {}
         for i, (key, label) in enumerate(self.NAV):

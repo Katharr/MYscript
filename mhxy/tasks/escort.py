@@ -179,7 +179,7 @@ class EscortTask(Task):
                 "seen_ongoing": False,   # 本趟是否出现过「运镖中」标志（出现过才允许靠它消失判结束）
                 "gone_since": None,      # 「运镖中」标志消失起点
                 "t_trip": 0.0,          # 最近一次「明确在运镖/战斗/起步」的时间，用于单趟超时兜底
-                "t_diag": 0.0, "scrolls": 0, "recover": 0,
+                "t_diag": 0.0, "recover": 0,
                 "done": False, "dead_logged": False}
 
     # ------------------------------------------------------------------
@@ -208,7 +208,6 @@ class EscortTask(Task):
             return
         ctx.log("已打开活动，滚轮翻找「运镖」…")
         self._interruptible_sleep(ctx, self._jitter(0.6, ctx))
-        rec["scrolls"] = 0
         self._goto(rec, S_FIND_CARD)
 
     # ---- 找「运镖」条目 → 点「参加」----

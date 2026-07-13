@@ -45,8 +45,9 @@ S_BATTLE = "BATTLE"                 # 自动战斗中：盯「进入战斗」续
 S_LEAVE = "LEAVE"                   # 失败/超时后：点「离开」收尾本轮
 
 # 必备：缺失则 preflight 阻断（其余为可选，缺失仅提示）。
+# 注意：sr_enter_battle（「进入战斗」按钮）只在难度关卡才出现，非必须，放在可选列表里。
 _REQUIRED_FLAGS = ["sr_entry", "sr_join", "sr_select",
-                   "sr_continue", "sr_challenge", "sr_enter_battle", "sr_leave"]
+                   "sr_continue", "sr_challenge", "sr_leave"]
 
 
 @register
@@ -107,7 +108,7 @@ class SecretRealmTask(Task):
 
         # 可选模板缺失只提示
         for tk, label in [("sr_dungeon_enter", "选副本-进入"), ("sr_confirm", "确定(选副本后才有)"),
-                          ("sr_fail", "失败"), ("sr_battle", "战斗")]:
+                          ("sr_enter_battle", "进入战斗(难度关卡)"), ("sr_fail", "失败"), ("sr_battle", "战斗")]:
             if not templates.get(tk) or vision.load_template(templates.get(tk)) is None:
                 ctx.log(f"提示：可选模板『{tk}』({label})未标定，将降级处理（可靠性略降）。", level="warn")
 
@@ -185,7 +186,7 @@ class SecretRealmTask(Task):
     def _new_record(wctx):
         """每个号一份独立状态。轮转时按 state 各推进一步，互不干扰。"""
         return {"ctx": wctx, "state": S_OPEN_ACTIVITY, "t_state": 0.0,
-                "t_battle": 0.0, "t_diag": 0.0, "scrolls": 0,
+                "t_battle": 0.0, "t_diag": 0.0,
                 "picked_dungeon": False, "entered_battle": False,
                 "runs": 0, "recover": 0, "done": False, "dead_logged": False}
 
@@ -223,7 +224,6 @@ class SecretRealmTask(Task):
             return
         ctx.log("已打开活动，翻找秘境降妖卡片…")
         self._interruptible_sleep(ctx, self._jitter(0.6, ctx))
-        rec["scrolls"] = 0
         self._goto(rec, S_FIND_CARD)
 
     # ---- 找卡片 → 点「参加」----

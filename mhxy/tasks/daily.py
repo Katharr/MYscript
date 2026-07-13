@@ -31,11 +31,12 @@
 
 import time
 
-from .base import Task, register, get_task, dungeon_tasks
+from .base import Task, register, get_task, dungeon_tasks, all_tasks
 
-# 可进一条龙的任务（这些都有明确「完成条件」、会自动结束）。秒装备 sniper 不在此列。
-# "dungeon" 是「刷副本」中枢步：跑时解析成 tasks.dungeon.selected 选中的那个副本（见 _resolve）。
-CHAINABLE = ["treasure_map", "escort", "secret_realm", "dungeon"]
+# 可进一条龙的任务 = 所有支持「每窗口独立链」的任务（CHAINS_PER_WINDOW=True）
+#  + 特殊值 "dungeon"（副本中枢步，见 _resolve）。加新任务只需设置 CHAINS_PER_WINDOW=True。
+# 秒装备 sniper 不在候选内：它是无限盯市场抢货、不会自己跑完，会卡死整条龙。
+CHAINABLE = [c.name for c in all_tasks() if getattr(c, "CHAINS_PER_WINDOW", False)] + ["dungeon"]
 
 
 @register

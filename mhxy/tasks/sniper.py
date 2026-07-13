@@ -7,6 +7,7 @@
 """
 
 import time
+import random
 
 from ..core import vision
 from ..core import window as win_mod
@@ -231,7 +232,6 @@ class SniperTask(Task):
     @staticmethod
     def _snipe_sleep(base, speed):
         """下单中间的极短等待，按极速倍率压缩（仍留一点随机抖动，避免完全等距）。"""
-        import random
         spd = max(0.2, float(speed)) if speed else 1.0
         s = base / spd
         time.sleep(max(0.0, s * (1 + random.uniform(-0.2, 0.2))))

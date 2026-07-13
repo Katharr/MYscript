@@ -47,6 +47,9 @@ class TaohaiquTask(Task):
     # 本副本自身模板键（thq_ 前缀，存盘 templates/tm_thq_*.png，避免与别的任务同名互相覆盖）。
     _FLAG_KEYS = ["thq_entry", "thq_join", "thq_select", "thq_enter", "thq_skip",
                   "thq_daily", "thq_task", "thq_teleport", "thq_opt1", "thq_opt2", "thq_opt3", "thq_clock"]
+    # 预检必选的模板（thq_daily 运行时可选，不强制标定）。
+    _REQUIRED_FLAGS = ["thq_entry", "thq_join", "thq_select", "thq_enter", "thq_skip",
+                       "thq_task", "thq_teleport", "thq_opt1", "thq_opt2", "thq_opt3", "thq_clock"]
 
     CALIBRATION = {
         "regions": [
@@ -117,7 +120,7 @@ class TaohaiquTask(Task):
         if not regions.get("activity_list"):
             problems.append("『活动列表区域』未标定 —— 请在本页「标定」里框选")
         templates = tc.get("templates", {})
-        for tk in self._FLAG_KEYS:
+        for tk in self._REQUIRED_FLAGS:
             p = templates.get(tk)
             if not p or vision.load_template(p) is None:
                 problems.append(f"副本模板『{tk}』缺失或加载失败 —— 请在本页「标定」里框选裁图")
@@ -217,7 +220,6 @@ class TaohaiquTask(Task):
         npc_to = loop.get("npc_dialog_sec", 60)
         step_to = loop.get("step_timeout_sec", 30)
         daily_to = loop.get("daily_wait_sec", 1)     # 「日常」可选步骤的短等待：打开任务列表就有它，没检测到就快速跳过、直接点蹈海去
-        entry_skip_to = loop.get("entry_skip_sec", 60)
         battle_to = loop.get("battle_timeout_sec", 600)
 
         # 前缀：开活动 → 参加 → 选副本 → 进入
@@ -231,7 +233,7 @@ class TaohaiquTask(Task):
             return
 
         # 三场剧情战斗：公共节奏 [等并点跳过 → 开任务弹窗 → 马上传送 → 点本场对话选项]
-        skip_to = entry_skip_to     # 第 1 个跳过跟在「进入」后的传送动画后，给短一点
+        skip_to = loop.get("entry_skip_sec", 60)   # 第 1 个跳过跟在「进入」后的传送动画后，给短一点
         for i, (opt_key, opt_label) in enumerate(_DIALOGS, start=1):
             if not self._click_when(ctx, "thq_skip", f"跳过剧情({i})", regions, threshold, skip_to):
                 ctx.log(f"第 {i} 段等「跳过剧情」超时，中止。", level="error")
