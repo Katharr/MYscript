@@ -19,7 +19,7 @@ import tkinter as tk
 import mss
 import numpy as np
 import cv2
-from PIL import Image, ImageTk
+from PIL import Image, ImageDraw, ImageTk
 
 from . import theme as T
 
@@ -72,6 +72,54 @@ def select_roi_on_screen(master, title="拖动鼠标框住目标，松开完成"
     c_text = T.resolve(T.TEXT)
     c_accent = T.resolve(T.ACCENT)
 
+    # 放大镜：跟随鼠标显示光标周围放大图，便于精细框选小特征（参考 Snipaste 截图放大镜）。
+    # 取光标周围 MAG_VIEW 像素的源截图，最近邻放大到 MAG 边长，画十字线标出光标像素，
+    # 下方显示光标的屏幕绝对坐标。窗口初始隐藏，鼠标一动即显示。
+    MAG = 220                       # 放大镜窗口边长（像素）
+    MAG_VIEW = 55                   # 放大镜覆盖的【源截图】边长（像素）；越大放大倍数越小
+    mag_top = tk.Toplevel(master)
+    mag_top.overrideredirect(True)
+    mag_top.attributes("-topmost", True)
+    mag_top.configure(bg=c_bg)
+    mag_label = tk.Label(mag_top, bd=0, bg=c_bg)
+    mag_label.pack()
+    mag_coord = tk.Label(mag_top, text="", fg=c_text, bg=c_bg,
+                         font=("Consolas", 10))
+    mag_coord.pack()
+    mag_top.withdraw()              # 初始隐藏，_update_magnifier 里再显示
+    mag_photo = None
+
+    def _update_magnifier(mx, my):
+        mag_top.deiconify()         # 首次移动即显示
+        r = MAG_VIEW // 2
+        sx0 = max(0, mx - r); sy0 = max(0, my - r)
+        sx1 = min(mon["width"], mx + r); sy1 = min(mon["height"], my + r)
+        if sx1 <= sx0 or sy1 <= sy0:
+            return
+        sub = img.crop((sx0, sy0, sx1, sy1))
+        # 最近邻放大：保留真实像素，便于把选区边缘对齐到精确像素
+        zoom = max(1, MAG // max(1, sx1 - sx0))
+        big = sub.resize((int(sub.width * zoom), int(sub.height * zoom)), Image.NEAREST)
+        draw = ImageDraw.Draw(big)
+        ccx = int((mx - sx0) * zoom)     # 光标在放大图里的位置（裁剪被夹紧时仍准）
+        ccy = int((my - sy0) * zoom)
+        draw.line((0, ccy, big.width, ccy), fill=c_accent, width=1)
+        draw.line((ccx, 0, ccx, big.height), fill=c_accent, width=1)
+        draw.rectangle((0, 0, big.width - 1, big.height - 1), outline=c_accent, width=2)
+        if big.width < MAG or big.height < MAG:
+            pad = Image.new("RGB", (MAG, MAG), (0, 0, 0))
+            pad.paste(big, ((MAG - big.width) // 2, (MAG - big.height) // 2))
+            big = pad
+        nonlocal mag_photo
+        mag_photo = ImageTk.PhotoImage(big)
+        mag_label.configure(image=mag_photo)
+        mag_coord.configure(text=f"({mon['left'] + mx}, {mon['top'] + my})")
+        # 放大镜放在光标右下方，夹紧在显示器内避免出屏
+        off = 24
+        wx = min(mon["left"] + mx + off, mon["left"] + mon["width"] - MAG - 4)
+        wy = min(mon["top"] + my + off, mon["top"] + mon["height"] - MAG - 20)
+        mag_top.geometry(f"{MAG}x{MAG + 18}+{wx}+{wy}")
+
     # 顶部提示条
     canvas.create_rectangle(0, 0, mon["width"], 44, fill=c_bg, outline="", stipple="gray50")
     canvas.create_text(mon["width"] // 2, 22,
@@ -110,6 +158,7 @@ def select_roi_on_screen(master, title="拖动鼠标框住目标，松开完成"
         canvas.coords(sizetip, rx + 6, ly)
         canvas.itemconfigure(sizetip, text=f"{rx - lx} × {ry - ly}")
         canvas.tag_raise(sizetip)
+        _update_magnifier(e.x, e.y)
 
     def on_up(e):
         if not state["start"]:
@@ -131,13 +180,21 @@ def select_roi_on_screen(master, title="拖动鼠标框住目标，松开完成"
             return
         state["done"] = True
         try:
+            mag_top.destroy()
+        except Exception:
+            pass
+        try:
             top.grab_release()
         except Exception:
             pass
         top.destroy()
 
+    def _on_motion(e):
+        _update_magnifier(e.x, e.y)
+
     canvas.bind("<ButtonPress-1>", on_down)
     canvas.bind("<B1-Motion>", on_drag)
+    canvas.bind("<Motion>", _on_motion)
     canvas.bind("<ButtonRelease-1>", on_up)
     top.bind("<Escape>", on_cancel)
 
