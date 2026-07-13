@@ -193,3 +193,141 @@ class Task:
                 return cur
             prev = cur
         return prev
+
+    # ------------------------------------------------------------------
+    # 各任务共用的识别/点击/轮转工具（秒装备/运镖/宝图/秘境/副本都同构，原各抄一份，现集中于此）
+    # 依赖 self.flags（各任务 run() 里 self.flags = self._load_flags(tc) 赋值）。
+    # ------------------------------------------------------------------
+    # 各任务模板键清单：子类在类上定义 _FLAG_KEYS，_load_flags 据此批量加载。
+    _FLAG_KEYS = []
+
+    # 公共标定向导项（区域/模板元信息）。子类 CALIBRATION 直接引用这些列表再追加本任务专有项，
+    # 避免每个任务把「主识别区/活动列表区域」等公共项各抄一遍。
+    # 注意：模板【键名】是 task 专有的（如 escort_join），绝不能统一改名——
+    # 标定存盘按 templates/tm_<key>.png，改名会让用户已有的标定文件失效。
+    BASE_CALIBRATION_REGIONS = [
+        ("scene", "主识别区", "留空=整个窗口当识别区(推荐)；对话框/战斗等标志都在这里找", True),
+        ("activity_list", "活动列表区域", "「活动」界面里那片列表，滚轮在此翻找活动条目"),
+    ]
+
+    def _focus(self, ctx):
+        """把游戏窗口切到前台——键盘快捷键(SendInput)只发给有焦点的窗口，发键前必须先激活。"""
+        try:
+            ctx.window.activate()
+        except Exception:
+            pass
+
+    def _load_flags(self, tc):
+        """按本任务 _FLAG_KEYS 批量加载模板，返回 {key: ndarray|None}。"""
+        templates = tc.get("templates", {})
+        return {k: vision.load_template(templates.get(k)) if templates.get(k) else None
+                for k in self._FLAG_KEYS}
+
+    def _scene_rect(self, ctx, regions):
+        region = regions.get("scene")
+        return ctx.window.region_to_screen_rect(region) if region else ctx.window.rect()
+
+    def _grab_scene(self, ctx, regions):
+        rect = self._scene_rect(ctx, regions)
+        return win_mod.grab(rect) if rect else None
+
+    def _present(self, scene, flag_key, threshold):
+        tpl = self.flags.get(flag_key)
+        if scene is None or tpl is None:
+            return False
+        return vision.match(scene, tpl, threshold) is not None
+
+    def _match_scene(self, cur, scene_rect, flag_key, threshold):
+        """在整张 scene 里匹配 flag_key，命中返回屏幕绝对 (x,y,score)，否则 None。"""
+        tpl = self.flags.get(flag_key)
+        if cur is None or tpl is None or scene_rect is None:
+            return None
+        m = vision.match(cur, tpl, threshold)
+        if m is None:
+            return None
+        return (scene_rect[0] + m[0], scene_rect[1] + m[1], m[2])
+
+    def _match_subregion(self, ctx, regions, tpl, threshold, x_frac, y_frac):
+        """只在 scene 的比例子区域内匹配 tpl（用于「进入」这类需按位置区分的同款按钮）。
+        x_frac/y_frac 为 (起,止) 的 0~1 比例。命中返回屏幕 (x,y,score)，否则 None。"""
+        rect = self._scene_rect(ctx, regions)
+        if rect is None or tpl is None:
+            return None
+        scene = win_mod.grab(rect)
+        if scene is None:
+            return None
+        sh, sw = scene.shape[:2]
+        x0 = max(0, int(sw * x_frac[0]))
+        x1 = min(sw, int(sw * x_frac[1]))
+        y0 = max(0, int(sh * y_frac[0]))
+        y1 = min(sh, int(sh * y_frac[1]))
+        if x1 - x0 < 1 or y1 - y0 < 1:
+            return None
+        crop = scene[y0:y1, x0:x1]
+        m = vision.match(crop, tpl, threshold)
+        if m is None:
+            return None
+        cx, cy, score = m
+        return (rect[0] + x0 + cx, rect[1] + y0 + cy, score)
+
+    def _find_join_on_row(self, ctx, list_region, entry_screen_xy, threshold, loop,
+                          join_key, entry_key):
+        """在条目所在【那张卡片】的右侧条带里匹配「参加」按钮(join_key)。
+        命中返回 (screen_x, screen_y, score)，否则 None。
+        按行+只取条目右侧、且限制在条目所属卡片列内，抗滚动、抗「一排多张卡片」时
+        扫进右邻卡片（活动列表默认两张一排，见 CLAUDE.md 活动列表卡片布局约束）。"""
+        join_tpl = self.flags.get(join_key)
+        entry_tpl = self.flags.get(entry_key)
+        if join_tpl is None:
+            ctx.log(f"找「参加」失败：{join_key} 模板未标定。", level="warn")
+            return None
+        rect = (ctx.window.region_to_screen_rect(list_region)
+                if list_region else ctx.window.rect())
+        if rect is None:
+            return None
+        scene = win_mod.grab(rect)
+        if scene is None:
+            return None
+        rx, ry = rect[0], rect[1]
+        ex, ey = entry_screen_xy
+        row_h = entry_tpl.shape[0] if entry_tpl is not None else 40
+        band = max(40, int(row_h * 2))
+        sh, sw = scene.shape[:2]
+        ey_local = int(ey - ry)
+        ex_local = int(ex - rx)
+        cols = max(1, int(loop.get("activity_columns", 2)))
+        col_w = sw / cols
+        col_idx = min(cols - 1, max(0, int(ex_local // col_w)))
+        col_right = int(round((col_idx + 1) * col_w))
+        y0 = max(0, ey_local - band // 2)
+        y1 = min(sh, ey_local + band // 2)
+        x0 = max(0, ex_local)
+        x1 = min(sw, col_right)
+        if y1 - y0 < 1 or x1 - x0 < 1:
+            return None
+        crop = scene[y0:y1, x0:x1]
+        m = vision.match(crop, join_tpl, threshold)
+        if m is None:
+            return None
+        cx, cy, score = m
+        return (rx + x0 + cx, ry + y0 + cy, score)
+
+    @staticmethod
+    def _goto(rec, state):
+        rec["state"] = state
+        rec["t_state"] = time.time()
+
+    @staticmethod
+    def _state_elapsed(rec):
+        return time.time() - rec["t_state"]
+
+    def _resolve_contexts(self, ctx, multi):
+        """按选择把目标窗口包成「要轮转的上下文」列表。
+        单开→复用主 ctx 并绑到选中的那个窗口；多开→每号一个子上下文(带「号N」标签，日志自动加前缀)。"""
+        wins = ctx.select_windows()
+        if not wins:
+            return []
+        if multi:
+            return [ctx.make_child(w, f"号{i + 1}") for i, w in enumerate(wins)]
+        ctx.window = wins[0]
+        return [ctx]

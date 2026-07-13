@@ -34,9 +34,6 @@ from ..core.teaming import (TeamFormation, TEAM_REQUIRED_REGIONS, TEAM_REQUIRED_
                             DISBAND_REQUIRED_TEMPLATES)
 from .base import Task, register
 
-# 本副本自身模板键（thq_ 前缀，存盘 templates/tm_thq_*.png，避免与别的任务同名互相覆盖）。
-_FLAG_KEYS = ["thq_entry", "thq_join", "thq_select", "thq_enter", "thq_skip",
-              "thq_daily", "thq_task", "thq_teleport", "thq_opt1", "thq_opt2", "thq_opt3", "thq_clock"]
 # 三场战斗前各自要点的对话选项（顺序固定）。
 _DIALOGS = [("thq_opt1", "竖子尔敢！"), ("thq_opt2", "恕难从命"), ("thq_opt3", "与尔一战！")]
 
@@ -47,11 +44,13 @@ class TaohaiquTask(Task):
     title = "蹈海去·50"
     description = "组队后由队长跑完整条蹈海去(50级)副本：参加→选副本→进入→三场剧情战斗→小闹钟收尾，跑一遍即停"
     is_dungeon = True       # 「刷副本」页收录它作为可选副本之一
+    # 本副本自身模板键（thq_ 前缀，存盘 templates/tm_thq_*.png，避免与别的任务同名互相覆盖）。
+    _FLAG_KEYS = ["thq_entry", "thq_join", "thq_select", "thq_enter", "thq_skip",
+                  "thq_daily", "thq_task", "thq_teleport", "thq_opt1", "thq_opt2", "thq_opt3", "thq_clock"]
 
     CALIBRATION = {
         "regions": [
-            ("scene", "主识别区", "留空=整个窗口当识别区(推荐)；对话框/各按钮都在这里找", True),
-            ("activity_list", "活动列表区域", "「活动」界面里那片列表，滚轮在此翻找蹈海去卡片"),
+            *Task.BASE_CALIBRATION_REGIONS,
         ],
         "templates": [
             ("thq_entry", "活动卡片入口", "活动列表里「蹈海去」那张卡片，框图标+文字、要独特"),
@@ -118,7 +117,7 @@ class TaohaiquTask(Task):
         if not regions.get("activity_list"):
             problems.append("『活动列表区域』未标定 —— 请在本页「标定」里框选")
         templates = tc.get("templates", {})
-        for tk in _FLAG_KEYS:
+        for tk in self._FLAG_KEYS:
             p = templates.get(tk)
             if not p or vision.load_template(p) is None:
                 problems.append(f"副本模板『{tk}』缺失或加载失败 —— 请在本页「标定」里框选裁图")
@@ -290,7 +289,8 @@ class TaohaiquTask(Task):
             if hit is None:
                 return scan.SCROLL, None
             entry_xy = (rect[0] + hit[0], rect[1] + hit[1])
-            join = self._find_join_on_row(ctx, list_region, entry_xy, threshold, loop)
+            join = self._find_join_on_row(ctx, list_region, entry_xy, threshold, loop,
+                                            "thq_join", "thq_entry")
             if join is not None:
                 ctx.mouse.click(join[0], join[1])
                 ctx.log(f"找到蹈海去卡片（{hit[2]:.3f}）→ 点「参加」（{join[2]:.3f}），等寻路到 NPC。", level="hit")
@@ -373,7 +373,7 @@ class TaohaiquTask(Task):
     # 演练：周期性对每个号识别其相关模板（队长=副本模板，队员=组队队员模板），验证模板/阈值
     # ------------------------------------------------------------------
     def _dry_run_selfcheck(self, ctx, assignments, regions, threshold):
-        cap_keys = [(k, k) for k in _FLAG_KEYS]
+        cap_keys = [(k, k) for k in self._FLAG_KEYS]
         multi = ctx.cfg.get("targets", {}).get("multi", False)
         switch_delay = ctx.cfg.get("targets", {}).get("switch_delay_sec", 0.15)
         while not ctx.should_stop():
@@ -404,96 +404,7 @@ class TaohaiquTask(Task):
             self._interruptible_sleep(ctx, self._jitter(1.5, ctx))
 
     # ------------------------------------------------------------------
-    # 识别/点击工具（与 secret_realm 同构，本任务自带一份，避免跨任务耦合）
+    # 识别/点击工具：统一走 Task 基类（_focus/_load_flags/_scene_rect/_grab_scene/
+    #   _match_scene/_match_subregion/_find_join_on_row），本文件不再各自存一份。
     # ------------------------------------------------------------------
-    def _focus(self, ctx):
-        try:
-            ctx.window.activate()
-        except Exception:
-            pass
 
-    def _load_flags(self, tc):
-        templates = tc.get("templates", {})
-        return {k: vision.load_template(templates.get(k)) if templates.get(k) else None
-                for k in _FLAG_KEYS}
-
-    def _scene_rect(self, ctx, regions):
-        region = regions.get("scene")
-        return ctx.window.region_to_screen_rect(region) if region else ctx.window.rect()
-
-    def _grab_scene(self, ctx, regions):
-        rect = self._scene_rect(ctx, regions)
-        return win_mod.grab(rect) if rect else None
-
-    def _match_scene(self, cur, scene_rect, flag_key, threshold):
-        """在整张 scene 里匹配 flag_key，命中返回屏幕绝对 (x,y,score)，否则 None。"""
-        tpl = self.flags.get(flag_key)
-        if cur is None or tpl is None or scene_rect is None:
-            return None
-        m = vision.match(cur, tpl, threshold)
-        if m is None:
-            return None
-        return (scene_rect[0] + m[0], scene_rect[1] + m[1], m[2])
-
-    def _match_subregion(self, ctx, regions, tpl, threshold, x_frac, y_frac):
-        """只在 scene 的比例子区域内匹配 tpl（用于「进入」这类需按位置区分的同款按钮）。
-        x_frac/y_frac 为 (起,止) 的 0~1 比例。命中返回屏幕 (x,y,score)，否则 None。"""
-        rect = self._scene_rect(ctx, regions)
-        if rect is None or tpl is None:
-            return None
-        scene = win_mod.grab(rect)
-        if scene is None:
-            return None
-        sh, sw = scene.shape[:2]
-        x0 = max(0, int(sw * x_frac[0]))
-        x1 = min(sw, int(sw * x_frac[1]))
-        y0 = max(0, int(sh * y_frac[0]))
-        y1 = min(sh, int(sh * y_frac[1]))
-        if x1 - x0 < 1 or y1 - y0 < 1:
-            return None
-        crop = scene[y0:y1, x0:x1]
-        m = vision.match(crop, tpl, threshold)
-        if m is None:
-            return None
-        cx, cy, score = m
-        return (rect[0] + x0 + cx, rect[1] + y0 + cy, score)
-
-    def _find_join_on_row(self, ctx, list_region, entry_screen_xy, threshold, loop):
-        """在卡片所在【那张卡片】的右侧条带里匹配「参加」按钮(thq_join)。命中返回 (x,y,score)，否则 None。
-        按行 + 只取条目右侧、且限制在条目所属卡片列内，避免两张卡片一排时点到右邻卡片的「参加」
-        （活动卡片默认两张一排，见 CLAUDE.md 活动列表卡片布局约束）。"""
-        join_tpl = self.flags.get("thq_join")
-        entry_tpl = self.flags.get("thq_entry")
-        if join_tpl is None:
-            ctx.log("找「参加」失败：thq_join 模板未标定。", level="warn")
-            return None
-        rect = (ctx.window.region_to_screen_rect(list_region)
-                if list_region else ctx.window.rect())
-        if rect is None:
-            return None
-        scene = win_mod.grab(rect)
-        if scene is None:
-            return None
-        rx, ry = rect[0], rect[1]
-        ex, ey = entry_screen_xy
-        row_h = entry_tpl.shape[0] if entry_tpl is not None else 40
-        band = max(40, int(row_h * 2))
-        sh, sw = scene.shape[:2]
-        ey_local = int(ey - ry)
-        ex_local = int(ex - rx)
-        cols = max(1, int(loop.get("activity_columns", 2)))
-        col_w = sw / cols
-        col_idx = min(cols - 1, max(0, int(ex_local // col_w)))
-        col_right = int(round((col_idx + 1) * col_w))
-        y0 = max(0, ey_local - band // 2)
-        y1 = min(sh, ey_local + band // 2)
-        x0 = max(0, ex_local)
-        x1 = min(sw, col_right)
-        if y1 - y0 < 1 or x1 - x0 < 1:
-            return None
-        crop = scene[y0:y1, x0:x1]
-        m = vision.match(crop, join_tpl, threshold)
-        if m is None:
-            return None
-        cx, cy, score = m
-        return (rx + x0 + cx, ry + y0 + cy, score)

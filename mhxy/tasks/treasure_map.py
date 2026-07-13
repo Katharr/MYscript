@@ -55,8 +55,6 @@ _STILL_DIFF = 8.0   # 帧差低于此视为画面静止（人物不动）的默�
 
 # 必备模板（缺失则 preflight 阻断）与可选模板（缺失仅 warn）
 #   flag_join=活动列表里「宝图任务」那一行右侧的「参加」按钮——按行匹配点它（不是点条目本身）。
-_FLAG_KEYS = ["flag_treasure_entry", "flag_join", "flag_tingting",
-              "flag_battle", "flag_next_map", "treasure_item"]
 _REQUIRED_FLAGS = ["flag_treasure_entry", "flag_join", "flag_tingting",
                    "flag_next_map", "treasure_item"]
 
@@ -67,11 +65,12 @@ class TreasureMapTask(Task):
     title = "宝图"
     description = "自动开活动→收藏宝图→挖宝→领奖，一条龙（战斗交给游戏自动，支持多开轮转）"
     CHAINS_PER_WINDOW = True   # 可做「日常一条龙·每窗口独立链」
+    _FLAG_KEYS = ["flag_treasure_entry", "flag_join", "flag_tingting",
+                  "flag_battle", "flag_next_map", "treasure_item"]
 
     CALIBRATION = {
         "regions": [
-            ("scene", "主识别区", "留空=整个窗口当识别区(推荐)；战斗/对话/下一张等标志都在这里找", True),
-            ("activity_list", "活动列表区域", "「活动」界面里那片列表，滚轮在此翻找「宝图任务」条目"),
+            *Task.BASE_CALIBRATION_REGIONS,
             ("bag_list", "背包列表区域", "背包里道具格那片区域，滚轮在此翻找藏宝图"),
         ],
         "templates": [
@@ -216,19 +215,8 @@ class TreasureMapTask(Task):
         return rec, (lambda: self._step_once(wctx, rec, loop, regions, threshold))
 
     # ------------------------------------------------------------------
-    # 多开轮转：上下文与每号状态记录
+    # 多开轮转：上下文与每号状态记录（_resolve_contexts 已在 Task 基类）
     # ------------------------------------------------------------------
-    def _resolve_contexts(self, ctx, multi):
-        """按选择把目标窗口包成「要轮转的上下文」列表。
-        单开→复用主 ctx 并绑到选中的那个窗口；多开→每号一个子上下文(带「号N」标签，日志自动加前缀)。"""
-        wins = ctx.select_windows()
-        if not wins:
-            return []
-        if multi:
-            return [ctx.make_child(w, f"号{i + 1}") for i, w in enumerate(wins)]
-        ctx.window = wins[0]
-        return [ctx]
-
     def _new_record(self, wctx):
         """每个号一份独立状态。轮转时按 state 各推进一步，互不干扰。
         phase_b：是否已进入挖宝阶段（决定卡死兜底回开活动还是回重开背包）。
@@ -238,11 +226,7 @@ class TreasureMapTask(Task):
                 "last": None, "still_since": None, "t0": 0.0, "t_diag": 0.0,
                 "recover": 0, "done": False, "dead_logged": False}
 
-    @staticmethod
-    def _goto(rec, state):
-        rec["state"] = state
-        rec["t_state"] = time.time()
-
+    # （_goto / _state_elapsed 已在 Task 基类，均为 @staticmethod）
     def _enter_monitor(self, rec, state):
         """进入收集/挖宝监控：清空逐帧状态、重置阶段起始计时。"""
         self._goto(rec, state)
@@ -250,10 +234,6 @@ class TreasureMapTask(Task):
         rec["last"] = None
         rec["still_since"] = None
         rec["t_diag"] = 0.0
-
-    @staticmethod
-    def _state_elapsed(rec):
-        return time.time() - rec["t_state"]
 
     # ------------------------------------------------------------------
     # 单步推进：按这个号的 state 做【一小步】非阻塞动作，然后立刻返回（好轮转到下一个号）
@@ -303,7 +283,8 @@ class TreasureMapTask(Task):
             if hit is None:
                 return (scan.SCROLL, None)
             entry_xy = (rect[0] + hit[0], rect[1] + hit[1])
-            join = self._find_join_on_row(ctx, list_region, entry_xy, threshold, loop)
+            join = self._find_join_on_row(ctx, list_region, entry_xy, threshold, loop,
+                                            "flag_join", "flag_treasure_entry")
             if join is not None:
                 ctx.mouse.click(join[0], join[1])
                 ctx.log(f"找到「宝图任务」（{hit[2]:.3f}）→ 点「参加」（{join[2]:.3f}），开始传送找 NPC。",
@@ -501,16 +482,8 @@ class TreasureMapTask(Task):
         self._goto(rec, S_DIG_OPEN_BAG if rec["phase_b"] else self._start_state)
 
     # ------------------------------------------------------------------
-    # 工具
+    # 工具（_focus 已上移至 Task 基类）
     # ------------------------------------------------------------------
-    def _focus(self, ctx):
-        """把游戏窗口切到前台——键盘快捷键(SendInput)只发给有焦点的窗口，发键前必须先激活，
-        否则 Alt+E 之类会发给助手界面而不是游戏。"""
-        try:
-            ctx.window.activate()
-        except Exception:
-            pass
-
     def _log_motion_diag(self, ctx, rec, label, diff, still_diff, idle_need, in_battle):
         """每 ~5s 打印一次实时帧差诊断，便于据此调 still_diff（计时存在 rec['t_diag']）。"""
         now = time.time()
@@ -521,81 +494,6 @@ class TreasureMapTask(Task):
         extra = "，战斗中" if in_battle else ""
         ctx.log(f"{label}…帧差 {d}（静止阈值 {still_diff}，已静止 {held:.1f}/{idle_need}s）{extra}")
         rec["t_diag"] = now
-
-    def _find_join_on_row(self, ctx, list_region, entry_screen_xy, threshold, loop):
-        """在「宝图任务」条目所在【那张卡片】的右侧条带里匹配「参加」按钮(flag_join)。
-        命中返回 (screen_x, screen_y, score)，否则 None。
-        按行+只取条目右侧、且限制在条目所属卡片列内，能抗滚动、抗「一排多张卡片」时
-        扫进右邻卡片点到它的「参加」按钮（活动列表默认两张卡片一排）。"""
-        join_tpl = self.flags.get("flag_join")
-        entry_tpl = self.flags.get("flag_treasure_entry")
-        if join_tpl is None:
-            ctx.log("找「参加」失败：flag_join 模板未标定。", level="warn")
-            return None
-        rect = (ctx.window.region_to_screen_rect(list_region)
-                if list_region else ctx.window.rect())
-        if rect is None:
-            return None
-        scene = win_mod.grab(rect)
-        if scene is None:
-            return None
-        rx, ry = rect[0], rect[1]
-        ex, ey = entry_screen_xy
-        # 行条带高度：取条目模板高 ×2，下限 40px；纵向以条目中心为中线
-        row_h = entry_tpl.shape[0] if entry_tpl is not None else 40
-        band = max(40, int(row_h * 2))
-        sh, sw = scene.shape[:2]
-        # 换算到 scene 局部坐标：纵向取条带、横向从条目中心到列表右缘（只看右侧）
-        ey_local = int(ey - ry)
-        ex_local = int(ex - rx)
-        # 活动列表是「每排多张卡片」(默认两张一排)：参加按钮只在【条目所属那张卡片】内。
-        # 若一路扫到列表右缘(x1=sw)，右邻卡片的「参加」按钮会被一并扫进来、甚至胜出，
-        # 导致点到右边卡片的参加。故把列表按列等分，定位条目所在列，x1 收到该列右边界。
-        cols = max(1, int(loop.get("activity_columns", 2)))
-        col_w = sw / cols
-        col_idx = min(cols - 1, max(0, int(ex_local // col_w)))
-        col_right = int(round((col_idx + 1) * col_w))
-        y0 = max(0, ey_local - band // 2)
-        y1 = min(sh, ey_local + band // 2)
-        x0 = max(0, ex_local)
-        x1 = min(sw, col_right)
-        if y1 - y0 < 1 or x1 - x0 < 1:
-            return None
-        crop = scene[y0:y1, x0:x1]
-        m = vision.match(crop, join_tpl, threshold)
-        if m is None:
-            return None
-        cx, cy, score = m
-        return (rx + x0 + cx, ry + y0 + cy, score)
-
-    def _load_flags(self, tc):
-        templates = tc.get("templates", {})
-        return {k: vision.load_template(templates.get(k)) if templates.get(k) else None
-                for k in _FLAG_KEYS}
-
-    def _scene_rect(self, ctx, regions):
-        region = regions.get("scene")
-        return ctx.window.region_to_screen_rect(region) if region else ctx.window.rect()
-
-    def _grab_scene(self, ctx, regions):
-        rect = self._scene_rect(ctx, regions)
-        return win_mod.grab(rect) if rect else None
-
-    def _present(self, scene, flag_key, threshold):
-        tpl = self.flags.get(flag_key)
-        if scene is None or tpl is None:
-            return False
-        return vision.match(scene, tpl, threshold) is not None
-
-    def _match_scene(self, cur, scene_rect, flag_key, threshold):
-        """在整张 scene 里匹配 flag_key，命中返回屏幕绝对 (x,y,score)，否则 None。"""
-        tpl = self.flags.get(flag_key)
-        if cur is None or tpl is None or scene_rect is None:
-            return None
-        m = vision.match(cur, tpl, threshold)
-        if m is None:
-            return None
-        return (scene_rect[0] + m[0], scene_rect[1] + m[1], m[2])
 
     def _best_score(self, cur, flag_key):
         """不受阈值限制取 flag_key 在 cur 里的最佳相似度（用 0 阈值），用于诊断「弹了但分低」。

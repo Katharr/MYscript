@@ -44,10 +44,6 @@ S_CHALLENGE = "CHALLENGE"           # 点「挑战」→ 进战斗监控
 S_BATTLE = "BATTLE"                 # 自动战斗中：盯「进入战斗」续战 + 判失败/超时
 S_LEAVE = "LEAVE"                   # 失败/超时后：点「离开」收尾本轮
 
-# 模板键（用 sr_ 前缀，避免与运镖/宝图同名模板在磁盘互相覆盖——存盘按 templates/tm_<key>.png）。
-_FLAG_KEYS = ["sr_entry", "sr_join", "sr_select", "sr_dungeon_enter", "sr_confirm",
-              "sr_continue", "sr_challenge", "sr_enter_battle", "sr_leave",
-              "sr_fail", "sr_battle"]
 # 必备：缺失则 preflight 阻断（其余为可选，缺失仅提示）。
 _REQUIRED_FLAGS = ["sr_entry", "sr_join", "sr_select",
                    "sr_continue", "sr_challenge", "sr_enter_battle", "sr_leave"]
@@ -59,11 +55,14 @@ class SecretRealmTask(Task):
     title = "秘境降妖"
     description = "自动开活动→参加→秘境降妖→选副本/确定/继续挑战/挑战→盯进入战斗续战，失败/超时自动离开（支持多开轮转）"
     CHAINS_PER_WINDOW = True   # 可做「日常一条龙·每窗口独立链」
+    # 模板键（用 sr_ 前缀，避免与运镖/宝图同名模板在磁盘互相覆盖——存盘按 templates/tm_<key>.png）。
+    _FLAG_KEYS = ["sr_entry", "sr_join", "sr_select", "sr_dungeon_enter", "sr_confirm",
+                  "sr_continue", "sr_challenge", "sr_enter_battle", "sr_leave",
+                  "sr_fail", "sr_battle"]
 
     CALIBRATION = {
         "regions": [
-            ("scene", "主识别区", "留空=整个窗口当识别区(推荐)；对话框/各按钮/失败等标志都在这里找", True),
-            ("activity_list", "活动列表区域", "「活动」界面里那片列表，滚轮在此翻找秘境降妖那张卡片"),
+            *Task.BASE_CALIBRATION_REGIONS,
         ],
         "templates": [
             ("sr_entry", "活动卡片入口", "活动列表里要点「参加」的那张卡片，框图标+文字、要独特"),
@@ -180,19 +179,8 @@ class SecretRealmTask(Task):
         return rec, (lambda: self._step_once(wctx, rec, loop, regions, threshold))
 
     # ------------------------------------------------------------------
-    # 多开轮转：上下文与每号状态记录
+    # 多开轮转：上下文与每号状态记录（_resolve_contexts 已在 Task 基类）
     # ------------------------------------------------------------------
-    def _resolve_contexts(self, ctx, multi):
-        """按选择把目标窗口包成「要轮转的上下文」列表。
-        单开→复用主 ctx 并绑到选中的那个窗口；多开→每号一个子上下文(带「号N」标签，日志自动加前缀)。"""
-        wins = ctx.select_windows()
-        if not wins:
-            return []
-        if multi:
-            return [ctx.make_child(w, f"号{i + 1}") for i, w in enumerate(wins)]
-        ctx.window = wins[0]
-        return [ctx]
-
     @staticmethod
     def _new_record(wctx):
         """每个号一份独立状态。轮转时按 state 各推进一步，互不干扰。"""
@@ -201,17 +189,9 @@ class SecretRealmTask(Task):
                 "picked_dungeon": False, "entered_battle": False,
                 "runs": 0, "recover": 0, "done": False, "dead_logged": False}
 
-    @staticmethod
-    def _goto(rec, state):
-        rec["state"] = state
-        rec["t_state"] = time.time()
-
-    @staticmethod
-    def _state_elapsed(rec):
-        return time.time() - rec["t_state"]
-
     # ------------------------------------------------------------------
     # 单步推进：按这个号的 state 做【一小步】非阻塞动作，然后立刻返回（好轮转到下一个号）
+    # （_goto / _state_elapsed 已在 Task 基类，均为 @staticmethod）
     # ------------------------------------------------------------------
     def _step_once(self, ctx, rec, loop, regions, threshold):
         st = rec["state"]
@@ -262,7 +242,8 @@ class SecretRealmTask(Task):
                 return scan.SCROLL, None
             cx, cy, score = hit
             entry_xy = (rect[0] + cx, rect[1] + cy)
-            join = self._find_join_on_row(ctx, list_region, entry_xy, threshold, loop)
+            join = self._find_join_on_row(ctx, list_region, entry_xy, threshold, loop,
+                                            "sr_join", "sr_entry")
             if join is not None:
                 ctx.mouse.click(join[0], join[1])
                 ctx.log(f"找到卡片（{score:.3f}）→ 点「参加」（{join[2]:.3f}），等对话框。", level="hit")
@@ -447,13 +428,6 @@ class SecretRealmTask(Task):
     # ------------------------------------------------------------------
     # 工具
     # ------------------------------------------------------------------
-    def _focus(self, ctx):
-        """把游戏窗口切到前台——键盘快捷键(SendInput)只发给有焦点的窗口，发键前必须先激活。"""
-        try:
-            ctx.window.activate()
-        except Exception:
-            pass
-
     def _try_click(self, ctx, rec, regions, threshold, flag_key, label, next_state):
         """在 scene 里找某按钮，命中就点它并切到 next_state，返回是否点到（非阻塞，一次扫描）。"""
         scene_rect = self._scene_rect(ctx, regions)
@@ -466,97 +440,6 @@ class SecretRealmTask(Task):
             self._goto(rec, next_state)
             return True
         return False
-
-    def _find_join_on_row(self, ctx, list_region, entry_screen_xy, threshold, loop):
-        """在卡片所在【那张卡片】的右侧条带里匹配「参加」按钮(sr_join)。命中返回 (x,y,score)，否则 None。
-        按行+只取条目右侧、且限制在条目所属卡片列内，抗滚动、抗「一排多张卡片」时扫进右邻卡片（默认两张一排）。"""
-        join_tpl = self.flags.get("sr_join")
-        entry_tpl = self.flags.get("sr_entry")
-        if join_tpl is None:
-            ctx.log("找「参加」失败：sr_join 模板未标定。", level="warn")
-            return None
-        rect = (ctx.window.region_to_screen_rect(list_region)
-                if list_region else ctx.window.rect())
-        if rect is None:
-            return None
-        scene = win_mod.grab(rect)
-        if scene is None:
-            return None
-        rx, ry = rect[0], rect[1]
-        ex, ey = entry_screen_xy
-        row_h = entry_tpl.shape[0] if entry_tpl is not None else 40
-        band = max(40, int(row_h * 2))
-        sh, sw = scene.shape[:2]
-        ey_local = int(ey - ry)
-        ex_local = int(ex - rx)
-        cols = max(1, int(loop.get("activity_columns", 2)))
-        col_w = sw / cols
-        col_idx = min(cols - 1, max(0, int(ex_local // col_w)))
-        col_right = int(round((col_idx + 1) * col_w))
-        y0 = max(0, ey_local - band // 2)
-        y1 = min(sh, ey_local + band // 2)
-        x0 = max(0, ex_local)
-        x1 = min(sw, col_right)
-        if y1 - y0 < 1 or x1 - x0 < 1:
-            return None
-        crop = scene[y0:y1, x0:x1]
-        m = vision.match(crop, join_tpl, threshold)
-        if m is None:
-            return None
-        cx, cy, score = m
-        return (rx + x0 + cx, ry + y0 + cy, score)
-
-    def _load_flags(self, tc):
-        templates = tc.get("templates", {})
-        return {k: vision.load_template(templates.get(k)) if templates.get(k) else None
-                for k in _FLAG_KEYS}
-
-    def _scene_rect(self, ctx, regions):
-        region = regions.get("scene")
-        return ctx.window.region_to_screen_rect(region) if region else ctx.window.rect()
-
-    def _grab_scene(self, ctx, regions):
-        rect = self._scene_rect(ctx, regions)
-        return win_mod.grab(rect) if rect else None
-
-    def _present(self, scene, flag_key, threshold):
-        tpl = self.flags.get(flag_key)
-        if scene is None or tpl is None:
-            return False
-        return vision.match(scene, tpl, threshold) is not None
-
-    def _match_scene(self, cur, scene_rect, flag_key, threshold):
-        """在整张 scene 里匹配 flag_key，命中返回屏幕绝对 (x,y,score)，否则 None。"""
-        tpl = self.flags.get(flag_key)
-        if cur is None or tpl is None or scene_rect is None:
-            return None
-        m = vision.match(cur, tpl, threshold)
-        if m is None:
-            return None
-        return (scene_rect[0] + m[0], scene_rect[1] + m[1], m[2])
-
-    def _match_subregion(self, ctx, regions, tpl, threshold, x_frac, y_frac):
-        """只在 scene 的比例子区域内匹配 tpl（用于「进入」这类需按位置区分的同款按钮）。
-        x_frac/y_frac 为 (起,止) 的 0~1 比例。命中返回屏幕 (x,y,score)，否则 None。"""
-        rect = self._scene_rect(ctx, regions)
-        if rect is None or tpl is None:
-            return None
-        scene = win_mod.grab(rect)
-        if scene is None:
-            return None
-        sh, sw = scene.shape[:2]
-        x0 = max(0, int(sw * x_frac[0]))
-        x1 = min(sw, int(sw * x_frac[1]))
-        y0 = max(0, int(sh * y_frac[0]))
-        y1 = min(sh, int(sh * y_frac[1]))
-        if x1 - x0 < 1 or y1 - y0 < 1:
-            return None
-        crop = scene[y0:y1, x0:x1]
-        m = vision.match(crop, tpl, threshold)
-        if m is None:
-            return None
-        cx, cy, score = m
-        return (rect[0] + x0 + cx, rect[1] + y0 + cy, score)
 
     def _dry_run_selfcheck(self, ctx, contexts, multi, regions, threshold, switch_delay, deadline):
         """演练：周期性对【每个号】当前屏幕识别各标志，报告命中，便于验证模板/阈值。"""
