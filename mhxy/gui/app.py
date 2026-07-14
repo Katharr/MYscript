@@ -3180,12 +3180,37 @@ class App(ctk.CTk):
         bar = ctk.CTkFrame(self, fg_color=T.SIDEBAR, corner_radius=0, width=170)
         bar.grid(row=0, column=0, sticky="nsew")
         bar.grid_propagate(False)
-        bar.grid_rowconfigure(99, weight=1)
 
         ctk.CTkLabel(bar, text="梦幻 · 时空", font=self.fonts["title"], text_color=T.TEXT).grid(
             row=0, column=0, sticky="w", padx=16, pady=(18, 0))
         ctk.CTkLabel(bar, text="辅助助手", font=self.fonts["small"], text_color=T.TEXT_DIM).grid(
             row=1, column=0, sticky="w", padx=16, pady=(0, 16))
+
+        # 导航按钮包裹在滚动容器中，支持后续新增任务
+        nav_scroll = ctk.CTkScrollableFrame(bar, width=160, fg_color="transparent")
+        nav_scroll.grid(row=2, column=0, sticky="nsew")
+        bar.grid_rowconfigure(2, weight=1)  # 滚动区随窗口拉伸
+
+        self.nav_buttons = {}
+        for i, (key, label) in enumerate(self.NAV):
+            b = ctk.CTkButton(nav_scroll, text=label, font=self.fonts["nav"], anchor="w",
+                              height=32, corner_radius=T.RADIUS_SM,
+                              fg_color="transparent", hover_color=T.SURFACE,
+                              text_color=T.TEXT_DIM, command=lambda k=key: self._show(k))
+            b.grid(row=i, column=0, sticky="ew", padx=8, pady=2)
+            self.nav_buttons[key] = b
+
+        # 明暗切换按钮（置于风险提示之上，随侧栏底部对齐）
+        self.btn_appearance = ctk.CTkButton(
+            bar, text="", font=self.fonts["nav"], anchor="w", height=32,
+            corner_radius=T.RADIUS_SM, fg_color="transparent", hover_color=T.SURFACE,
+            text_color=T.TEXT_DIM, command=self._toggle_appearance)
+        self.btn_appearance.grid(row=100, column=0, sticky="ew", padx=8, pady=(6, 2))
+        self._render_appearance_btn()
+
+        ctk.CTkLabel(bar, text="⚠ 脚本有封号风险\n请用小号测试", font=self.fonts["small"],
+                     text_color=T.WARN, justify="left").grid(row=101, column=0, sticky="sw",
+                                                             padx=16, pady=12)
 
     def _get_taskbar_height(self):
         """Get the height of the taskbar using platform-specific methods."""
@@ -3238,27 +3263,6 @@ class App(ctk.CTk):
                 self.geometry(f"+{x}+{y}")
             except Exception:
                 pass
-
-        self.nav_buttons = {}
-        for i, (key, label) in enumerate(self.NAV):
-            b = ctk.CTkButton(bar, text=label, font=self.fonts["nav"], anchor="w",
-                              height=32, corner_radius=T.RADIUS_SM,
-                              fg_color="transparent", hover_color=T.SURFACE,
-                              text_color=T.TEXT_DIM, command=lambda k=key: self._show(k))
-            b.grid(row=2 + i, column=0, sticky="ew", padx=8, pady=2)
-            self.nav_buttons[key] = b
-
-        # 明暗切换按钮（置于风险提示之上，随侧栏底部对齐）
-        self.btn_appearance = ctk.CTkButton(
-            bar, text="", font=self.fonts["nav"], anchor="w", height=32,
-            corner_radius=T.RADIUS_SM, fg_color="transparent", hover_color=T.SURFACE,
-            text_color=T.TEXT_DIM, command=self._toggle_appearance)
-        self.btn_appearance.grid(row=100, column=0, sticky="ew", padx=8, pady=(6, 2))
-        self._render_appearance_btn()
-
-        ctk.CTkLabel(bar, text="⚠ 脚本有封号风险\n请用小号测试", font=self.fonts["small"],
-                     text_color=T.WARN, justify="left").grid(row=101, column=0, sticky="sw",
-                                                             padx=16, pady=12)
 
     # ---------------- 全局日志面板（常驻右侧，所有功能共用一处）----------------
     def _build_log_panel(self):
