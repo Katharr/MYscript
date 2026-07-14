@@ -201,11 +201,11 @@ class CalibrateDialog(ctk.CTkToplevel):
             n_items = max(n_items, len(self.tc.get("watchlist", [])))
         has_gallery = bool(self.spec.get("templates")) or bool(self.spec.get("watchlist"))
         self.n_cols = max(2, _pick_cols(n_items)) if has_gallery else 2
-        win_w = {2: 680, 3: 800, 4: 940}.get(self.n_cols, 680)
+        win_w = {2: 540, 3: 620, 4: 740}.get(self.n_cols, 540)
 
         self.title(f"标定 · {title_name}")
-        self.geometry(f"{win_w}x640")
-        self.minsize(560, 420)
+        self.geometry(f"{win_w}x500")
+        self.minsize(440, 360)
         self.configure(fg_color=T.BG)
         self.transient(app)
 
@@ -239,7 +239,7 @@ class CalibrateDialog(ctk.CTkToplevel):
 
         row = 0
         top = ctk.CTkFrame(body, fg_color="transparent")
-        top.grid(row=row, column=0, sticky="ew", padx=16, pady=(14, 8)); row += 1
+        top.grid(row=row, column=0, sticky="ew", padx=10, pady=(8, 4)); row += 1
         ctk.CTkLabel(top, text="标定向导", font=self.fonts["title"], text_color=T.TEXT).pack(anchor="w")
         sub = ctk.CTkLabel(top, text="先把游戏切到对应界面，再按提示逐项框选。框选时本助手会临时隐身。",
                      justify="left", font=self.fonts["small"], text_color=T.TEXT_DIM)
@@ -251,10 +251,10 @@ class CalibrateDialog(ctk.CTkToplevel):
         if regions:
             rcard = self._card(body, row); row += 1
             ctk.CTkLabel(rcard, text="① 区域与按钮", font=self.fonts["h2"], text_color=T.TEXT).grid(
-                row=0, column=0, columnspan=3, sticky="w", padx=16, pady=(14, 6))
+                row=0, column=0, columnspan=3, sticky="w", padx=10, pady=(8, 4))
             rhint = ctk.CTkLabel(rcard, text="这些只是记录屏幕上一块位置（坐标），本身没有图片，标好显示「● 已框选」即可。",
                          font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
-            rhint.grid(row=1, column=0, columnspan=3, sticky="ew", padx=16, pady=(0, 4))
+            rhint.grid(row=1, column=0, columnspan=3, sticky="ew", padx=10, pady=(0, 4))
             T.bind_wraplength(rhint, padding=32)
             for i, item in enumerate(regions):
                 key, name, desc = item[0], item[1], item[2]
@@ -271,13 +271,13 @@ class CalibrateDialog(ctk.CTkToplevel):
         if templates:
             tcard = self._card(body, row); row += 1
             ctk.CTkLabel(tcard, text="② 标志模板（框选裁图）", font=self.fonts["h2"], text_color=T.TEXT).grid(
-                row=0, column=0, sticky="w", padx=16, pady=(14, 6))
+                row=0, column=0, sticky="w", padx=10, pady=(8, 4))
             thint = ctk.CTkLabel(tcard, text="框小而独特的区域（按钮/文字/图标），别框会变的数字或背景。",
                          font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
-            thint.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 6))
+            thint.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 4))
             T.bind_wraplength(thint, padding=32)
             grid = ctk.CTkFrame(tcard, fg_color="transparent")
-            grid.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 10))
+            grid.grid(row=2, column=0, sticky="ew", padx=6, pady=(0, 6))
             for c in range(self.n_cols):
                 grid.grid_columnconfigure(c, weight=1, uniform="tpl")
             self.template_grid = grid
@@ -288,24 +288,24 @@ class CalibrateDialog(ctk.CTkToplevel):
 
         # 底部固定「完成」
         bottom = ctk.CTkFrame(self, fg_color="transparent")
-        bottom.grid(row=1, column=0, sticky="ew", padx=20, pady=(4, 16))
+        bottom.grid(row=1, column=0, sticky="ew", padx=14, pady=(4, 12))
         bottom.grid_columnconfigure(0, weight=1)
         self.status_lbl = ctk.CTkLabel(bottom, text="", font=self.fonts["small"], text_color=T.TEXT_DIM)
         self.status_lbl.grid(row=0, column=0, sticky="w")
-        ctk.CTkButton(bottom, text="完成", font=self.fonts["btn"], width=110, height=38,
+        ctk.CTkButton(bottom, text="完成", font=self.fonts["btn"], width=90, height=30,
                       corner_radius=T.RADIUS_SM, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER, text_color=T.ON_ACCENT,
                       command=self._close).grid(row=0, column=1, sticky="e")
 
     def _card(self, parent, grid_row):
         c = ctk.CTkFrame(parent, fg_color=T.SURFACE, corner_radius=T.RADIUS,
                          border_width=1, border_color=T.BORDER)
-        c.grid(row=grid_row, column=0, sticky="ew", padx=16, pady=(8, 8))
+        c.grid(row=grid_row, column=0, sticky="ew", padx=10, pady=(6, 6))
         c.grid_columnconfigure(0, weight=1)
         return c
 
     def _spec_row(self, card, grid_row, key, name, desc, store, command, full_window=False):
         row = ctk.CTkFrame(card, fg_color=T.SURFACE_2, corner_radius=T.RADIUS_SM)
-        row.grid(row=grid_row, column=0, sticky="ew", padx=12, pady=4)
+        row.grid(row=grid_row, column=0, sticky="ew", padx=8, pady=3)
         row.grid_columnconfigure(0, weight=1)
         txt = ctk.CTkFrame(row, fg_color="transparent")
         txt.grid(row=0, column=0, sticky="w", padx=12, pady=8)
@@ -335,7 +335,7 @@ class CalibrateDialog(ctk.CTkToplevel):
     def _build_watchlist_card(self, parent, grid_row):
         icard = self._card(parent, grid_row)
         head = ctk.CTkFrame(icard, fg_color="transparent")
-        head.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 6))
+        head.grid(row=0, column=0, sticky="ew", padx=12, pady=(8, 4))
         head.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(head, text="③ 要抢的装备", font=self.fonts["h2"], text_color=T.TEXT).grid(
             row=0, column=0, sticky="w")
@@ -344,7 +344,7 @@ class CalibrateDialog(ctk.CTkToplevel):
                       text_color=T.BG, command=self._add_item).grid(row=0, column=1, sticky="e")
         ihint = ctk.CTkLabel(icard, text="提示：连「图标 + 名字」一起框，别框价格（价格会变，框了反而认不出）。",
                      font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
-        ihint.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 6))
+        ihint.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 6))
         T.bind_wraplength(ihint, padding=32)
         self.item_list = ctk.CTkFrame(icard, fg_color="transparent")
         self.item_list.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 12))

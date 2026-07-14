@@ -133,7 +133,7 @@ def Pill(master, fonts):
     """状态小药丸（圆角标签）。"""
     lbl = ctk.CTkLabel(master, text="", font=fonts["small"], corner_radius=T.RADIUS_PILL,
                        fg_color=T.SURFACE_2, text_color=T.TEXT_DIM,
-                       padx=12, pady=4)
+                       padx=8, pady=3)
     return lbl
 
 
@@ -199,7 +199,7 @@ class SniperPage(ctk.CTkFrame):
     # ---- 头部：标题 + 状态 ----
     def _build_header(self):
         bar = ctk.CTkFrame(self, fg_color="transparent")
-        bar.grid(row=0, column=0, sticky="ew", padx=4, pady=(2, 14))
+        bar.grid(row=0, column=0, sticky="ew", padx=4, pady=(2, 8))
         bar.grid_columnconfigure(0, weight=1)
 
         ctk.CTkLabel(bar, text="秒装备", font=self.fonts["title"], text_color=T.TEXT).grid(
@@ -220,40 +220,40 @@ class SniperPage(ctk.CTkFrame):
     # ---- 控制区：三段式（运行按钮 + 横排工具 / 分隔线 / 模式开关），与其它任务页一致 ----
     def _build_control(self):
         card = Card(self)
-        card.grid(row=1, column=0, sticky="ew", padx=4, pady=(0, 14))
+        card.grid(row=1, column=0, sticky="ew", padx=4, pady=(0, 8))
         card.grid_columnconfigure(0, weight=1)
 
         # 第一行：开始按钮（左） + 工具按钮（右，横排）
         top = ctk.CTkFrame(card, fg_color="transparent")
-        top.grid(row=0, column=0, sticky="ew", padx=16, pady=(16, 10))
+        top.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 6))
         top.grid_columnconfigure(1, weight=1)
         self.btn_run = ctk.CTkButton(top, text="▶  开始秒装备", font=self.fonts["btn"],
-                                     height=46, width=200, corner_radius=T.RADIUS_SM,
+                                     height=36, width=160, corner_radius=T.RADIUS_SM,
                                      fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER, text_color=T.ON_ACCENT,
                                      command=self._toggle_run)
         self.btn_run.grid(row=0, column=0, sticky="w")
         tools = ctk.CTkFrame(top, fg_color="transparent")
         tools.grid(row=0, column=2, sticky="e")
-        ctk.CTkButton(tools, text="选择窗口", font=self.fonts["body"], height=36, width=104,
+        ctk.CTkButton(tools, text="选择窗口", font=self.fonts["body"], height=28, width=76,
                       corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
                       border_width=1, border_color=T.BORDER,
                       command=lambda: self.app.open_window_picker(self.refresh)).pack(side="left", padx=(0, 8))
-        ctk.CTkButton(tools, text="标定 / 加装备", font=self.fonts["body"], height=36, width=104,
+        ctk.CTkButton(tools, text="标定 / 加装备", font=self.fonts["body"], height=28, width=76,
                       corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
                       border_width=1, border_color=T.BORDER,
                       command=self._open_calibrate).pack(side="left", padx=(0, 8))
-        ctk.CTkButton(tools, text="刷新配置", font=self.fonts["body"], height=36, width=104,
+        ctk.CTkButton(tools, text="刷新配置", font=self.fonts["body"], height=28, width=76,
                       corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
                       border_width=1, border_color=T.BORDER,
                       command=self.refresh).pack(side="left")
 
         # 分隔线
         ctk.CTkFrame(card, fg_color=T.BORDER, height=1).grid(
-            row=1, column=0, sticky="ew", padx=16, pady=(0, 4))
+            row=1, column=0, sticky="ew", padx=10, pady=(0, 2))
 
         # 第二行：模式开关 + 说明
         opts = ctk.CTkFrame(card, fg_color="transparent")
-        opts.grid(row=2, column=0, sticky="ew", padx=16, pady=(8, 16))
+        opts.grid(row=2, column=0, sticky="ew", padx=10, pady=(4, 8))
         box1 = ctk.CTkFrame(opts, fg_color="transparent")
         box1.pack(anchor="w")
         self.switch_mode = ctk.CTkSwitch(box1, text="实战模式（命中会真买）", font=self.fonts["body"],
@@ -265,17 +265,17 @@ class SniperPage(ctk.CTkFrame):
     # ---- 主体：监控清单（铺满；日志已移到全局右栏）----
     def _build_body(self):
         body = ctk.CTkFrame(self, fg_color="transparent")
-        body.grid(row=2, column=0, sticky="nsew", padx=4)
+        body.grid(row=2, column=0, sticky="nsew", padx=2)
         body.grid_columnconfigure(0, weight=1)   # 日志已移到全局右栏，主体内容独占整宽
         body.grid_rowconfigure(0, weight=1)
 
         # 监控清单卡片
         left = Card(body)
-        left.grid(row=0, column=0, sticky="nsew", padx=(0, 7))
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
         left.grid_rowconfigure(1, weight=1)
         left.grid_columnconfigure(0, weight=1)
         head = ctk.CTkFrame(left, fg_color="transparent")
-        head.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 8))
+        head.grid(row=0, column=0, sticky="ew", padx=10, pady=(8, 4))
         head.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(head, text="监控清单", font=self.fonts["h2"], text_color=T.TEXT).grid(row=0, column=0, sticky="w")
         self.lbl_count = ctk.CTkLabel(head, text="", font=self.fonts["small"], text_color=T.TEXT_DIM)
@@ -320,7 +320,7 @@ class SniperPage(ctk.CTkFrame):
 
         for i, it in enumerate(items):
             row = ctk.CTkFrame(self.list_frame, fg_color=T.SURFACE_2, corner_radius=T.RADIUS_SM)
-            row.grid(row=i, column=0, sticky="ew", pady=4, padx=4)
+            row.grid(row=i, column=0, sticky="ew", pady=4, padx=2)
             row.grid_columnconfigure(1, weight=1)
 
             thumb = self._load_thumb(it.get("template"))
@@ -475,7 +475,7 @@ class TreasureMapPage(ctk.CTkFrame):
 
     def _build_header(self):
         bar = ctk.CTkFrame(self, fg_color="transparent")
-        bar.grid(row=0, column=0, sticky="ew", padx=4, pady=(2, 14))
+        bar.grid(row=0, column=0, sticky="ew", padx=4, pady=(2, 8))
         bar.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(bar, text="宝图", font=self.fonts["title"], text_color=T.TEXT).grid(
             row=0, column=0, sticky="w")
@@ -492,40 +492,40 @@ class TreasureMapPage(ctk.CTkFrame):
 
     def _build_control(self):
         card = Card(self)
-        card.grid(row=1, column=0, sticky="ew", padx=4, pady=(0, 14))
+        card.grid(row=1, column=0, sticky="ew", padx=4, pady=(0, 8))
         card.grid_columnconfigure(0, weight=1)
 
         # 第一行：开始按钮（左） + 标定/刷新（右）
         top = ctk.CTkFrame(card, fg_color="transparent")
-        top.grid(row=0, column=0, sticky="ew", padx=16, pady=(16, 10))
+        top.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 6))
         top.grid_columnconfigure(1, weight=1)
         self.btn_run = ctk.CTkButton(top, text=self.RUN_LABEL, font=self.fonts["btn"],
-                                     height=46, width=200, corner_radius=T.RADIUS_SM,
+                                     height=36, width=160, corner_radius=T.RADIUS_SM,
                                      fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER, text_color=T.ON_ACCENT,
                                      command=self._toggle_run)
         self.btn_run.grid(row=0, column=0, sticky="w")
         tools = ctk.CTkFrame(top, fg_color="transparent")
         tools.grid(row=0, column=2, sticky="e")
-        ctk.CTkButton(tools, text="选择窗口", font=self.fonts["body"], height=36, width=104,
+        ctk.CTkButton(tools, text="选择窗口", font=self.fonts["body"], height=28, width=76,
                       corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
                       border_width=1, border_color=T.BORDER,
                       command=lambda: self.app.open_window_picker(self.refresh)).pack(side="left", padx=(0, 8))
-        ctk.CTkButton(tools, text="标定", font=self.fonts["body"], height=36, width=104,
+        ctk.CTkButton(tools, text="标定", font=self.fonts["body"], height=28, width=76,
                       corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
                       border_width=1, border_color=T.BORDER,
                       command=self._open_calibrate).pack(side="left", padx=(0, 8))
-        ctk.CTkButton(tools, text="刷新配置", font=self.fonts["body"], height=36, width=104,
+        ctk.CTkButton(tools, text="刷新配置", font=self.fonts["body"], height=28, width=76,
                       corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
                       border_width=1, border_color=T.BORDER,
                       command=self.refresh).pack(side="left")
 
         # 分隔线
         ctk.CTkFrame(card, fg_color=T.BORDER, height=1).grid(
-            row=1, column=0, sticky="ew", padx=16, pady=(0, 4))
+            row=1, column=0, sticky="ew", padx=10, pady=(0, 2))
 
         # 第二行：两个开关左右分布，各带一行说明
         opts = ctk.CTkFrame(card, fg_color="transparent")
-        opts.grid(row=2, column=0, sticky="ew", padx=16, pady=(8, 16))
+        opts.grid(row=2, column=0, sticky="ew", padx=10, pady=(4, 8))
         opts.grid_columnconfigure(0, weight=1, uniform="o")
         opts.grid_columnconfigure(1, weight=1, uniform="o")
 
@@ -540,7 +540,7 @@ class TreasureMapPage(ctk.CTkFrame):
         bind_wraplength(desc_mode)
 
         box2 = ctk.CTkFrame(opts, fg_color="transparent")
-        box2.grid(row=0, column=1, sticky="ew", padx=(16, 0))
+        box2.grid(row=0, column=1, sticky="ew", padx=(12, 0))
         self.switch_skip = ctk.CTkSwitch(box2, text="已有宝图", font=self.fonts["body"],
                                          progress_color=T.ACCENT, command=self._toggle_skip)
         self.switch_skip.pack(anchor="w")
@@ -551,19 +551,19 @@ class TreasureMapPage(ctk.CTkFrame):
 
     def _build_body(self):
         body = ctk.CTkFrame(self, fg_color="transparent")
-        body.grid(row=2, column=0, sticky="nsew", padx=4)
+        body.grid(row=2, column=0, sticky="nsew", padx=2)
         body.grid_columnconfigure(0, weight=1)   # 日志已移到全局右栏，主体内容独占整宽
         body.grid_rowconfigure(0, weight=1)
 
         # 左：运行参数 + 标定状态
         left = Card(body)
-        left.grid(row=0, column=0, sticky="nsew", padx=(0, 7))
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
         left.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(left, text="运行参数", font=self.fonts["h2"], text_color=T.TEXT).grid(
-            row=0, column=0, sticky="w", padx=16, pady=(14, 6))
+            row=0, column=0, sticky="w", padx=10, pady=(8, 6))
 
         lim = ctk.CTkFrame(left, fg_color="transparent")
-        lim.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 6))
+        lim.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 4))
         ctk.CTkLabel(lim, text="时间上限(分钟，0=不限)", font=self.fonts["body"],
                      text_color=T.TEXT).pack(side="left")
         self.var_limit = ctk.StringVar(value="30")
@@ -571,7 +571,7 @@ class TreasureMapPage(ctk.CTkFrame):
                      fg_color=T.SURFACE_2, border_color=T.BORDER).pack(side="left", padx=(8, 0))
 
         sd = ctk.CTkFrame(left, fg_color="transparent")
-        sd.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 6))
+        sd.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 4))
         ctk.CTkLabel(sd, text="静止判定阈值(收集/挖宝完成)", font=self.fonts["body"],
                      text_color=T.TEXT).pack(side="left")
         self.var_still = ctk.StringVar(value="8")
@@ -583,12 +583,12 @@ class TreasureMapPage(ctk.CTkFrame):
                                "把阈值设到“静止时帧差”之上、“走动时帧差”之下。\n"
                                "鼠标甩到屏幕左上角可紧急停止。",
                      font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
-        hint.grid(row=3, column=0, sticky="ew", padx=16, pady=(2, 8))
+        hint.grid(row=3, column=0, sticky="ew", padx=10, pady=(2, 6))
         bind_wraplength(hint)
 
         self.lbl_calib = ctk.CTkLabel(left, text="", font=self.fonts["small"], text_color=T.TEXT_DIM,
                                       justify="left")
-        self.lbl_calib.grid(row=4, column=0, sticky="ew", padx=16, pady=(2, 14))
+        self.lbl_calib.grid(row=4, column=0, sticky="ew", padx=10, pady=(2, 10))
         bind_wraplength(self.lbl_calib)
 
         # 日志已统一到 App 右侧的全局日志面板，本页不再单独建日志框。
@@ -765,7 +765,7 @@ class EscortPage(ctk.CTkFrame):
 
     def _build_header(self):
         bar = ctk.CTkFrame(self, fg_color="transparent")
-        bar.grid(row=0, column=0, sticky="ew", padx=4, pady=(2, 14))
+        bar.grid(row=0, column=0, sticky="ew", padx=4, pady=(2, 8))
         bar.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(bar, text="运镖", font=self.fonts["title"], text_color=T.TEXT).grid(
             row=0, column=0, sticky="w")
@@ -782,37 +782,37 @@ class EscortPage(ctk.CTkFrame):
 
     def _build_control(self):
         card = Card(self)
-        card.grid(row=1, column=0, sticky="ew", padx=4, pady=(0, 14))
+        card.grid(row=1, column=0, sticky="ew", padx=4, pady=(0, 8))
         card.grid_columnconfigure(0, weight=1)
 
         top = ctk.CTkFrame(card, fg_color="transparent")
-        top.grid(row=0, column=0, sticky="ew", padx=16, pady=(16, 10))
+        top.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 6))
         top.grid_columnconfigure(1, weight=1)
         self.btn_run = ctk.CTkButton(top, text=self.RUN_LABEL, font=self.fonts["btn"],
-                                     height=46, width=200, corner_radius=T.RADIUS_SM,
+                                     height=36, width=160, corner_radius=T.RADIUS_SM,
                                      fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER, text_color=T.ON_ACCENT,
                                      command=self._toggle_run)
         self.btn_run.grid(row=0, column=0, sticky="w")
         tools = ctk.CTkFrame(top, fg_color="transparent")
         tools.grid(row=0, column=2, sticky="e")
-        ctk.CTkButton(tools, text="选择窗口", font=self.fonts["body"], height=36, width=104,
+        ctk.CTkButton(tools, text="选择窗口", font=self.fonts["body"], height=28, width=76,
                       corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
                       border_width=1, border_color=T.BORDER,
                       command=lambda: self.app.open_window_picker(self.refresh)).pack(side="left", padx=(0, 8))
-        ctk.CTkButton(tools, text="标定", font=self.fonts["body"], height=36, width=104,
+        ctk.CTkButton(tools, text="标定", font=self.fonts["body"], height=28, width=76,
                       corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
                       border_width=1, border_color=T.BORDER,
                       command=self._open_calibrate).pack(side="left", padx=(0, 8))
-        ctk.CTkButton(tools, text="刷新配置", font=self.fonts["body"], height=36, width=104,
+        ctk.CTkButton(tools, text="刷新配置", font=self.fonts["body"], height=28, width=76,
                       corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
                       border_width=1, border_color=T.BORDER,
                       command=self.refresh).pack(side="left")
 
         ctk.CTkFrame(card, fg_color=T.BORDER, height=1).grid(
-            row=1, column=0, sticky="ew", padx=16, pady=(0, 4))
+            row=1, column=0, sticky="ew", padx=10, pady=(0, 2))
 
         opts = ctk.CTkFrame(card, fg_color="transparent")
-        opts.grid(row=2, column=0, sticky="ew", padx=16, pady=(8, 16))
+        opts.grid(row=2, column=0, sticky="ew", padx=10, pady=(4, 8))
         box1 = ctk.CTkFrame(opts, fg_color="transparent")
         box1.pack(anchor="w", fill="x")
         self.switch_mode = ctk.CTkSwitch(box1, text="实战模式", font=self.fonts["body"],
@@ -825,19 +825,19 @@ class EscortPage(ctk.CTkFrame):
 
     def _build_body(self):
         body = ctk.CTkFrame(self, fg_color="transparent")
-        body.grid(row=2, column=0, sticky="nsew", padx=4)
+        body.grid(row=2, column=0, sticky="nsew", padx=2)
         body.grid_columnconfigure(0, weight=1)   # 日志已移到全局右栏，主体内容独占整宽
         body.grid_rowconfigure(0, weight=1)
 
         # 左：运行参数 + 标定状态
         left = Card(body)
-        left.grid(row=0, column=0, sticky="nsew", padx=(0, 7))
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
         left.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(left, text="运行参数", font=self.fonts["h2"], text_color=T.TEXT).grid(
-            row=0, column=0, sticky="w", padx=16, pady=(14, 6))
+            row=0, column=0, sticky="w", padx=10, pady=(8, 6))
 
         cnt = ctk.CTkFrame(left, fg_color="transparent")
-        cnt.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 6))
+        cnt.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 4))
         ctk.CTkLabel(cnt, text="运镖次数（押满即停）", font=self.fonts["body"],
                      text_color=T.TEXT).pack(side="left")
         self.var_count = ctk.StringVar(value="3")
@@ -845,7 +845,7 @@ class EscortPage(ctk.CTkFrame):
                      fg_color=T.SURFACE_2, border_color=T.BORDER).pack(side="left", padx=(8, 0))
 
         lim = ctk.CTkFrame(left, fg_color="transparent")
-        lim.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 6))
+        lim.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 4))
         ctk.CTkLabel(lim, text="时间上限(分钟，0=不限)", font=self.fonts["body"],
                      text_color=T.TEXT).pack(side="left")
         self.var_limit = ctk.StringVar(value="30")
@@ -856,12 +856,12 @@ class EscortPage(ctk.CTkFrame):
                                "主终止条件是押满设定趟数后「运镖中」标志消失且不再弹对话框；\n"
                                "时间上限只是安全网。鼠标甩到屏幕左上角可紧急停止。",
                      font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
-        hint.grid(row=3, column=0, sticky="ew", padx=16, pady=(2, 8))
+        hint.grid(row=3, column=0, sticky="ew", padx=10, pady=(2, 6))
         bind_wraplength(hint)
 
         self.lbl_calib = ctk.CTkLabel(left, text="", font=self.fonts["small"], text_color=T.TEXT_DIM,
                                       justify="left")
-        self.lbl_calib.grid(row=4, column=0, sticky="ew", padx=16, pady=(2, 14))
+        self.lbl_calib.grid(row=4, column=0, sticky="ew", padx=10, pady=(2, 10))
         bind_wraplength(self.lbl_calib)
 
         # 日志已统一到 App 右侧的全局日志面板，本页不再单独建日志框。
@@ -1045,7 +1045,7 @@ class DungeonPage(ctk.CTkFrame):
 
     def _build_header(self):
         bar = ctk.CTkFrame(self, fg_color="transparent")
-        bar.grid(row=0, column=0, sticky="ew", padx=4, pady=(2, 14))
+        bar.grid(row=0, column=0, sticky="ew", padx=4, pady=(2, 8))
         bar.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(bar, text="刷副本", font=self.fonts["title"], text_color=T.TEXT).grid(
             row=0, column=0, sticky="w")
@@ -1064,37 +1064,37 @@ class DungeonPage(ctk.CTkFrame):
 
     def _build_control(self):
         card = Card(self)
-        card.grid(row=1, column=0, sticky="ew", padx=4, pady=(0, 14))
+        card.grid(row=1, column=0, sticky="ew", padx=4, pady=(0, 8))
         card.grid_columnconfigure(0, weight=1)
 
         top = ctk.CTkFrame(card, fg_color="transparent")
-        top.grid(row=0, column=0, sticky="ew", padx=16, pady=(16, 10))
+        top.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 6))
         top.grid_columnconfigure(1, weight=1)
         self.btn_run = ctk.CTkButton(top, text=self.RUN_LABEL, font=self.fonts["btn"],
-                                     height=46, width=200, corner_radius=T.RADIUS_SM,
+                                     height=36, width=160, corner_radius=T.RADIUS_SM,
                                      fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER, text_color=T.ON_ACCENT,
                                      command=self._toggle_run)
         self.btn_run.grid(row=0, column=0, sticky="w")
         tools = ctk.CTkFrame(top, fg_color="transparent")
         tools.grid(row=0, column=2, sticky="e")
-        ctk.CTkButton(tools, text="选择窗口", font=self.fonts["body"], height=36, width=104,
+        ctk.CTkButton(tools, text="选择窗口", font=self.fonts["body"], height=28, width=76,
                       corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
                       border_width=1, border_color=T.BORDER,
                       command=lambda: self.app.open_window_picker(self.refresh)).pack(side="left", padx=(0, 8))
-        ctk.CTkButton(tools, text="标定", font=self.fonts["body"], height=36, width=104,
+        ctk.CTkButton(tools, text="标定", font=self.fonts["body"], height=28, width=76,
                       corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
                       border_width=1, border_color=T.BORDER,
                       command=self._open_calibrate).pack(side="left", padx=(0, 8))
-        ctk.CTkButton(tools, text="刷新配置", font=self.fonts["body"], height=36, width=104,
+        ctk.CTkButton(tools, text="刷新配置", font=self.fonts["body"], height=28, width=76,
                       corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
                       border_width=1, border_color=T.BORDER,
                       command=self.refresh).pack(side="left")
 
         ctk.CTkFrame(card, fg_color=T.BORDER, height=1).grid(
-            row=1, column=0, sticky="ew", padx=16, pady=(0, 4))
+            row=1, column=0, sticky="ew", padx=10, pady=(0, 2))
 
         opts = ctk.CTkFrame(card, fg_color="transparent")
-        opts.grid(row=2, column=0, sticky="ew", padx=16, pady=(8, 16))
+        opts.grid(row=2, column=0, sticky="ew", padx=10, pady=(4, 8))
         box1 = ctk.CTkFrame(opts, fg_color="transparent")
         box1.pack(anchor="w", fill="x")
         self.switch_mode = ctk.CTkSwitch(box1, text="实战模式", font=self.fonts["body"],
@@ -1107,19 +1107,19 @@ class DungeonPage(ctk.CTkFrame):
 
     def _build_body(self):
         body = ctk.CTkFrame(self, fg_color="transparent")
-        body.grid(row=2, column=0, sticky="nsew", padx=4)
+        body.grid(row=2, column=0, sticky="nsew", padx=2)
         body.grid_columnconfigure(0, weight=1)   # 日志已移到全局右栏，主体内容独占整宽
         body.grid_rowconfigure(0, weight=1)
 
         # 左：选副本 + 队长 + 标定状态
         left = Card(body)
-        left.grid(row=0, column=0, sticky="nsew", padx=(0, 7))
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
         left.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(left, text="副本设置", font=self.fonts["h2"], text_color=T.TEXT).grid(
-            row=0, column=0, sticky="w", padx=16, pady=(14, 6))
+            row=0, column=0, sticky="w", padx=10, pady=(8, 6))
 
         dsel = ctk.CTkFrame(left, fg_color="transparent")
-        dsel.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 6))
+        dsel.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 4))
         ctk.CTkLabel(dsel, text="选择副本", font=self.fonts["body"], text_color=T.TEXT).pack(side="left")
         self.var_dungeon = ctk.StringVar(value=self._selected_title())
         self.opt_dungeon = ctk.CTkOptionMenu(dsel, variable=self.var_dungeon,
@@ -1131,7 +1131,7 @@ class DungeonPage(ctk.CTkFrame):
         self.opt_dungeon.pack(side="left", padx=(8, 0))
 
         cap = ctk.CTkFrame(left, fg_color="transparent")
-        cap.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 6))
+        cap.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 4))
         ctk.CTkLabel(cap, text="谁当队长", font=self.fonts["body"], text_color=T.TEXT).pack(side="left")
         self.var_captain = ctk.StringVar(value="号1")
         self.opt_captain = ctk.CTkOptionMenu(cap, variable=self.var_captain, values=["号1"],
@@ -1142,7 +1142,7 @@ class DungeonPage(ctk.CTkFrame):
         self.opt_captain.pack(side="left", padx=(8, 0))
         # 队长ID 入口：带缩略图的小按钮（一眼看到当前认哪张脸），点开「队长ID 库」弹窗；
         # 库里管当前+最近3历史、可切换，写的是共享 teaming.leader_id，和通用页同步。
-        self.btn_leader = ctk.CTkButton(cap, text="标定队长ID", font=self.fonts["small"], height=36, width=110,
+        self.btn_leader = ctk.CTkButton(cap, text="标定队长ID", font=self.fonts["small"], height=28, width=80,
                                         corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER,
                                         text_color=T.TEXT, border_width=1, border_color=T.BORDER,
                                         compound="left", command=self._open_leader_gallery)
@@ -1150,7 +1150,7 @@ class DungeonPage(ctk.CTkFrame):
         self._refresh_leader_btn()
 
         skip = ctk.CTkFrame(left, fg_color="transparent")
-        skip.grid(row=3, column=0, sticky="ew", padx=16, pady=(0, 4))
+        skip.grid(row=3, column=0, sticky="ew", padx=10, pady=(0, 2))
         self.switch_skip = ctk.CTkSwitch(skip, text="已组队（跳过组队，直接开刷）", font=self.fonts["body"],
                                          progress_color=T.ACCENT, command=self._toggle_skip)
         self.switch_skip.pack(anchor="w")
@@ -1163,12 +1163,12 @@ class DungeonPage(ctk.CTkFrame):
                                "组队的模板/区域在「通用」页统一标定（所有副本共享）；副本自身模板用本页「标定」按钮。\n"
                                "鼠标甩到屏幕左上角可紧急停止。",
                      font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
-        hint.grid(row=4, column=0, sticky="ew", padx=16, pady=(2, 8))
+        hint.grid(row=4, column=0, sticky="ew", padx=10, pady=(2, 6))
         bind_wraplength(hint)
 
         self.lbl_calib = ctk.CTkLabel(left, text="", font=self.fonts["small"], text_color=T.TEXT_DIM,
                                       justify="left")
-        self.lbl_calib.grid(row=5, column=0, sticky="ew", padx=16, pady=(2, 14))
+        self.lbl_calib.grid(row=5, column=0, sticky="ew", padx=10, pady=(2, 10))
         bind_wraplength(self.lbl_calib)
 
         # 日志已统一到 App 右侧的全局日志面板，本页不再单独建日志框。
@@ -1509,7 +1509,7 @@ class SecretRealmPage(ctk.CTkFrame):
 
     def _build_header(self):
         bar = ctk.CTkFrame(self, fg_color="transparent")
-        bar.grid(row=0, column=0, sticky="ew", padx=4, pady=(2, 14))
+        bar.grid(row=0, column=0, sticky="ew", padx=4, pady=(2, 8))
         bar.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(bar, text="秘境降妖", font=self.fonts["title"], text_color=T.TEXT).grid(
             row=0, column=0, sticky="w")
@@ -1526,37 +1526,37 @@ class SecretRealmPage(ctk.CTkFrame):
 
     def _build_control(self):
         card = Card(self)
-        card.grid(row=1, column=0, sticky="ew", padx=4, pady=(0, 14))
+        card.grid(row=1, column=0, sticky="ew", padx=4, pady=(0, 8))
         card.grid_columnconfigure(0, weight=1)
 
         top = ctk.CTkFrame(card, fg_color="transparent")
-        top.grid(row=0, column=0, sticky="ew", padx=16, pady=(16, 10))
+        top.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 6))
         top.grid_columnconfigure(1, weight=1)
         self.btn_run = ctk.CTkButton(top, text=self.RUN_LABEL, font=self.fonts["btn"],
-                                     height=46, width=200, corner_radius=T.RADIUS_SM,
+                                     height=36, width=160, corner_radius=T.RADIUS_SM,
                                      fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER, text_color=T.ON_ACCENT,
                                      command=self._toggle_run)
         self.btn_run.grid(row=0, column=0, sticky="w")
         tools = ctk.CTkFrame(top, fg_color="transparent")
         tools.grid(row=0, column=2, sticky="e")
-        ctk.CTkButton(tools, text="选择窗口", font=self.fonts["body"], height=36, width=104,
+        ctk.CTkButton(tools, text="选择窗口", font=self.fonts["body"], height=28, width=76,
                       corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
                       border_width=1, border_color=T.BORDER,
                       command=lambda: self.app.open_window_picker(self.refresh)).pack(side="left", padx=(0, 8))
-        ctk.CTkButton(tools, text="标定", font=self.fonts["body"], height=36, width=104,
+        ctk.CTkButton(tools, text="标定", font=self.fonts["body"], height=28, width=76,
                       corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
                       border_width=1, border_color=T.BORDER,
                       command=self._open_calibrate).pack(side="left", padx=(0, 8))
-        ctk.CTkButton(tools, text="刷新配置", font=self.fonts["body"], height=36, width=104,
+        ctk.CTkButton(tools, text="刷新配置", font=self.fonts["body"], height=28, width=76,
                       corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
                       border_width=1, border_color=T.BORDER,
                       command=self.refresh).pack(side="left")
 
         ctk.CTkFrame(card, fg_color=T.BORDER, height=1).grid(
-            row=1, column=0, sticky="ew", padx=16, pady=(0, 4))
+            row=1, column=0, sticky="ew", padx=10, pady=(0, 2))
 
         opts = ctk.CTkFrame(card, fg_color="transparent")
-        opts.grid(row=2, column=0, sticky="ew", padx=16, pady=(8, 16))
+        opts.grid(row=2, column=0, sticky="ew", padx=10, pady=(4, 8))
         box1 = ctk.CTkFrame(opts, fg_color="transparent")
         box1.pack(anchor="w", fill="x")
         self.switch_mode = ctk.CTkSwitch(box1, text="实战模式", font=self.fonts["body"],
@@ -1569,19 +1569,19 @@ class SecretRealmPage(ctk.CTkFrame):
 
     def _build_body(self):
         body = ctk.CTkFrame(self, fg_color="transparent")
-        body.grid(row=2, column=0, sticky="nsew", padx=4)
+        body.grid(row=2, column=0, sticky="nsew", padx=2)
         body.grid_columnconfigure(0, weight=1)   # 日志已移到全局右栏，主体内容独占整宽
         body.grid_rowconfigure(0, weight=1)
 
         # 左：运行参数 + 标定状态
         left = Card(body)
-        left.grid(row=0, column=0, sticky="nsew", padx=(0, 7))
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
         left.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(left, text="运行参数", font=self.fonts["h2"], text_color=T.TEXT).grid(
-            row=0, column=0, sticky="w", padx=16, pady=(14, 6))
+            row=0, column=0, sticky="w", padx=10, pady=(8, 6))
 
         cnt = ctk.CTkFrame(left, fg_color="transparent")
-        cnt.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 6))
+        cnt.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 4))
         ctk.CTkLabel(cnt, text="连跑轮数（跑满即停）", font=self.fonts["body"],
                      text_color=T.TEXT).pack(side="left")
         self.var_count = ctk.StringVar(value="1")
@@ -1589,7 +1589,7 @@ class SecretRealmPage(ctk.CTkFrame):
                      fg_color=T.SURFACE_2, border_color=T.BORDER).pack(side="left", padx=(8, 0))
 
         lim = ctk.CTkFrame(left, fg_color="transparent")
-        lim.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 6))
+        lim.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 4))
         ctk.CTkLabel(lim, text="时间上限(分钟，0=不限)", font=self.fonts["body"],
                      text_color=T.TEXT).pack(side="left")
         self.var_limit = ctk.StringVar(value="30")
@@ -1601,12 +1601,12 @@ class SecretRealmPage(ctk.CTkFrame):
                                "几个副本的「进入」长得一样，只认左下角那个（比例框可在配置 dungeon_enter_box 调）。\n"
                                "鼠标甩到屏幕左上角可紧急停止。",
                      font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
-        hint.grid(row=3, column=0, sticky="ew", padx=16, pady=(2, 8))
+        hint.grid(row=3, column=0, sticky="ew", padx=10, pady=(2, 6))
         bind_wraplength(hint)
 
         self.lbl_calib = ctk.CTkLabel(left, text="", font=self.fonts["small"], text_color=T.TEXT_DIM,
                                       justify="left")
-        self.lbl_calib.grid(row=4, column=0, sticky="ew", padx=16, pady=(2, 14))
+        self.lbl_calib.grid(row=4, column=0, sticky="ew", padx=10, pady=(2, 10))
         bind_wraplength(self.lbl_calib)
 
         # 日志已统一到 App 右侧的全局日志面板，本页不再单独建日志框。
@@ -2150,7 +2150,7 @@ class SettingsPage(ctk.CTkFrame):
         self.grid_rowconfigure(1, weight=1)
 
         ctk.CTkLabel(self, text="设置", font=self.fonts["title"], text_color=T.TEXT).grid(
-            row=0, column=0, sticky="w", padx=4, pady=(2, 14))
+            row=0, column=0, sticky="w", padx=4, pady=(2, 8))
 
         # 参数多了，内容区做成可滚动
         scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
@@ -2164,14 +2164,14 @@ class SettingsPage(ctk.CTkFrame):
         self._build_basic_card(scroll)
         self._build_speed_card(scroll)
 
-        ctk.CTkButton(scroll, text="保存设置", font=self.fonts["btn"], height=42, width=160,
+        ctk.CTkButton(scroll, text="保存设置", font=self.fonts["btn"], height=32, width=120,
                       corner_radius=T.RADIUS_SM, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER, text_color=T.ON_ACCENT,
                       command=self._save).grid(row=2, column=0, padx=4, pady=(4, 20), sticky="w")
 
     # ---- 基础卡片 ----
     def _build_basic_card(self, parent):
         card = Card(parent)
-        card.grid(row=0, column=0, sticky="ew", padx=4, pady=(0, 14))
+        card.grid(row=0, column=0, sticky="ew", padx=4, pady=(0, 8))
         card.grid_columnconfigure(1, weight=1)
 
         cfg = self.app.cfg
@@ -2187,7 +2187,7 @@ class SettingsPage(ctk.CTkFrame):
         self.var_threshold = ctk.DoubleVar(value=self._get_threshold())
 
         ctk.CTkLabel(card, text="基础", font=self.fonts["h2"], text_color=T.TEXT).grid(
-            row=0, column=0, columnspan=2, sticky="w", padx=16, pady=(14, 4))
+            row=0, column=0, columnspan=2, sticky="w", padx=10, pady=(8, 4))
         self._row(card, 1, "游戏窗口标题关键字",
                   ctk.CTkEntry(card, textvariable=self.var_title, font=self.fonts["body"],
                                fg_color=T.SURFACE_2, border_color=T.BORDER, width=240))
@@ -2207,7 +2207,7 @@ class SettingsPage(ctk.CTkFrame):
         for txt, var in (("Ctrl", self.var_hk_ctrl), ("Alt", self.var_hk_alt), ("Shift", self.var_hk_shift)):
             ctk.CTkCheckBox(row, text=txt, variable=var, font=self.fonts["body"],
                             text_color=T.TEXT, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
-                            checkbox_width=20, checkbox_height=20).pack(side="left", padx=(0, 14))
+                            checkbox_width=16, checkbox_height=16).pack(side="left", padx=(0, 10))
         ctk.CTkOptionMenu(row, variable=self.var_hk_key, values=HOTKEY_NAMES,
                           font=self.fonts["body"], fg_color=T.SURFACE_2,
                           button_color=T.BORDER, button_hover_color=T.ACCENT, text_color=T.TEXT,
@@ -2235,11 +2235,11 @@ class SettingsPage(ctk.CTkFrame):
     # ---- 速度与节奏卡片 ----
     def _build_speed_card(self, parent):
         card = Card(parent)
-        card.grid(row=1, column=0, sticky="ew", padx=4, pady=(0, 14))
+        card.grid(row=1, column=0, sticky="ew", padx=4, pady=(0, 8))
         card.grid_columnconfigure(0, weight=1)
 
         head = ctk.CTkFrame(card, fg_color="transparent")
-        head.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 2))
+        head.grid(row=0, column=0, sticky="ew", padx=10, pady=(8, 2))
         ctk.CTkLabel(head, text="速度与节奏（手速）", font=self.fonts["h2"],
                      text_color=T.TEXT).pack(anchor="w")
         warn = ctk.CTkLabel(head, text="抢不过别人就往「快」调；但越快越规律越像机器、封号风险越高。先在演练模式下试。",
@@ -2252,18 +2252,18 @@ class SettingsPage(ctk.CTkFrame):
 
     def _slider_row(self, parent, row, loc, key, label, lo, hi, steps, dec, hint):
         box = ctk.CTkFrame(parent, fg_color="transparent")
-        box.grid(row=row, column=0, sticky="ew", padx=16, pady=(10, 6))
+        box.grid(row=row, column=0, sticky="ew", padx=10, pady=(6, 4))
         box.grid_columnconfigure(1, weight=1)
 
         # 第一行：标签 + 滑块 + 数值
         ctk.CTkLabel(box, text=label, font=self.fonts["body_b"], text_color=T.TEXT,
-                     width=150, anchor="w").grid(row=0, column=0, sticky="w")
+                     width=120, anchor="w").grid(row=0, column=0, sticky="w")
 
         var = ctk.DoubleVar(value=self._get_value(loc, key))
         self.speed_vars[key] = var
         fmt = f"{{:.{dec}f}}"
         val_lbl = ctk.CTkLabel(box, text=fmt.format(var.get()), font=self.fonts["body_b"],
-                               text_color=T.ACCENT, width=56, anchor="e")
+                               text_color=T.ACCENT, width=48, anchor="e")
         val_lbl.grid(row=0, column=2, sticky="e", padx=(8, 0))
         self._value_labels[key] = (val_lbl, fmt)
 
@@ -2299,8 +2299,8 @@ class SettingsPage(ctk.CTkFrame):
 
     def _row(self, parent, r, label, widget, sticky="w"):
         ctk.CTkLabel(parent, text=label, font=self.fonts["body"], text_color=T.TEXT).grid(
-            row=r, column=0, sticky="w", padx=16, pady=12)
-        widget.grid(row=r, column=1, sticky=sticky, padx=16, pady=12)
+            row=r, column=0, sticky="w", padx=10, pady=8)
+        widget.grid(row=r, column=1, sticky=sticky, padx=10, pady=8)
 
     # ---- 置信度滑块 ----
     def _get_threshold(self):
@@ -2390,9 +2390,9 @@ class AboutPage(ctk.CTkFrame):
         super().__init__(master, fg_color="transparent")
         self.fonts = app.fonts
         ctk.CTkLabel(self, text="关于", font=self.fonts["title"], text_color=T.TEXT).pack(
-            anchor="w", padx=4, pady=(2, 14))
+            anchor="w", padx=4, pady=(2, 8))
         card = Card(self)
-        card.pack(fill="x", padx=4)
+        card.pack(fill="x", padx=2)
         text = (
             "梦幻西游 · 时空  辅助助手\n\n"
             "· 原理：截屏 + 图像识别 + 拟人化模拟点击，不读内存、不注入进程。\n"
@@ -2403,7 +2403,7 @@ class AboutPage(ctk.CTkFrame):
         )
         lbl = ctk.CTkLabel(card, text=text, font=self.fonts["body"], text_color=T.TEXT,
                      justify="left")
-        lbl.pack(fill="x", padx=16, pady=16)
+        lbl.pack(fill="x", padx=10, pady=10)
         bind_wraplength(lbl, padding=32)
 
 
@@ -2439,9 +2439,11 @@ class GeneralPage(ctk.CTkFrame):
         self._leader_thumbs = []    # 行内队长ID缩略图防 GC
         self.lbl_team_status = None
         self.windows_dropdown = None    # 窗口标题下拉列表（列出所有窗口）
-        self._build()
+        self._build_header()
+        self._build_body()
+        self.refresh()
 
-    def _build(self):
+    def _build_header(self):
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
         head = ctk.CTkFrame(self, fg_color="transparent")
@@ -2452,11 +2454,12 @@ class GeneralPage(ctk.CTkFrame):
         sub.pack(fill="x", anchor="w", pady=(4, 0))
         bind_wraplength(sub)
 
+    def _build_body(self):
         self.body = ctk.CTkScrollableFrame(self, fg_color="transparent")
         self.body.grid(row=1, column=0, sticky="nsew")
         self.body.grid_columnconfigure(0, weight=1)
         T.tune_scroll_speed(self.body)
-        # 不在构建时枚举窗口（省启动开销）；首次切到本页时 _show 会调 refresh() 填充。
+        self._refresh_body()  # 构建时即填充内容
 
     def _card(self):
         c = Card(self.body)
@@ -2609,7 +2612,7 @@ class GeneralPage(ctk.CTkFrame):
         # ── 组队（跨任务共享：任何用到组队的任务都自动读这份标定）──
         c_team = self._card()
         head_t = ctk.CTkFrame(c_team, fg_color="transparent")
-        head_t.pack(fill="x", padx=16, pady=(14, 4))
+        head_t.pack(fill="x", padx=10, pady=(8, 4))
         head_t.grid_columnconfigure(0, weight=1)
         txt_t = ctk.CTkFrame(head_t, fg_color="transparent")
         txt_t.grid(row=0, column=0, sticky="ew")
@@ -2632,33 +2635,33 @@ class GeneralPage(ctk.CTkFrame):
         bind_wraplength(sub_t)
         btns_t = ctk.CTkFrame(head_t, fg_color="transparent")
         btns_t.grid(row=0, column=1, padx=(12, 0))
-        ctk.CTkButton(btns_t, text="标定（组队）", font=self.fonts["body"], height=36, width=120,
+        ctk.CTkButton(btns_t, text="标定（组队）", font=self.fonts["body"], height=28, width=90,
                       corner_radius=T.RADIUS_SM, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
                       text_color=T.ON_ACCENT, command=self._open_team_calibrate).pack()
 
         # —— 一键组队（选好队长，把所选多开窗口直接组成一队）——
-        ctk.CTkFrame(c_team, fg_color=T.BORDER, height=1).pack(fill="x", padx=16, pady=(10, 0))
+        ctk.CTkFrame(c_team, fg_color=T.BORDER, height=1).pack(fill="x", padx=10, pady=(6, 0))
         act = ctk.CTkFrame(c_team, fg_color="transparent")
-        act.pack(fill="x", padx=16, pady=(10, 0))
-        self.btn_team = ctk.CTkButton(act, text="▶  一键组队", font=self.fonts["btn"], height=40, width=150,
+        act.pack(fill="x", padx=10, pady=(6, 0))
+        self.btn_team = ctk.CTkButton(act, text="▶  一键组队", font=self.fonts["btn"], height=32, width=120,
                                       corner_radius=T.RADIUS_SM, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
                                       text_color=T.ON_ACCENT, command=self._start_teaming)
         self.btn_team.pack(side="left")
         # 一键解散：让所选各号都退出当前队伍（开队伍面板→退出队伍→关面板，每号同一套流程）
-        self.btn_disband = ctk.CTkButton(act, text="⏏  一键解散", font=self.fonts["btn"], height=40, width=130,
+        self.btn_disband = ctk.CTkButton(act, text="⏏  一键解散", font=self.fonts["btn"], height=32, width=110,
                                          corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER,
                                          text_color=T.TEXT, border_width=1, border_color=T.BORDER,
                                          command=self._start_disband)
         self.btn_disband.pack(side="left", padx=(8, 0))
         # 「选择窗口」带缩略图，且队长就在这里选（卡片上勾「队长」）——下拉框「号123」看不出是哪个窗口，故移进来。
-        ctk.CTkButton(act, text="选择窗口/队长", font=self.fonts["body"], height=36, width=120,
+        ctk.CTkButton(act, text="选择窗口/队长", font=self.fonts["body"], height=28, width=90,
                       corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
                       border_width=1, border_color=T.BORDER,
                       command=lambda: self.app.open_window_picker(self.refresh, captain_ns="teaming")).pack(
                           side="left", padx=(8, 0))
         # 队长ID 入口：带缩略图的小按钮，点开「队长ID 库」（当前+最近3历史可切换）；
         # 和刷副本页写同一处 teaming.leader_id，天然同步。
-        self.btn_leader = ctk.CTkButton(act, text="标定队长ID", font=self.fonts["small"], height=36, width=110,
+        self.btn_leader = ctk.CTkButton(act, text="标定队长ID", font=self.fonts["small"], height=28, width=80,
                                         corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER,
                                         text_color=T.TEXT, border_width=1, border_color=T.BORDER,
                                         compound="left", command=self._open_leader_gallery)
@@ -2667,7 +2670,7 @@ class GeneralPage(ctk.CTkFrame):
 
         self.lbl_team_status = ctk.CTkLabel(c_team, text="", font=self.fonts["small"],
                                             text_color=T.TEXT_DIM, justify="left")
-        self.lbl_team_status.pack(fill="x", padx=16, pady=(6, 0))
+        self.lbl_team_status.pack(fill="x", padx=10, pady=(4, 0))
         bind_wraplength(self.lbl_team_status)
 
         # 日志已统一到 App 右侧的全局日志面板（组队打「组队」标签、整理背包打「整理背包」标签），本页不再单独建日志框。
@@ -2688,7 +2691,7 @@ class GeneralPage(ctk.CTkFrame):
         # ── 窗口尺寸归一化 ──
         c2 = self._card()
         head2 = ctk.CTkFrame(c2, fg_color="transparent")
-        head2.pack(fill="x", padx=16, pady=(14, 4))
+        head2.pack(fill="x", padx=10, pady=(8, 4))
         head2.grid_columnconfigure(0, weight=1)
         txt2 = ctk.CTkFrame(head2, fg_color="transparent")
         txt2.grid(row=0, column=0, sticky="ew")
@@ -2703,14 +2706,14 @@ class GeneralPage(ctk.CTkFrame):
         bind_wraplength(sub2)
         btns2 = ctk.CTkFrame(head2, fg_color="transparent")
         btns2.grid(row=0, column=1, padx=(12, 0))
-        ctk.CTkButton(btns2, text="还原尺寸", font=self.fonts["body"], height=36, width=100,
+        ctk.CTkButton(btns2, text="还原尺寸", font=self.fonts["body"], height=28, width=76,
                       corner_radius=T.RADIUS_SM, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER, text_color=T.ON_ACCENT,
                       command=self._normalize_now).pack(pady=(0, 6))
-        ctk.CTkButton(btns2, text="排列窗口", font=self.fonts["body"], height=30, width=100,
+        ctk.CTkButton(btns2, text="排列窗口", font=self.fonts["body"], height=24, width=76,
                       corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
                       border_width=1, border_color=T.BORDER,
                       command=self._arrange_windows).pack(pady=(0, 6))
-        ctk.CTkButton(btns2, text="刷新", font=self.fonts["body"], height=30, width=100,
+        ctk.CTkButton(btns2, text="刷新", font=self.fonts["body"], height=24, width=76,
                       corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
                       border_width=1, border_color=T.BORDER,
                       command=self.refresh).pack()
@@ -2753,17 +2756,17 @@ class GeneralPage(ctk.CTkFrame):
         if not (base and len(base) >= 2):
             ctk.CTkLabel(c2, text="基准尺寸尚未设置：在下方窗口列表点「设为基准」即可。",
                          font=self.fonts["small"], text_color=T.WARN, justify="left").pack(
-                             anchor="w", padx=16, pady=(2, 0))
+                             anchor="w", padx=10, pady=(2, 0))
 
         # 窗口列表（信息 + 快捷把某个窗口尺寸设为基准）
         ctk.CTkLabel(c2, text="检测到的窗口（点「设为基准」用该窗口的当前尺寸作为基准）：",
                      font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left").pack(
-                         anchor="w", padx=16, pady=(8, 2))
+                         anchor="w", padx=10, pady=(8, 2))
         # 窗口枚举（getAllWindows）很慢、绝不能卡主线程：先放占位、后台线程枚举完再回主线程填。
         rows_holder = ctk.CTkFrame(c2, fg_color="transparent")
         rows_holder.pack(fill="x")
         ctk.CTkLabel(rows_holder, text="正在检测窗口…", font=self.fonts["body"],
-                     text_color=T.TEXT_DIM).pack(anchor="w", padx=16, pady=(2, 14))
+                     text_color=T.TEXT_DIM).pack(anchor="w", padx=10, pady=(2, 10))
         self._kick_enum_windows(rows_holder, base)
 
     def _kick_enum_windows(self, holder, base):
@@ -2800,11 +2803,11 @@ class GeneralPage(ctk.CTkFrame):
             return
         if not data:
             ctk.CTkLabel(holder, text="没检测到游戏窗口，请先打开游戏再点「刷新」。",
-                         font=self.fonts["body"], text_color=T.TEXT_DIM).pack(anchor="w", padx=16, pady=(2, 14))
+                         font=self.fonts["body"], text_color=T.TEXT_DIM).pack(anchor="w", padx=10, pady=(2, 10))
             return
         for i, (w, r) in enumerate(data):
             row = ctk.CTkFrame(holder, fg_color=T.SURFACE_2, corner_radius=T.RADIUS_SM)
-            row.pack(fill="x", padx=12, pady=4)
+            row.pack(fill="x", padx=8, pady=3)
             row.grid_columnconfigure(0, weight=1)
             meta = f"号{i + 1}    {r[2]}×{r[3]}    @({r[0]},{r[1]})" if r else f"号{i + 1}    （窗口已失效）"
             is_base = bool(base and r and int(base[0]) == r[2] and int(base[1]) == r[3])
@@ -2812,7 +2815,7 @@ class GeneralPage(ctk.CTkFrame):
                          font=self.fonts["body"],
                          text_color=T.SUCCESS if is_base else T.TEXT).grid(
                              row=0, column=0, sticky="w", padx=12, pady=8)
-            ctk.CTkButton(row, text="设为基准", font=self.fonts["small"], width=84, height=30,
+            ctk.CTkButton(row, text="设为基准", font=self.fonts["small"], width=64, height=24,
                           corner_radius=T.RADIUS_SM, fg_color="transparent", hover_color=T.BORDER, text_color=T.TEXT,
                           border_width=1, border_color=T.BORDER,
                           command=lambda w=w: self._set_base_from(w)).grid(row=0, column=1, padx=10)
@@ -3203,7 +3206,7 @@ class GeneralPage(ctk.CTkFrame):
 
         c = self._card()
         head = ctk.CTkFrame(c, fg_color="transparent")
-        head.pack(fill="x", padx=16, pady=(14, 4))
+        head.pack(fill="x", padx=10, pady=(8, 4))
         head.grid_columnconfigure(0, weight=1)
         txt = ctk.CTkFrame(head, fg_color="transparent")
         txt.grid(row=0, column=0, sticky="ew")
@@ -3221,30 +3224,30 @@ class GeneralPage(ctk.CTkFrame):
                      font=self.fonts["small"], text_color=T.TEXT_DIM).pack(anchor="w", pady=(4, 0))
         btns = ctk.CTkFrame(head, fg_color="transparent")
         btns.grid(row=0, column=1, padx=(12, 0))
-        ctk.CTkButton(btns, text="标定（整理背包）", font=self.fonts["body"], height=36, width=130,
+        ctk.CTkButton(btns, text="标定（整理背包）", font=self.fonts["body"], height=28, width=90,
                       corner_radius=T.RADIUS_SM, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
                       text_color=T.ON_ACCENT, command=self._open_organize_calibrate).pack()
-        ctk.CTkButton(btns, text="管理物品", font=self.fonts["body"], height=32, width=130,
+        ctk.CTkButton(btns, text="管理物品", font=self.fonts["body"], height=26, width=100,
                       corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
                       border_width=1, border_color=T.BORDER,
                       command=self._open_organize_items).pack(pady=(6, 0))
 
-        ctk.CTkFrame(c, fg_color=T.BORDER, height=1).pack(fill="x", padx=16, pady=(10, 0))
+        ctk.CTkFrame(c, fg_color=T.BORDER, height=1).pack(fill="x", padx=10, pady=(6, 0))
         act = ctk.CTkFrame(c, fg_color="transparent")
-        act.pack(fill="x", padx=16, pady=(10, 14))
-        self.btn_ob = ctk.CTkButton(act, text="▶  一键整理", font=self.fonts["btn"], height=40, width=150,
+        act.pack(fill="x", padx=10, pady=(6, 8))
+        self.btn_ob = ctk.CTkButton(act, text="▶  一键整理", font=self.fonts["btn"], height=32, width=120,
                                     corner_radius=T.RADIUS_SM, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
                                     text_color=T.ON_ACCENT, command=self._start_organize)
         self.btn_ob.pack(side="left")
         # 选择整理哪些号：写的是和秒装备/运镖等任务共用的全局 targets（select_windows 读它），
         # 不选/多开留空 = 全体号。放在最右，和「一键整理」分列两端。
-        ctk.CTkButton(act, text="选择窗口", font=self.fonts["body"], height=36, width=104,
+        ctk.CTkButton(act, text="选择窗口", font=self.fonts["body"], height=28, width=76,
                       corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
                       border_width=1, border_color=T.BORDER,
                       command=lambda: self.app.open_window_picker(self.refresh)).pack(side="right")
         self.switch_ob = ctk.CTkSwitch(act, text="实战模式（真的会使用/丢弃/出售）", font=self.fonts["body"],
                                        command=self._toggle_organize_mode, progress_color=T.DANGER)
-        self.switch_ob.pack(side="left", padx=(16, 0))
+        self.switch_ob.pack(side="left", padx=(12, 0))
         if not ob_tc.get("dry_run", True):
             self.switch_ob.select()
         else:
@@ -3253,7 +3256,7 @@ class GeneralPage(ctk.CTkFrame):
         # 「自动整理背包」：跨任务全局开关。开了后，任何走多开轮转的任务（运镖/宝图/秘境/副本）
         # 运行中每隔一会儿检测一次背包「满」图标，满了就自动整理一遍（真整理/只识别跟随上面的实战开关）。
         auto_row = ctk.CTkFrame(c, fg_color="transparent")
-        auto_row.pack(fill="x", padx=16, pady=(0, 12))
+        auto_row.pack(fill="x", padx=10, pady=(0, 8))
         self.switch_auto_ob = ctk.CTkSwitch(auto_row, text="自动整理背包（任何任务检测到背包满就自动清）",
                                             font=self.fonts["body"], command=self._toggle_auto_organize)
         self.switch_auto_ob.pack(anchor="w")
@@ -3412,7 +3415,7 @@ class DailyPage(ctk.CTkFrame):
     # ---- 头部 ----
     def _build_header(self):
         bar = ctk.CTkFrame(self, fg_color="transparent")
-        bar.grid(row=0, column=0, sticky="ew", padx=4, pady=(2, 14))
+        bar.grid(row=0, column=0, sticky="ew", padx=4, pady=(2, 8))
         bar.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(bar, text="日常一条龙", font=self.fonts["title"], text_color=T.TEXT).grid(
             row=0, column=0, sticky="w")
@@ -3429,34 +3432,34 @@ class DailyPage(ctk.CTkFrame):
     # ---- 控制区：运行按钮 + 工具（选择窗口/刷新），无标定/无模式开关 ----
     def _build_control(self):
         card = Card(self)
-        card.grid(row=1, column=0, sticky="ew", padx=4, pady=(0, 14))
+        card.grid(row=1, column=0, sticky="ew", padx=4, pady=(0, 8))
         card.grid_columnconfigure(0, weight=1)
 
         top = ctk.CTkFrame(card, fg_color="transparent")
-        top.grid(row=0, column=0, sticky="ew", padx=16, pady=(16, 10))
+        top.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 6))
         top.grid_columnconfigure(1, weight=1)
         self.btn_run = ctk.CTkButton(top, text=self.RUN_LABEL, font=self.fonts["btn"],
-                                     height=46, width=200, corner_radius=T.RADIUS_SM,
+                                     height=36, width=160, corner_radius=T.RADIUS_SM,
                                      fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER, text_color=T.ON_ACCENT,
                                      command=self._toggle_run)
         self.btn_run.grid(row=0, column=0, sticky="w")
         tools = ctk.CTkFrame(top, fg_color="transparent")
         tools.grid(row=0, column=2, sticky="e")
-        ctk.CTkButton(tools, text="选择窗口", font=self.fonts["body"], height=36, width=104,
+        ctk.CTkButton(tools, text="选择窗口", font=self.fonts["body"], height=28, width=76,
                       corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
                       border_width=1, border_color=T.BORDER,
                       command=lambda: self.app.open_window_picker(self.refresh)).pack(side="left", padx=(0, 8))
-        ctk.CTkButton(tools, text="刷新配置", font=self.fonts["body"], height=36, width=104,
+        ctk.CTkButton(tools, text="刷新配置", font=self.fonts["body"], height=28, width=76,
                       corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
                       border_width=1, border_color=T.BORDER,
                       command=self.refresh).pack(side="left")
 
         ctk.CTkFrame(card, fg_color=T.BORDER, height=1).grid(
-            row=1, column=0, sticky="ew", padx=16, pady=(0, 4))
+            row=1, column=0, sticky="ew", padx=10, pady=(0, 2))
 
         # 时间上限（整条龙的安全网）
         opts = ctk.CTkFrame(card, fg_color="transparent")
-        opts.grid(row=2, column=0, sticky="ew", padx=16, pady=(8, 16))
+        opts.grid(row=2, column=0, sticky="ew", padx=10, pady=(4, 8))
         lim = ctk.CTkFrame(opts, fg_color="transparent")
         lim.pack(anchor="w")
         ctk.CTkLabel(lim, text="整体时间上限(分钟，0=不限)", font=self.fonts["body"],
@@ -3472,17 +3475,17 @@ class DailyPage(ctk.CTkFrame):
     # ---- 主体：任务清单（铺满；日志已移到全局右栏）----
     def _build_body(self):
         body = ctk.CTkFrame(self, fg_color="transparent")
-        body.grid(row=2, column=0, sticky="nsew", padx=4)
+        body.grid(row=2, column=0, sticky="nsew", padx=2)
         body.grid_columnconfigure(0, weight=1)   # 日志已移到全局右栏，主体内容独占整宽
         body.grid_rowconfigure(0, weight=1)
 
         # 左：任务清单（勾选 + 调序）
         left = Card(body)
-        left.grid(row=0, column=0, sticky="nsew", padx=(0, 7))
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
         left.grid_rowconfigure(1, weight=1)
         left.grid_columnconfigure(0, weight=1)
         head = ctk.CTkFrame(left, fg_color="transparent")
-        head.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 8))
+        head.grid(row=0, column=0, sticky="ew", padx=10, pady=(8, 4))
         head.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(head, text="任务清单", font=self.fonts["h2"],
                      text_color=T.TEXT).grid(row=0, column=0, sticky="w")
@@ -3598,7 +3601,7 @@ class DailyPage(ctk.CTkFrame):
         左键按住手柄上下拖动即可排序（见 _drag_*）。"""
         name = step["task"]
         row = ctk.CTkFrame(self.list_frame, fg_color=T.SURFACE_2, corner_radius=T.RADIUS_SM)
-        row.grid(row=i, column=0, sticky="ew", pady=5, padx=4)
+        row.grid(row=i, column=0, sticky="ew", pady=5, padx=2)
         row.grid_columnconfigure(2, weight=1)
 
         # 左：拖动手柄（按住左键上下拖动整行排序）。光标设成移动样式（失败不致命）。
@@ -3802,8 +3805,8 @@ class App(ctk.CTk):
         mode = self.cfg.get("appearance", "dark")
         ctk.set_appearance_mode(mode if mode in ("dark", "light") else "dark")
         self.title("梦幻 · 时空 助手")
-        self.geometry("1360x720")
-        self.minsize(1180, 640)
+        self.geometry("1100x600")
+        self.minsize(960, 520)
         self.configure(fg_color=T.BG)
 
         self.fonts = T.build_fonts()
@@ -3820,6 +3823,9 @@ class App(ctk.CTk):
         self._build_pages()
         self._show("general")
 
+        # Position the GUI window at bottom-right corner after it's fully initialized
+        self.after(100, self._position_window_bottom_right)
+
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(150, self._tick)
         self._hotkey_down = False
@@ -3828,60 +3834,116 @@ class App(ctk.CTk):
         self.after(800, self._prebuild_idle)
 
     def _build_sidebar(self):
-        bar = ctk.CTkFrame(self, fg_color=T.SIDEBAR, corner_radius=0, width=210)
+        bar = ctk.CTkFrame(self, fg_color=T.SIDEBAR, corner_radius=0, width=170)
         bar.grid(row=0, column=0, sticky="nsew")
         bar.grid_propagate(False)
-        bar.grid_rowconfigure(99, weight=1)
 
         ctk.CTkLabel(bar, text="梦幻 · 时空", font=self.fonts["title"], text_color=T.TEXT).grid(
-            row=0, column=0, sticky="w", padx=22, pady=(24, 0))
+            row=0, column=0, sticky="w", padx=16, pady=(18, 0))
         ctk.CTkLabel(bar, text="辅助助手", font=self.fonts["small"], text_color=T.TEXT_DIM).grid(
-            row=1, column=0, sticky="w", padx=22, pady=(0, 22))
+            row=1, column=0, sticky="w", padx=16, pady=(0, 16))
+
+        # 导航按钮包裹在滚动容器中，支持后续新增任务
+        nav_scroll = ctk.CTkScrollableFrame(bar, width=160, fg_color="transparent")
+        nav_scroll.grid(row=2, column=0, sticky="nsew")
+        bar.grid_rowconfigure(2, weight=1)  # 滚动区随窗口拉伸
 
         self.nav_buttons = {}
         for i, (key, label) in enumerate(self.NAV):
-            b = ctk.CTkButton(bar, text=label, font=self.fonts["nav"], anchor="w",
-                              height=42, corner_radius=T.RADIUS_SM,
+            b = ctk.CTkButton(nav_scroll, text=label, font=self.fonts["nav"], anchor="w",
+                              height=32, corner_radius=T.RADIUS_SM,
                               fg_color="transparent", hover_color=T.SURFACE,
                               text_color=T.TEXT_DIM, command=lambda k=key: self._show(k))
-            b.grid(row=2 + i, column=0, sticky="ew", padx=12, pady=3)
+            b.grid(row=i, column=0, sticky="ew", padx=8, pady=2)
             self.nav_buttons[key] = b
 
         # 明暗切换按钮（置于风险提示之上，随侧栏底部对齐）
         self.btn_appearance = ctk.CTkButton(
-            bar, text="", font=self.fonts["nav"], anchor="w", height=42,
+            bar, text="", font=self.fonts["nav"], anchor="w", height=32,
             corner_radius=T.RADIUS_SM, fg_color="transparent", hover_color=T.SURFACE,
             text_color=T.TEXT_DIM, command=self._toggle_appearance)
-        self.btn_appearance.grid(row=100, column=0, sticky="ew", padx=12, pady=(8, 4))
+        self.btn_appearance.grid(row=100, column=0, sticky="ew", padx=8, pady=(6, 2))
         self._render_appearance_btn()
 
         ctk.CTkLabel(bar, text="⚠ 脚本有封号风险\n请用小号测试", font=self.fonts["small"],
                      text_color=T.WARN, justify="left").grid(row=101, column=0, sticky="sw",
-                                                             padx=22, pady=18)
+                                                             padx=16, pady=12)
+
+    def _get_taskbar_height(self):
+        """Get the height of the taskbar using platform-specific methods."""
+        # Cross-platform taskbar height detection
+        try:
+            # Try to get taskbar height using platform-specific methods
+            if hasattr(self, 'winfo_screenheight'):
+                # For Tkinter-based applications, use screen dimensions
+                # Default to 40px for taskbar height (Windows default)
+                return 40
+        except Exception:
+            pass
+        return 40
+
+    def _position_window_bottom_right(self, window_handle=None):
+        """Position the window at the bottom-right corner of the screen.
+        
+        On Windows, it accounts for the taskbar. On other platforms, it simply
+        positions at the bottom-right corner.
+        """
+        try:
+            # Use Tkinter geometry methods for positioning (cross-platform)
+            # Get screen dimensions
+            screen_width = self.winfo_screenwidth()
+            screen_height = self.winfo_screenheight()
+            
+            # Get current window dimensions
+            current_width = self.winfo_width()
+            current_height = self.winfo_height()
+            
+            # Get taskbar height (estimated)
+            taskbar_height = self._get_taskbar_height()
+            
+            # Calculate position (accounting for taskbar on Windows)
+            x = screen_width - current_width
+            y = screen_height - current_height - taskbar_height
+            
+            # Set window geometry (use geometry() method)
+            self.geometry(f"+{x}+{y}")
+            
+        except Exception:
+            # Fallback: just center if positioning fails
+            try:
+                screen_width = self.winfo_screenwidth()
+                screen_height = self.winfo_screenheight()
+                window_width = self.winfo_width()
+                window_height = self.winfo_height()
+                x = (screen_width - window_width) // 2
+                y = (screen_height - window_height) // 2
+                self.geometry(f"+{x}+{y}")
+            except Exception:
+                pass
 
     # ---------------- 全局日志面板（常驻右侧，所有功能共用一处）----------------
     def _build_log_panel(self):
         """右侧常驻日志列：各页面/任务的日志统一汇到这里，按来源（秒装备/组队/整理背包…）打标签。
         以前每个页面各有一个日志框，功能一多就散乱；现在收敛成这一处，谁产生的日志靠行首来源标签区分。"""
-        panel = ctk.CTkFrame(self, fg_color=T.SIDEBAR, corner_radius=0, width=340)
+        panel = ctk.CTkFrame(self, fg_color=T.SIDEBAR, corner_radius=0, width=260)
         panel.grid(row=0, column=2, sticky="nsew")
         panel.grid_propagate(False)
         panel.grid_columnconfigure(0, weight=1)
         panel.grid_rowconfigure(1, weight=1)
 
         head = ctk.CTkFrame(panel, fg_color="transparent")
-        head.grid(row=0, column=0, sticky="ew", padx=14, pady=(16, 8))
+        head.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 4))
         head.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(head, text="运行日志", font=self.fonts["h2"], text_color=T.TEXT).grid(
             row=0, column=0, sticky="w")
-        ctk.CTkButton(head, text="清空", font=self.fonts["small"], height=26, width=56,
+        ctk.CTkButton(head, text="清空", font=self.fonts["small"], height=22, width=46,
                       corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
                       border_width=1, border_color=T.BORDER,
                       command=self.clear_log).grid(row=0, column=1, sticky="e")
 
         self.log = ctk.CTkTextbox(panel, font=self.fonts["mono"], fg_color=T.SURFACE_2,
                                   text_color=T.TEXT, corner_radius=T.RADIUS_SM, wrap="word")
-        self.log.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 14))
+        self.log.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 10))
         T.apply_log_tags(self.log._textbox)
         self.log.configure(state="disabled")
         self.log_line("界面就绪。各功能的日志都会汇总到这里。", "info")
@@ -3938,7 +4000,7 @@ class App(ctk.CTk):
 
     def _build_pages(self):
         self.container = ctk.CTkFrame(self, fg_color="transparent")
-        self.container.grid(row=0, column=1, sticky="nsew", padx=24, pady=20)
+        self.container.grid(row=0, column=1, sticky="nsew", padx=14, pady=12)
         self.container.grid_rowconfigure(0, weight=1)
         self.container.grid_columnconfigure(0, weight=1)
         self.pages = {}   # 懒加载：key -> 页面实例，按需创建
@@ -4079,7 +4141,7 @@ class App(ctk.CTk):
     def toast(self, msg):
         """简单的右下角浮层提示。"""
         lbl = ctk.CTkLabel(self, text=msg, font=self.fonts["body"], fg_color=T.ACCENT,
-                           text_color=T.ON_ACCENT, corner_radius=T.RADIUS_SM, padx=16, pady=8)
+                           text_color=T.ON_ACCENT, corner_radius=T.RADIUS_SM, padx=10, pady=6)
         lbl.place(relx=0.99, rely=0.97, anchor="se")
         self.after(1600, lbl.destroy)
 

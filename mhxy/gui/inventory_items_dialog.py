@@ -40,8 +40,8 @@ class InventoryItemsDialog(ctk.CTkToplevel):
         self._thumbs = []   # 防缩略图被 GC（_refresh 开头清空再重建）
 
         self.title("整理背包 · 物品清单")
-        self.geometry("620x600")
-        self.minsize(520, 420)
+        self.geometry("500x480")
+        self.minsize(420, 380)
         self.configure(fg_color=T.BG)
         self.transient(app)
         self.protocol("WM_DELETE_WINDOW", self._close)
@@ -63,7 +63,7 @@ class InventoryItemsDialog(ctk.CTkToplevel):
 
         # 顶部：标题 + 说明 + 添加按钮
         top = ctk.CTkFrame(self, fg_color="transparent")
-        top.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 6))
+        top.grid(row=0, column=0, sticky="ew", padx=10, pady=(8, 4))
         top.grid_columnconfigure(0, weight=1)
         ttxt = ctk.CTkFrame(top, fg_color="transparent")
         ttxt.grid(row=0, column=0, sticky="ew")
@@ -73,23 +73,23 @@ class InventoryItemsDialog(ctk.CTkToplevel):
                            font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
         sub.pack(fill="x", pady=(4, 0))
         T.bind_wraplength(sub)
-        ctk.CTkButton(top, text="＋ 框选添加物品", font=self.fonts["body"], width=140, height=34,
+        ctk.CTkButton(top, text="＋ 框选添加物品", font=self.fonts["body"], width=110, height=28,
                       corner_radius=T.RADIUS_SM, fg_color=T.SUCCESS, hover_color=T.SUCCESS_HOVER,
                       text_color=T.BG, command=self._add_item).grid(row=0, column=1, sticky="e", padx=(12, 0))
 
         # 物品列表（可滚动）
         self.list_frame = ctk.CTkScrollableFrame(self, fg_color="transparent")
-        self.list_frame.grid(row=1, column=0, sticky="nsew", padx=12, pady=(4, 0))
+        self.list_frame.grid(row=1, column=0, sticky="nsew", padx=8, pady=(2, 0))
         self.list_frame.grid_columnconfigure(0, weight=1)
         T.tune_scroll_speed(self.list_frame)
 
         # 底部：状态 + 完成
         bottom = ctk.CTkFrame(self, fg_color="transparent")
-        bottom.grid(row=2, column=0, sticky="ew", padx=20, pady=(8, 16))
+        bottom.grid(row=2, column=0, sticky="ew", padx=14, pady=(6, 12))
         bottom.grid_columnconfigure(0, weight=1)
         self.status_lbl = ctk.CTkLabel(bottom, text="", font=self.fonts["small"], text_color=T.TEXT_DIM)
         self.status_lbl.grid(row=0, column=0, sticky="w")
-        ctk.CTkButton(bottom, text="完成", font=self.fonts["btn"], width=110, height=38,
+        ctk.CTkButton(bottom, text="完成", font=self.fonts["btn"], width=90, height=30,
                       corner_radius=T.RADIUS_SM, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
                       text_color=T.ON_ACCENT, command=self._close).grid(row=0, column=1, sticky="e")
 

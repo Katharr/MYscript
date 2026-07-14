@@ -39,12 +39,10 @@ S_DIALOG = "DIALOG"                 # 等首个「押送普通镖银」对话框
 S_CONFIRM = "CONFIRM"               # 点完押送后等「确认」按钮（容错超时）
 S_ESCORTING = "ESCORTING"           # 运镖中：监控运镖中标志/对话框复现，续点下一趟或收尾
 
-# 模板键（用 escort_ 前缀，避免和「宝图」任务的同名模板在磁盘上互相覆盖——
-#   标定存盘按 templates/tm_<key>.png 命名，只按 key 区分，不区分任务）。
-_FLAG_KEYS = ["escort_entry", "escort_join", "escort_silver", "escort_confirm",
-              "escort_ongoing", "escort_battle"]
+# 必备模板（缺失则 preflight 阻断）与可选模板（缺失仅 warn）
+#   escort_join=活动列表里「运镖」那一行右侧的「参加」按钮——按行匹配点它（不是点条目本身）。
 _REQUIRED_FLAGS = ["escort_entry", "escort_join", "escort_silver", "escort_confirm",
-                   "escort_ongoing"]
+                     "escort_ongoing"]
 
 
 @register
@@ -53,15 +51,18 @@ class EscortTask(Task):
     title = "运镖"
     description = "自动开活动→参加运镖→押送普通镖银→循环押满次数（战斗/寻路交给游戏自动，支持多开轮转）"
     CHAINS_PER_WINDOW = True   # 可做「日常一条龙·每窗口独立链」
+    # 模板键（用 escort_ 前缀，避免和「宝图」任务的同名模板在磁盘上互相覆盖——
+    #   标定存盘按 templates/tm_<key>.png 命名，只按 key 区分，不区分任务）。
+    _FLAG_KEYS = ["escort_entry", "activity_join", "escort_silver", "escort_confirm",
+                  "escort_ongoing", "escort_battle"]
 
     CALIBRATION = {
         "regions": [
-            ("scene", "主识别区", "留空=整个窗口当识别区(推荐)；对话框/战斗等标志都在这里找", True),
-            ("activity_list", "活动列表区域", "「活动」界面里那片列表，滚轮在此翻找「运镖」条目"),
+            *Task.BASE_CALIBRATION_REGIONS,
         ],
         "templates": [
+            *Task.BASE_CALIBRATION_TEMPLATES,
             ("escort_entry", "运镖入口", "活动列表里「运镖」那一条，框图标+文字、要独特"),
-            ("escort_join", "参加按钮", "活动列表里「运镖」那一行右侧的「参加」按钮，框按钮本身、要独特"),
             ("escort_silver", "「押送普通镖银」按钮", "弹出对话框里要点的那个「押送普通镖银」按钮"),
             ("escort_confirm", "「确认」按钮", "点完「押送普通镖银」后再弹出的确认按钮，框按钮本身、要独特"),
             ("escort_ongoing", "「运镖中」标志", "运镖途中一直挂在屏幕上的标志（如镖银图标/运镖任务追踪条），"
@@ -168,19 +169,8 @@ class EscortTask(Task):
         return rec, (lambda: self._step_once(wctx, rec, loop, regions, threshold))
 
     # ------------------------------------------------------------------
-    # 多开轮转：上下文与每号状态记录
+    # 多开轮转：上下文与每号状态记录（_resolve_contexts 已在 Task 基类）
     # ------------------------------------------------------------------
-    def _resolve_contexts(self, ctx, multi):
-        """按选择把目标窗口包成「要轮转的上下文」列表。
-        单开→复用主 ctx 并绑到选中的那个窗口；多开→每号一个子上下文(带「号N」标签，日志自动加前缀)。"""
-        wins = ctx.select_windows()
-        if not wins:
-            return []
-        if multi:
-            return [ctx.make_child(w, f"号{i + 1}") for i, w in enumerate(wins)]
-        ctx.window = wins[0]
-        return [ctx]
-
     @staticmethod
     def _new_record(wctx):
         """每个号一份独立状态。轮转时按 state 各推进一步，互不干扰。"""
@@ -189,20 +179,12 @@ class EscortTask(Task):
                 "seen_ongoing": False,   # 本趟是否出现过「运镖中」标志（出现过才允许靠它消失判结束）
                 "gone_since": None,      # 「运镖中」标志消失起点
                 "t_trip": 0.0,          # 最近一次「明确在运镖/战斗/起步」的时间，用于单趟超时兜底
-                "t_diag": 0.0, "scrolls": 0, "recover": 0,
+                "t_diag": 0.0, "recover": 0,
                 "done": False, "dead_logged": False}
-
-    @staticmethod
-    def _goto(rec, state):
-        rec["state"] = state
-        rec["t_state"] = time.time()
-
-    @staticmethod
-    def _state_elapsed(rec):
-        return time.time() - rec["t_state"]
 
     # ------------------------------------------------------------------
     # 单步推进：按这个号的 state 做【一小步】非阻塞动作，然后立刻返回（好轮转到下一个号）
+    # （_goto / _state_elapsed 已在 Task 基类，均为 @staticmethod）
     # ------------------------------------------------------------------
     def _step_once(self, ctx, rec, loop, regions, threshold):
         st = rec["state"]
@@ -226,7 +208,6 @@ class EscortTask(Task):
             return
         ctx.log("已打开活动，滚轮翻找「运镖」…")
         self._interruptible_sleep(ctx, self._jitter(0.6, ctx))
-        rec["scrolls"] = 0
         self._goto(rec, S_FIND_CARD)
 
     # ---- 找「运镖」条目 → 点「参加」----
@@ -246,7 +227,8 @@ class EscortTask(Task):
                 return scan.SCROLL, None
             cx, cy, score = hit
             entry_xy = (rect[0] + cx, rect[1] + cy)
-            join = self._find_join_on_row(ctx, list_region, entry_xy, threshold, loop)
+            join = self._find_join_on_row(ctx, list_region, entry_xy, threshold, loop,
+                                            "activity_join", "escort_entry")
             if join is not None:
                 ctx.mouse.click(join[0], join[1])
                 ctx.log(f"找到「运镖」（{score:.3f}）→ 点「参加」（{join[2]:.3f}），等对话框。", level="hit")
@@ -414,88 +396,6 @@ class EscortTask(Task):
     # ------------------------------------------------------------------
     # 工具
     # ------------------------------------------------------------------
-    def _focus(self, ctx):
-        """把游戏窗口切到前台——键盘快捷键(SendInput)只发给有焦点的窗口，发键前必须先激活。"""
-        try:
-            ctx.window.activate()
-        except Exception:
-            pass
-
-    def _find_join_on_row(self, ctx, list_region, entry_screen_xy, threshold, loop):
-        """在「运镖」条目所在【那张卡片】的右侧条带里匹配「参加」按钮(escort_join)。
-        命中返回 (screen_x, screen_y, score)，否则 None。
-        按行+只取条目右侧、且限制在条目所属卡片列内，能抗滚动、抗「一排多张卡片」时
-        扫进右邻卡片点到它的「参加」按钮（活动列表默认两张卡片一排）。"""
-        join_tpl = self.flags.get("escort_join")
-        entry_tpl = self.flags.get("escort_entry")
-        if join_tpl is None:
-            ctx.log("找「参加」失败：escort_join 模板未标定。", level="warn")
-            return None
-        rect = (ctx.window.region_to_screen_rect(list_region)
-                if list_region else ctx.window.rect())
-        if rect is None:
-            return None
-        scene = win_mod.grab(rect)
-        if scene is None:
-            return None
-        rx, ry = rect[0], rect[1]
-        ex, ey = entry_screen_xy
-        # 行条带高度：取条目模板高 ×2，下限 40px；纵向以条目中心为中线
-        row_h = entry_tpl.shape[0] if entry_tpl is not None else 40
-        band = max(40, int(row_h * 2))
-        sh, sw = scene.shape[:2]
-        # 换算到 scene 局部坐标：纵向取条带、横向从条目中心到列表右缘（只看右侧）
-        ey_local = int(ey - ry)
-        ex_local = int(ex - rx)
-        # 活动列表是「每排多张卡片」(默认两张一排)：参加按钮只在【条目所属那张卡片】内。
-        # 若一路扫到列表右缘(x1=sw)，右邻卡片的「参加」按钮会被一并扫进来、甚至胜出，
-        # 导致点到右边卡片的参加。故把列表按列等分，定位条目所在列，x1 收到该列右边界。
-        cols = max(1, int(loop.get("activity_columns", 2)))
-        col_w = sw / cols
-        col_idx = min(cols - 1, max(0, int(ex_local // col_w)))
-        col_right = int(round((col_idx + 1) * col_w))
-        y0 = max(0, ey_local - band // 2)
-        y1 = min(sh, ey_local + band // 2)
-        x0 = max(0, ex_local)
-        x1 = min(sw, col_right)
-        if y1 - y0 < 1 or x1 - x0 < 1:
-            return None
-        crop = scene[y0:y1, x0:x1]
-        m = vision.match(crop, join_tpl, threshold)
-        if m is None:
-            return None
-        cx, cy, score = m
-        return (rx + x0 + cx, ry + y0 + cy, score)
-
-    def _load_flags(self, tc):
-        templates = tc.get("templates", {})
-        return {k: vision.load_template(templates.get(k)) if templates.get(k) else None
-                for k in _FLAG_KEYS}
-
-    def _scene_rect(self, ctx, regions):
-        region = regions.get("scene")
-        return ctx.window.region_to_screen_rect(region) if region else ctx.window.rect()
-
-    def _grab_scene(self, ctx, regions):
-        rect = self._scene_rect(ctx, regions)
-        return win_mod.grab(rect) if rect else None
-
-    def _present(self, scene, flag_key, threshold):
-        tpl = self.flags.get(flag_key)
-        if scene is None or tpl is None:
-            return False
-        return vision.match(scene, tpl, threshold) is not None
-
-    def _match_scene(self, cur, scene_rect, flag_key, threshold):
-        """在整张 scene 里匹配 flag_key，命中返回屏幕绝对 (x,y,score)，否则 None。"""
-        tpl = self.flags.get(flag_key)
-        if cur is None or tpl is None or scene_rect is None:
-            return None
-        m = vision.match(cur, tpl, threshold)
-        if m is None:
-            return None
-        return (scene_rect[0] + m[0], scene_rect[1] + m[1], m[2])
-
     def _dry_run_selfcheck(self, ctx, contexts, multi, regions, threshold, switch_delay, deadline):
         """演练：周期性对【每个号】当前屏幕识别各标志，报告命中，便于用户验证模板/阈值。"""
         keys = [("escort_entry", "运镖入口"), ("escort_join", "参加按钮"),

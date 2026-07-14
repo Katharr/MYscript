@@ -44,13 +44,10 @@ S_CHALLENGE = "CHALLENGE"           # 点「挑战」→ 进战斗监控
 S_BATTLE = "BATTLE"                 # 自动战斗中：盯「进入战斗」续战 + 判失败/超时
 S_LEAVE = "LEAVE"                   # 失败/超时后：点「离开」收尾本轮
 
-# 模板键（用 sr_ 前缀，避免与运镖/宝图同名模板在磁盘互相覆盖——存盘按 templates/tm_<key>.png）。
-_FLAG_KEYS = ["sr_entry", "sr_join", "sr_select", "sr_dungeon_enter", "sr_confirm",
-              "sr_continue", "sr_challenge", "sr_enter_battle", "sr_leave",
-              "sr_fail", "sr_battle"]
 # 必备：缺失则 preflight 阻断（其余为可选，缺失仅提示）。
+# 注意：sr_enter_battle（「进入战斗」按钮）只在难度关卡才出现，非必须，放在可选列表里。
 _REQUIRED_FLAGS = ["sr_entry", "sr_join", "sr_select",
-                   "sr_continue", "sr_challenge", "sr_enter_battle", "sr_leave"]
+                   "sr_continue", "sr_challenge", "sr_leave"]
 
 
 @register
@@ -59,15 +56,18 @@ class SecretRealmTask(Task):
     title = "秘境降妖"
     description = "自动开活动→参加→秘境降妖→选副本/确定/继续挑战/挑战→盯进入战斗续战，失败/超时自动离开（支持多开轮转）"
     CHAINS_PER_WINDOW = True   # 可做「日常一条龙·每窗口独立链」
+    # 模板键（用 sr_ 前缀，避免与运镖/宝图同名模板在磁盘互相覆盖——存盘按 templates/tm_<key>.png）。
+    _FLAG_KEYS = ["sr_entry", "activity_join", "sr_select", "sr_dungeon_enter", "sr_confirm",
+                  "sr_continue", "sr_challenge", "sr_enter_battle", "sr_leave",
+                  "sr_fail", "sr_battle", "reward_use"]
 
     CALIBRATION = {
         "regions": [
-            ("scene", "主识别区", "留空=整个窗口当识别区(推荐)；对话框/各按钮/失败等标志都在这里找", True),
-            ("activity_list", "活动列表区域", "「活动」界面里那片列表，滚轮在此翻找秘境降妖那张卡片"),
+            *Task.BASE_CALIBRATION_REGIONS,
         ],
         "templates": [
+            *Task.BASE_CALIBRATION_TEMPLATES,
             ("sr_entry", "活动卡片入口", "活动列表里要点「参加」的那张卡片，框图标+文字、要独特"),
-            ("sr_join", "参加按钮", "那张卡片右侧的「参加」按钮，框按钮本身、要独特"),
             ("sr_select", "「秘境降妖」选项", "点参加后弹出的对话框里那个「秘境降妖」选项/按钮"),
             ("sr_dungeon_enter", "「进入」按钮(选副本，可选)", "若有「选择副本」界面，框左下角那个「进入」按钮。"
                                                        "几个进入长得一样，运行时只在左下角比例框里找；没有选副本环节可不标"),
@@ -108,7 +108,7 @@ class SecretRealmTask(Task):
 
         # 可选模板缺失只提示
         for tk, label in [("sr_dungeon_enter", "选副本-进入"), ("sr_confirm", "确定(选副本后才有)"),
-                          ("sr_fail", "失败"), ("sr_battle", "战斗")]:
+                          ("sr_enter_battle", "进入战斗(难度关卡)"), ("sr_fail", "失败"), ("sr_battle", "战斗")]:
             if not templates.get(tk) or vision.load_template(templates.get(tk)) is None:
                 ctx.log(f"提示：可选模板『{tk}』({label})未标定，将降级处理（可靠性略降）。", level="warn")
 
@@ -180,38 +180,19 @@ class SecretRealmTask(Task):
         return rec, (lambda: self._step_once(wctx, rec, loop, regions, threshold))
 
     # ------------------------------------------------------------------
-    # 多开轮转：上下文与每号状态记录
+    # 多开轮转：上下文与每号状态记录（_resolve_contexts 已在 Task 基类）
     # ------------------------------------------------------------------
-    def _resolve_contexts(self, ctx, multi):
-        """按选择把目标窗口包成「要轮转的上下文」列表。
-        单开→复用主 ctx 并绑到选中的那个窗口；多开→每号一个子上下文(带「号N」标签，日志自动加前缀)。"""
-        wins = ctx.select_windows()
-        if not wins:
-            return []
-        if multi:
-            return [ctx.make_child(w, f"号{i + 1}") for i, w in enumerate(wins)]
-        ctx.window = wins[0]
-        return [ctx]
-
     @staticmethod
     def _new_record(wctx):
         """每个号一份独立状态。轮转时按 state 各推进一步，互不干扰。"""
         return {"ctx": wctx, "state": S_OPEN_ACTIVITY, "t_state": 0.0,
-                "t_battle": 0.0, "t_diag": 0.0, "scrolls": 0,
+                "t_battle": 0.0, "t_diag": 0.0,
                 "picked_dungeon": False, "entered_battle": False,
                 "runs": 0, "recover": 0, "done": False, "dead_logged": False}
 
-    @staticmethod
-    def _goto(rec, state):
-        rec["state"] = state
-        rec["t_state"] = time.time()
-
-    @staticmethod
-    def _state_elapsed(rec):
-        return time.time() - rec["t_state"]
-
     # ------------------------------------------------------------------
     # 单步推进：按这个号的 state 做【一小步】非阻塞动作，然后立刻返回（好轮转到下一个号）
+    # （_goto / _state_elapsed 已在 Task 基类，均为 @staticmethod）
     # ------------------------------------------------------------------
     def _step_once(self, ctx, rec, loop, regions, threshold):
         st = rec["state"]
@@ -243,7 +224,6 @@ class SecretRealmTask(Task):
             return
         ctx.log("已打开活动，翻找秘境降妖卡片…")
         self._interruptible_sleep(ctx, self._jitter(0.6, ctx))
-        rec["scrolls"] = 0
         self._goto(rec, S_FIND_CARD)
 
     # ---- 找卡片 → 点「参加」----
@@ -262,7 +242,8 @@ class SecretRealmTask(Task):
                 return scan.SCROLL, None
             cx, cy, score = hit
             entry_xy = (rect[0] + cx, rect[1] + cy)
-            join = self._find_join_on_row(ctx, list_region, entry_xy, threshold, loop)
+            join = self._find_join_on_row(ctx, list_region, entry_xy, threshold, loop,
+                                            "activity_join", "sr_entry")
             if join is not None:
                 ctx.mouse.click(join[0], join[1])
                 ctx.log(f"找到卡片（{score:.3f}）→ 点「参加」（{join[2]:.3f}），等对话框。", level="hit")
@@ -402,12 +383,59 @@ class SecretRealmTask(Task):
         if hit is not None:
             ctx.mouse.click(hit[0], hit[1])
             ctx.log(f"点「离开」（{hit[2]:.3f}）退出秘境。", level="hit")
-            self._interruptible_sleep(ctx, self._jitter(0.4, ctx))
+            self._interruptible_sleep(ctx, self._jitter(0.6, ctx))
+
+            # 循环处理可能出现的奖励弹窗
+            self._handle_rewards(ctx, rec, loop, regions, threshold)
+
             self._finish_run(ctx, rec)
             return
         if self._state_elapsed(rec) > loop.get("step_timeout_sec", 20):
             ctx.log("等「离开」按钮超时，按本轮结束处理。", level="warn")
             self._finish_run(ctx, rec)
+
+    def _handle_rewards(self, ctx, rec, loop, regions, threshold):
+        """点「离开」后循环处理奖励弹窗，点掉所有「使用」按钮。
+
+        注意：点「离开」后游戏场景在转换（秘境→主场景），需要等待场景稳定后
+        再检测奖励弹窗。奖励可能在场景转换期间或之后弹出。
+        """
+        max_rewards = 10  # 安全上限，避免无限循环
+        max_wait_sec = loop.get("reward_max_wait_sec", 5.0)  # 最多等5秒等第一个奖励
+        wait_between = loop.get("reward_wait_sec", 0.8)  # 点击后等下一个弹窗
+        handled = 0
+
+        # 阶段1：等待场景转换完成 + 首个奖励弹窗
+        t0 = time.time()
+        while time.time() - t0 < max_wait_sec:
+            if ctx.should_stop():
+                return
+            self._interruptible_sleep(ctx, self._jitter(0.3, ctx))
+            scene_rect = self._scene_rect(ctx, regions)
+            cur = win_mod.grab(scene_rect)
+            hit = self._match_scene(cur, scene_rect, "reward_use", threshold)
+            if hit is not None:
+                break
+        else:
+            # 超时无奖励，直接返回
+            return
+
+        # 阶段2：循环处理所有奖励弹窗
+        while handled < max_rewards:
+            ctx.mouse.click(hit[0], hit[1])
+            handled += 1
+            ctx.log(f"获得奖励，点「使用」（{hit[2]:.3f}），已处理 {handled} 个。", level="hit")
+
+            # 等下一个奖励弹窗
+            self._interruptible_sleep(ctx, self._jitter(wait_between, ctx))
+            scene_rect = self._scene_rect(ctx, regions)
+            cur = win_mod.grab(scene_rect)
+            hit = self._match_scene(cur, scene_rect, "reward_use", threshold)
+            if hit is None:
+                break
+
+        if handled > 0:
+            ctx.log(f"共处理 {handled} 个奖励弹窗。")
 
     def _finish_run(self, ctx, rec):
         """一轮秘境收尾：计数 + 决定该号结束还是再跑一轮。"""
@@ -447,13 +475,6 @@ class SecretRealmTask(Task):
     # ------------------------------------------------------------------
     # 工具
     # ------------------------------------------------------------------
-    def _focus(self, ctx):
-        """把游戏窗口切到前台——键盘快捷键(SendInput)只发给有焦点的窗口，发键前必须先激活。"""
-        try:
-            ctx.window.activate()
-        except Exception:
-            pass
-
     def _try_click(self, ctx, rec, regions, threshold, flag_key, label, next_state):
         """在 scene 里找某按钮，命中就点它并切到 next_state，返回是否点到（非阻塞，一次扫描）。"""
         scene_rect = self._scene_rect(ctx, regions)
@@ -466,97 +487,6 @@ class SecretRealmTask(Task):
             self._goto(rec, next_state)
             return True
         return False
-
-    def _find_join_on_row(self, ctx, list_region, entry_screen_xy, threshold, loop):
-        """在卡片所在【那张卡片】的右侧条带里匹配「参加」按钮(sr_join)。命中返回 (x,y,score)，否则 None。
-        按行+只取条目右侧、且限制在条目所属卡片列内，抗滚动、抗「一排多张卡片」时扫进右邻卡片（默认两张一排）。"""
-        join_tpl = self.flags.get("sr_join")
-        entry_tpl = self.flags.get("sr_entry")
-        if join_tpl is None:
-            ctx.log("找「参加」失败：sr_join 模板未标定。", level="warn")
-            return None
-        rect = (ctx.window.region_to_screen_rect(list_region)
-                if list_region else ctx.window.rect())
-        if rect is None:
-            return None
-        scene = win_mod.grab(rect)
-        if scene is None:
-            return None
-        rx, ry = rect[0], rect[1]
-        ex, ey = entry_screen_xy
-        row_h = entry_tpl.shape[0] if entry_tpl is not None else 40
-        band = max(40, int(row_h * 2))
-        sh, sw = scene.shape[:2]
-        ey_local = int(ey - ry)
-        ex_local = int(ex - rx)
-        cols = max(1, int(loop.get("activity_columns", 2)))
-        col_w = sw / cols
-        col_idx = min(cols - 1, max(0, int(ex_local // col_w)))
-        col_right = int(round((col_idx + 1) * col_w))
-        y0 = max(0, ey_local - band // 2)
-        y1 = min(sh, ey_local + band // 2)
-        x0 = max(0, ex_local)
-        x1 = min(sw, col_right)
-        if y1 - y0 < 1 or x1 - x0 < 1:
-            return None
-        crop = scene[y0:y1, x0:x1]
-        m = vision.match(crop, join_tpl, threshold)
-        if m is None:
-            return None
-        cx, cy, score = m
-        return (rx + x0 + cx, ry + y0 + cy, score)
-
-    def _load_flags(self, tc):
-        templates = tc.get("templates", {})
-        return {k: vision.load_template(templates.get(k)) if templates.get(k) else None
-                for k in _FLAG_KEYS}
-
-    def _scene_rect(self, ctx, regions):
-        region = regions.get("scene")
-        return ctx.window.region_to_screen_rect(region) if region else ctx.window.rect()
-
-    def _grab_scene(self, ctx, regions):
-        rect = self._scene_rect(ctx, regions)
-        return win_mod.grab(rect) if rect else None
-
-    def _present(self, scene, flag_key, threshold):
-        tpl = self.flags.get(flag_key)
-        if scene is None or tpl is None:
-            return False
-        return vision.match(scene, tpl, threshold) is not None
-
-    def _match_scene(self, cur, scene_rect, flag_key, threshold):
-        """在整张 scene 里匹配 flag_key，命中返回屏幕绝对 (x,y,score)，否则 None。"""
-        tpl = self.flags.get(flag_key)
-        if cur is None or tpl is None or scene_rect is None:
-            return None
-        m = vision.match(cur, tpl, threshold)
-        if m is None:
-            return None
-        return (scene_rect[0] + m[0], scene_rect[1] + m[1], m[2])
-
-    def _match_subregion(self, ctx, regions, tpl, threshold, x_frac, y_frac):
-        """只在 scene 的比例子区域内匹配 tpl（用于「进入」这类需按位置区分的同款按钮）。
-        x_frac/y_frac 为 (起,止) 的 0~1 比例。命中返回屏幕 (x,y,score)，否则 None。"""
-        rect = self._scene_rect(ctx, regions)
-        if rect is None or tpl is None:
-            return None
-        scene = win_mod.grab(rect)
-        if scene is None:
-            return None
-        sh, sw = scene.shape[:2]
-        x0 = max(0, int(sw * x_frac[0]))
-        x1 = min(sw, int(sw * x_frac[1]))
-        y0 = max(0, int(sh * y_frac[0]))
-        y1 = min(sh, int(sh * y_frac[1]))
-        if x1 - x0 < 1 or y1 - y0 < 1:
-            return None
-        crop = scene[y0:y1, x0:x1]
-        m = vision.match(crop, tpl, threshold)
-        if m is None:
-            return None
-        cx, cy, score = m
-        return (rect[0] + x0 + cx, rect[1] + y0 + cy, score)
 
     def _dry_run_selfcheck(self, ctx, contexts, multi, regions, threshold, switch_delay, deadline):
         """演练：周期性对【每个号】当前屏幕识别各标志，报告命中，便于验证模板/阈值。"""

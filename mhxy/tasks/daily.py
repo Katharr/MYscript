@@ -29,13 +29,19 @@
 单开模式：只有一个窗口，自然就是顺序跑完一条链（同一套引擎，窗口数=1）。
 """
 
+import json
 import time
+from pathlib import Path
 
-from .base import Task, register, get_task, dungeon_tasks
+from .base import Task, register, get_task, dungeon_tasks, all_tasks
 
-# 可进一条龙的任务（这些都有明确「完成条件」、会自动结束）。秒装备 sniper 不在此列。
-# "dungeon" 是「刷副本」中枢步：跑时解析成 tasks.dungeon.selected 选中的那个副本（见 _resolve）。
-CHAINABLE = ["treasure_map", "escort", "secret_realm", "dungeon", "catch_ghost"]
+# 进度文件路径（与 config.json 同级目录）
+_PROGRESS_FILE = Path("config.json").parent / "daily_progress.json"
+
+# 可进一条龙的任务 = 所有支持「每窗口独立链」的任务（CHAINS_PER_WINDOW=True）
+#  + 特殊值 "dungeon"（副本中枢步，见 _resolve）。加新任务只需设置 CHAINS_PER_WINDOW=True。
+# 秒装备 sniper 不在候选内：它是无限盯市场抢货、不会自己跑完，会卡死整条龙。
+CHAINABLE = [c.name for c in all_tasks() if getattr(c, "CHAINS_PER_WINDOW", False)] + ["dungeon"]
 
 
 @register
@@ -70,6 +76,7 @@ class DailyTask(Task):
         time_limit = self._time_limit(ctx)
         start_ts = time.time()
         deadline = start_ts + time_limit * 60 if time_limit > 0 else None
+        tick_count = 0  # 局部计数器
 
         wins = ctx.select_windows()
         if not wins:
@@ -81,6 +88,20 @@ class DailyTask(Task):
             ctx.window = wins[0]
             wctxs = [ctx]
         chains = [self._new_chain(w) for w in wctxs]
+
+        # 尝试加载保存的进度
+        tc = ctx.task_cfg(self.name)
+        loop_cfg = tc.get("loop", {})
+        save_progress = loop_cfg.get("save_progress", True)
+        ignore_saved = loop_cfg.get("ignore_saved_progress", False)
+        if save_progress and not ignore_saved:
+            saved = self._load_progress(steps)
+            if saved:
+                ctx.log("检测到上次未完成的进度，从断点继续...")
+                for i, c in enumerate(chains):
+                    if i < len(saved["windows"]):
+                        c["idx"] = saved["windows"][i]["idx"]
+                        c["done"] = saved["windows"][i]["done"]
 
         titles = " → ".join(self._title_of(n, ctx) for n in steps)
         mode = f"多开 {len(wctxs)} 个号·每窗口独立任务链轮转" if multi else "单号"
@@ -142,6 +163,12 @@ class DailyTask(Task):
                 self._drive_chain_until_yield(ctx, c, steps)
                 if multi and len(drivable) > 1:
                     self._interruptible_sleep(ctx, self._jitter(switch_delay, ctx))
+
+            # 定期保存进度
+            tick_count += 1
+            if save_progress and tick_count % 10 == 0:
+                self._save_progress(chains, steps)
+
             self._interruptible_sleep(ctx, self._jitter(tick, ctx))
 
         # —— 汇总 ——
@@ -155,6 +182,10 @@ class DailyTask(Task):
                 f"{self._title_of(steps[c['idx']], ctx) if c['idx'] < len(steps) else '收尾'}」"
                 for c in unfinished)
             ctx.log("未跑完：" + desc + "。", level="warn")
+
+        # 全部完成则清除进度文件
+        if save_progress and all(c["done"] for c in chains):
+            self._clear_progress()
 
     # ------------------------------------------------------------------
     # 每窗口独立链：链记录 + 推进引擎
@@ -189,6 +220,13 @@ class DailyTask(Task):
         """切前台后连续推进本窗口的独立链：当前子任务能往下走就接着走、跑完就接下一个子任务，
         直到撞「等待点」(状态没变) / 撞「刷副本」屏障 / 整条链跑完 / 撞连续推进上限 才让出。
         与 core/rotation._drive_until_yield 同一套判据，只是这里跨「子任务边界」也能连推。"""
+        tc = ctx.task_cfg(self.name)
+        loop = tc.get("loop", {})
+        cap_limit = loop.get("chain_step_cap", 12)         # 连续推进次数上限
+        time_limit = loop.get("chain_time_cap_sec", 4.0)   # 连续推进时间上限
+        max_retry = loop.get("max_retry", 2)               # 子任务异常最大重试次数
+        retry_wait = loop.get("retry_wait_sec", 2.0)       # 重试等待时间
+
         cap, t0 = 0, time.time()
         while not ctx.should_stop():
             if c["sub_step"] is None:
@@ -205,19 +243,29 @@ class DailyTask(Task):
             try:
                 c["sub_step"]()
             except Exception as e:                      # 单个子任务炸了不该带垮整条链
-                c["wctx"].log(f"「{c['cur_title']}」运行异常：{e}，跳过该任务。", level="error")
-                self._end_step(c)
-                c["idx"] += 1
-                continue
+                c["retry_count"] = c.get("retry_count", 0) + 1
+                if c["retry_count"] <= max_retry:
+                    c["wctx"].log(f"「{c['cur_title']}」运行异常（第{c['retry_count']}次）：{e}，尝试重试...",
+                                  level="warn")
+                    self._interruptible_sleep(ctx, retry_wait)
+                    continue
+                else:
+                    c["wctx"].log(f"「{c['cur_title']}」运行异常（已重试{max_retry}次）：{e}，跳过该任务。",
+                                  level="error")
+                    self._end_step(c)
+                    c["idx"] += 1
+                    c["retry_count"] = 0
+                    continue
             if rec.get("done"):
                 c["wctx"].log(f"───── 「{c['cur_title']}」完成 ─────", level="hit")
                 self._end_step(c)
                 c["idx"] += 1
+                c["retry_count"] = 0
                 continue                                # 接着在本窗口推进下一步
             if rec["state"] == before:
                 return                                  # 等待点（监控盯屏/等响应）→ 让出
             cap += 1
-            if cap >= 12 or time.time() - t0 >= 4.0:
+            if cap >= cap_limit or time.time() - t0 >= time_limit:
                 return                                  # 连续推进上限，强制让出（同 rotation）
 
     def _begin_step(self, ctx, c, name):
@@ -321,3 +369,49 @@ class DailyTask(Task):
             return float(tc.get("loop", {}).get("time_limit_min", 0) or 0)
         except (TypeError, ValueError):
             return 0.0
+
+    # ------------------------------------------------------------------
+    # 进度持久化
+    # ------------------------------------------------------------------
+    def _save_progress(self, chains, steps):
+        """保存当前进度到文件"""
+        progress = {
+            "steps": steps,
+            "windows": [
+                {
+                    "idx": c["idx"],
+                    "done": c["done"],
+                    "label": c["wctx"].label
+                }
+                for c in chains
+            ],
+            "timestamp": time.time()
+        }
+        try:
+            _PROGRESS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            with open(_PROGRESS_FILE, "w", encoding="utf-8") as f:
+                json.dump(progress, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    def _load_progress(self, steps):
+        """从文件加载进度，返回进度字典或 None"""
+        if not _PROGRESS_FILE.exists():
+            return None
+        try:
+            with open(_PROGRESS_FILE, "r", encoding="utf-8") as f:
+                progress = json.load(f)
+            # 验证步骤列表是否一致
+            if progress.get("steps") != steps:
+                return None
+            return progress
+        except Exception:
+            return None
+
+    def _clear_progress(self):
+        """清除进度文件"""
+        if _PROGRESS_FILE.exists():
+            try:
+                _PROGRESS_FILE.unlink()
+            except Exception:
+                pass

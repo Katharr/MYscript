@@ -7,6 +7,7 @@
 """
 
 import time
+import random
 
 from ..core import vision
 from ..core import window as win_mod
@@ -113,18 +114,7 @@ class SniperTask(Task):
 
         ctx.log(f"已停止。共循环 {rounds} 轮。")
 
-    # ---- 多开轮转：窗口上下文的构建与维护 ----
-    def _resolve_contexts(self, ctx, multi):
-        """按选择把目标窗口包成「要轮转的上下文」列表。
-        单开→复用主 ctx 并把它绑到选中的那个窗口；多开→每个号一个子上下文(带「号N」标签)。"""
-        wins = ctx.select_windows()
-        if not wins:
-            return []
-        if multi:
-            return [ctx.make_child(w, f"号{i + 1}") for i, w in enumerate(wins)]
-        ctx.window = wins[0]        # 单开：直接操作选中的那个窗口（不再每轮 locate 选最大）
-        return [ctx]
-
+    # ---- 多开轮转：窗口上下文的构建与维护（_resolve_contexts 已在 Task 基类）----
     def _ensure_contexts(self, ctx, contexts, multi):
         """每轮开头校验窗口是否还在；任一失效（被关/最小化）就重新枚举选择。"""
         if contexts and all(c.window.rect() is not None for c in contexts):
@@ -242,7 +232,6 @@ class SniperTask(Task):
     @staticmethod
     def _snipe_sleep(base, speed):
         """下单中间的极短等待，按极速倍率压缩（仍留一点随机抖动，避免完全等距）。"""
-        import random
         spd = max(0.2, float(speed)) if speed else 1.0
         s = base / spd
         time.sleep(max(0.0, s * (1 + random.uniform(-0.2, 0.2))))

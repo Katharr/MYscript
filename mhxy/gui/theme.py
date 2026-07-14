@@ -36,17 +36,17 @@ PILL_DANGER_BG = ("#fae0e0", "#3a1d1d")  # 药丸底：实战（配 DANGER 文�
 ON_ACCENT = ("#ffffff", "#ffffff")    # 强调色块上的文字（主按钮 / Toast）
 
 # ---- 圆角 ----
-RADIUS = 12          # 卡片、大容器、Toast
-RADIUS_SM = 8        # 按钮、输入框、下拉、列表行、小标签
-RADIUS_PILL = 20     # 药丸（胶囊形）
+RADIUS = 8           # 卡片、大容器、Toast
+RADIUS_SM = 6        # 按钮、输入框、下拉、列表行、小标签
+RADIUS_PILL = 14     # 药丸（胶囊形）
 
-# ---- 间距（4 / 8 栅格）----
-SP_1 = 4    # 紧贴元素的细微间隔、行内微调
-SP_2 = 8    # 控件之间的小间隔、按钮组内距
-SP_3 = 12   # 卡片之间的纵向间距、列表行 pady
-SP_4 = 16   # 卡片统一内边距、区块标准内距
-SP_5 = 20   # 页面内容区上下外边距
-SP_6 = 24   # 页面内容区左右外边距、侧栏左内距
+# ---- 间距（2 / 4 栅格）----
+SP_1 = 2    # 紧贴元素的细微间隔、行内微调
+SP_2 = 4    # 控件之间的小间隔、按钮组内距
+SP_3 = 6    # 卡片之间的纵向间距、列表行 pady
+SP_4 = 8    # 卡片统一内边距、区块标准内距
+SP_5 = 10   # 页面内容区上下外边距
+SP_6 = 12   # 页面内容区左右外边距、侧栏左内距
 
 FONT_FAMILY = "Microsoft YaHei UI"
 MONO_FAMILY = "Consolas"
@@ -55,14 +55,14 @@ MONO_FAMILY = "Consolas"
 def build_fonts():
     """必须在创建好 CTk 根窗口之后调用（CTkFont 需要 Tk 默认根）。"""
     return {
-        "title": ctk.CTkFont(FONT_FAMILY, 19, "bold"),
-        "h2": ctk.CTkFont(FONT_FAMILY, 15, "bold"),
-        "body": ctk.CTkFont(FONT_FAMILY, 13),
-        "body_b": ctk.CTkFont(FONT_FAMILY, 13, "bold"),
-        "small": ctk.CTkFont(FONT_FAMILY, 12),
-        "nav": ctk.CTkFont(FONT_FAMILY, 14),
-        "btn": ctk.CTkFont(FONT_FAMILY, 14, "bold"),
-        "mono": ctk.CTkFont(MONO_FAMILY, 12),
+        "title": ctk.CTkFont(FONT_FAMILY, 16, "bold"),
+        "h2": ctk.CTkFont(FONT_FAMILY, 13, "bold"),
+        "body": ctk.CTkFont(FONT_FAMILY, 11),
+        "body_b": ctk.CTkFont(FONT_FAMILY, 11, "bold"),
+        "small": ctk.CTkFont(FONT_FAMILY, 10),
+        "nav": ctk.CTkFont(FONT_FAMILY, 12),
+        "btn": ctk.CTkFont(FONT_FAMILY, 12, "bold"),
+        "mono": ctk.CTkFont(MONO_FAMILY, 11),
     }
 
 
@@ -78,7 +78,7 @@ def resolve(token):
     return token
 
 
-def bind_wraplength(label, padding=4):
+def bind_wraplength(label, padding=2):
     """让 CTkLabel 文字按其父容器实际宽度自动换行，避免长说明被窗口右缘截断。
 
     用法：Label 以 `sticky="ew"`(grid) 或 `fill="x"`(pack) 占满父容器宽度即可，本助手会监听
