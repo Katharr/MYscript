@@ -54,8 +54,8 @@ class WindowPickerDialog(ctk.CTkToplevel):
         self._captain_inited = False
 
         self.title("选择窗口")
-        self.geometry("560x600")
-        self.minsize(480, 420)
+        self.geometry("440x480")
+        self.minsize(400, 380)
         self.configure(fg_color=T.BG)
         self.transient(app)
 
@@ -77,7 +77,7 @@ class WindowPickerDialog(ctk.CTkToplevel):
 
         # 头部
         top = ctk.CTkFrame(self, fg_color="transparent")
-        top.grid(row=0, column=0, sticky="ew", padx=20, pady=(16, 6))
+        top.grid(row=0, column=0, sticky="ew", padx=14, pady=(10, 4))
         ctk.CTkLabel(top, text="选择窗口", font=self.fonts["title"], text_color=T.TEXT).pack(anchor="w")
         base_hint = ("单开选 1 个号，多开勾多个号轮流操作。号按屏幕从左到右编号。"
                      "检测区可在「标定」里留空＝整窗，无需框大区域。")
@@ -90,7 +90,7 @@ class WindowPickerDialog(ctk.CTkToplevel):
 
         # 模式切换
         modebar = ctk.CTkFrame(self, fg_color="transparent")
-        modebar.grid(row=1, column=0, sticky="ew", padx=20, pady=(4, 6))
+        modebar.grid(row=1, column=0, sticky="ew", padx=14, pady=(2, 4))
         ctk.CTkLabel(modebar, text="模式", font=self.fonts["body_b"], text_color=T.TEXT).pack(side="left")
         self.seg_mode = ctk.CTkSegmentedButton(
             modebar, values=["单开", "多开"], command=self._on_mode,
@@ -100,28 +100,28 @@ class WindowPickerDialog(ctk.CTkToplevel):
             unselected_color=T.BTN, unselected_hover_color=T.BTN_HOVER)
         self.seg_mode.set("多开" if self._multi else "单开")
         self.seg_mode.pack(side="left", padx=(10, 0))
-        ctk.CTkButton(modebar, text="刷新", font=self.fonts["body"], width=72, height=30,
+        ctk.CTkButton(modebar, text="刷新", font=self.fonts["body"], width=58, height=24,
                       corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
                       border_width=1, border_color=T.BORDER,
                       command=self._enumerate).pack(side="right")
 
         # 窗口卡片列表
         self.body = ctk.CTkScrollableFrame(self, fg_color="transparent")
-        self.body.grid(row=2, column=0, sticky="nsew", padx=16, pady=(2, 4))
+        self.body.grid(row=2, column=0, sticky="nsew", padx=10, pady=(2, 2))
         self.body.grid_columnconfigure(0, weight=1)
         T.tune_scroll_speed(self.body)
 
         # 底部
         bottom = ctk.CTkFrame(self, fg_color="transparent")
-        bottom.grid(row=3, column=0, sticky="ew", padx=20, pady=(4, 16))
+        bottom.grid(row=3, column=0, sticky="ew", padx=14, pady=(4, 12))
         bottom.grid_columnconfigure(0, weight=1)
         self.status_lbl = ctk.CTkLabel(bottom, text="", font=self.fonts["small"], text_color=T.TEXT_DIM)
         self.status_lbl.grid(row=0, column=0, sticky="w")
-        ctk.CTkButton(bottom, text="取消", font=self.fonts["body"], width=84, height=36,
+        ctk.CTkButton(bottom, text="取消", font=self.fonts["body"], width=68, height=30,
                       corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
                       border_width=1, border_color=T.BORDER,
                       command=self._cancel).grid(row=0, column=1, padx=(0, 8))
-        ctk.CTkButton(bottom, text="确定", font=self.fonts["btn"], width=110, height=36,
+        ctk.CTkButton(bottom, text="确定", font=self.fonts["btn"], width=90, height=30,
                       corner_radius=T.RADIUS_SM, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER, text_color=T.ON_ACCENT,
                       command=self._confirm).grid(row=0, column=2)
 

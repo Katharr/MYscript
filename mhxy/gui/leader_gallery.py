@@ -44,8 +44,8 @@ class LeaderIdGallery(ctk.CTkToplevel):
         self.app.cfg = cfg_mod.load_config()
 
         self.title("队长ID 库")
-        self.geometry("480x460")
-        self.minsize(440, 420)
+        self.geometry("400x380")
+        self.minsize(360, 360)
         self.configure(fg_color=T.BG)
         self.transient(app)
 
@@ -60,7 +60,7 @@ class LeaderIdGallery(ctk.CTkToplevel):
         self.grid_rowconfigure(2, weight=1)
 
         top = ctk.CTkFrame(self, fg_color="transparent")
-        top.grid(row=0, column=0, sticky="ew", padx=18, pady=(16, 4))
+        top.grid(row=0, column=0, sticky="ew", padx=12, pady=(10, 2))
         top.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(top, text="队长ID 库", font=self.fonts["title"], text_color=T.TEXT).grid(
             row=0, column=0, sticky="w")
@@ -71,23 +71,23 @@ class LeaderIdGallery(ctk.CTkToplevel):
         T.bind_wraplength(sub)
 
         bar = ctk.CTkFrame(self, fg_color="transparent")
-        bar.grid(row=1, column=0, sticky="ew", padx=18, pady=(8, 4))
-        ctk.CTkButton(bar, text="＋ 重新标定（追加一张并设为当前）", font=self.fonts["btn"], height=38,
+        bar.grid(row=1, column=0, sticky="ew", padx=12, pady=(4, 2))
+        ctk.CTkButton(bar, text="＋ 重新标定（追加一张并设为当前）", font=self.fonts["btn"], height=30,
                       corner_radius=T.RADIUS_SM, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
                       text_color=T.ON_ACCENT, command=self._recalibrate).pack(fill="x")
 
         self.grid_frame = ctk.CTkScrollableFrame(self, fg_color="transparent")
-        self.grid_frame.grid(row=2, column=0, sticky="nsew", padx=12, pady=(4, 4))
+        self.grid_frame.grid(row=2, column=0, sticky="nsew", padx=8, pady=(2, 2))
         self.grid_frame.grid_columnconfigure(0, weight=1, uniform="col")
         self.grid_frame.grid_columnconfigure(1, weight=1, uniform="col")
         T.tune_scroll_speed(self.grid_frame)
 
         bottom = ctk.CTkFrame(self, fg_color="transparent")
-        bottom.grid(row=3, column=0, sticky="ew", padx=18, pady=(4, 14))
+        bottom.grid(row=3, column=0, sticky="ew", padx=12, pady=(4, 10))
         bottom.grid_columnconfigure(0, weight=1)
         self.status_lbl = ctk.CTkLabel(bottom, text="", font=self.fonts["small"], text_color=T.TEXT_DIM)
         self.status_lbl.grid(row=0, column=0, sticky="w")
-        ctk.CTkButton(bottom, text="完成", font=self.fonts["btn"], width=100, height=36,
+        ctk.CTkButton(bottom, text="完成", font=self.fonts["btn"], width=80, height=30,
                       corner_radius=T.RADIUS_SM, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
                       text_color=T.ON_ACCENT, command=self._close).grid(row=0, column=1, sticky="e")
 
