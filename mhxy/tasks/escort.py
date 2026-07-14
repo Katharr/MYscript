@@ -40,8 +40,8 @@ S_CONFIRM = "CONFIRM"               # 点完押送后等「确认」按钮（容
 S_ESCORTING = "ESCORTING"           # 运镖中：监控运镖中标志/对话框复现，续点下一趟或收尾
 
 # 必备模板（缺失则 preflight 阻断）与可选模板（缺失仅 warn）
-#   escort_join=活动列表里「运镖」那一行右侧的「参加」按钮——按行匹配点它（不是点条目本身）。
-_REQUIRED_FLAGS = ["escort_entry", "escort_join", "escort_silver", "escort_confirm",
+#   activity_join=活动列表里「运镖」那一行右侧的「参加」按钮——按行匹配点它（不是点条目本身）。
+_REQUIRED_FLAGS = ["escort_entry", "activity_join", "escort_silver", "escort_confirm",
                      "escort_ongoing"]
 
 
@@ -233,7 +233,7 @@ class EscortTask(Task):
                 ctx.mouse.click(join[0], join[1])
                 ctx.log(f"找到「运镖」（{score:.3f}）→ 点「参加」（{join[2]:.3f}），等对话框。", level="hit")
                 return scan.ACCEPT, join
-            ctx.log("认出「运镖」但没找到右侧「参加」（检查 escort_join 模板/阈值）。", level="warn")
+            ctx.log("认出「运镖」但没找到右侧「参加」（检查 activity_join 模板/阈值）。", level="warn")
             return scan.STAY, None
 
         res = scan.scroll_search(
@@ -398,7 +398,7 @@ class EscortTask(Task):
     # ------------------------------------------------------------------
     def _dry_run_selfcheck(self, ctx, contexts, multi, regions, threshold, switch_delay, deadline):
         """演练：周期性对【每个号】当前屏幕识别各标志，报告命中，便于用户验证模板/阈值。"""
-        keys = [("escort_entry", "运镖入口"), ("escort_join", "参加按钮"),
+        keys = [("escort_entry", "运镖入口"), ("activity_join", "参加按钮"),
                 ("escort_silver", "押送普通镖银"), ("escort_confirm", "确认"),
                 ("escort_ongoing", "运镖中"), ("escort_battle", "战斗")]
         while not ctx.should_stop():

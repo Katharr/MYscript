@@ -46,7 +46,7 @@ S_LEAVE = "LEAVE"                   # 失败/超时后：点「离开」收尾�
 
 # 必备：缺失则 preflight 阻断（其余为可选，缺失仅提示）。
 # 注意：sr_enter_battle（「进入战斗」按钮）只在难度关卡才出现，非必须，放在可选列表里。
-_REQUIRED_FLAGS = ["sr_entry", "sr_join", "sr_select",
+_REQUIRED_FLAGS = ["sr_entry", "activity_join", "sr_select",
                    "sr_continue", "sr_challenge", "sr_leave"]
 
 
@@ -248,7 +248,7 @@ class SecretRealmTask(Task):
                 ctx.mouse.click(join[0], join[1])
                 ctx.log(f"找到卡片（{score:.3f}）→ 点「参加」（{join[2]:.3f}），等对话框。", level="hit")
                 return scan.ACCEPT, join
-            ctx.log("认出卡片但没找到右侧「参加」（检查 sr_join 模板/阈值）。", level="warn")
+            ctx.log("认出卡片但没找到右侧「参加」（检查 activity_join 模板/阈值）。", level="warn")
             # 认出条目但没找到参加：不滚动（会滚走目标），原地重试
             return scan.STAY, None
 
@@ -490,7 +490,7 @@ class SecretRealmTask(Task):
 
     def _dry_run_selfcheck(self, ctx, contexts, multi, regions, threshold, switch_delay, deadline):
         """演练：周期性对【每个号】当前屏幕识别各标志，报告命中，便于验证模板/阈值。"""
-        keys = [("sr_entry", "活动卡片"), ("sr_join", "参加"), ("sr_select", "秘境降妖"),
+        keys = [("sr_entry", "活动卡片"), ("activity_join", "参加"), ("sr_select", "秘境降妖"),
                 ("sr_dungeon_enter", "选副本-进入"), ("sr_confirm", "确定"),
                 ("sr_continue", "继续挑战"), ("sr_challenge", "挑战"),
                 ("sr_enter_battle", "进入战斗"), ("sr_leave", "离开"),

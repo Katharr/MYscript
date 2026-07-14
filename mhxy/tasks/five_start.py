@@ -37,22 +37,6 @@ S_LOGIN_ALL = "LOGIN_ALL"                       # 统一登录阶段
 S_WAIT_ALL_QUEUES = "WAIT_ALL_QUEUES"           # 统一等待排队阶段
 S_CLOSE_ALL_ADS = "CLOSE_ALL_ADS"               # 统一关闭广告阶段
 
-# 模板键
-_FLAG_KEYS = [
-    "start_game_btn",       # 开始游戏按钮
-    "limit_dialog",         # 上限提示框
-    "limit_confirm",        # 上限提示框的确定按钮
-    "account_dropdown",     # 登录账号下拉列表
-    "account_1",            # 号1账号选项
-    "account_2",            # 号2账号选项
-    "account_3",            # 号3账号选项
-    "account_4",            # 号4账号选项
-    "account_5",            # 号5账号选项
-    "enter_game_btn",       # 进入游戏按钮
-    "login_game_btn",       # 登录游戏按钮
-    "exit_queue_btn",       # 退出排队按钮（检测排队状态）
-    "welcome_screen",       # 开屏宣传广告（可选）
-]
 _REQUIRED_FLAGS = ["start_game_btn", "limit_dialog", "limit_confirm",
                    "account_dropdown", "account_1", "account_2", "account_3",
                    "account_4", "account_5", "enter_game_btn", "login_game_btn",
@@ -66,6 +50,22 @@ class FiveStartTask(Task):
     description = "自动启动游戏客户端并完成5个账号的登录流程"
     is_dungeon = False
     CHAINS_PER_WINDOW = False
+
+    _FLAG_KEYS = [
+        "start_game_btn",       # 开始游戏按钮
+        "limit_dialog",         # 上限提示框
+        "limit_confirm",        # 上限提示框的确定按钮
+        "account_dropdown",     # 登录账号下拉列表
+        "account_1",            # 号1账号选项
+        "account_2",            # 号2账号选项
+        "account_3",            # 号3账号选项
+        "account_4",            # 号4账号选项
+        "account_5",            # 号5账号选项
+        "enter_game_btn",       # 进入游戏按钮
+        "login_game_btn",       # 登录游戏按钮
+        "exit_queue_btn",       # 退出排队按钮（检测排队状态）
+        "welcome_screen",       # 开屏宣传广告（可选）
+    ]
 
     CALIBRATION = {
         "no_game_window": True,  # 一键五开在启动器界面操作，不需要游戏窗口
@@ -139,7 +139,7 @@ class FiveStartTask(Task):
         threshold = loop.get("match_threshold", 0.85)
 
         # 加载模板
-        self.flags = {k: vision.load_template(tc.get("templates", {}).get(k)) for k in _FLAG_KEYS}
+        self.flags = self._load_flags(tc)
 
         start_ts = time.time()
         time_limit = loop.get("time_limit_min", 0) or 0

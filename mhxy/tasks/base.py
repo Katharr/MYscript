@@ -215,6 +215,10 @@ class Task:
         ("activity_join", "参加按钮", "活动列表里条目右侧的「参加」按钮，框按钮本身、要独特。各活动共用"),
         ("reward_use", "「使用」按钮", "游戏奖励弹窗里的「使用」按钮（如宝图下一张、消耗品获取通知等）。各任务共用"),
     ]
+    # 共享模板键：标定一次，所有任务共用。存储在 cfg["shared_templates"] 而非各任务命名空间。
+    SHARED_TEMPLATE_KEYS = {"activity_join", "reward_use"}
+    # 共享区域键：标定一次，所有任务共用。存储在 cfg["shared_regions"] 而非各任务命名空间。
+    SHARED_REGION_KEYS = {"activity_list"}
 
     def _focus(self, ctx):
         """把游戏窗口切到前台——键盘快捷键(SendInput)只发给有焦点的窗口，发键前必须先激活。"""
@@ -224,7 +228,8 @@ class Task:
             pass
 
     def _load_flags(self, tc):
-        """按本任务 _FLAG_KEYS 批量加载模板，返回 {key: ndarray|None}。"""
+        """按本任务 _FLAG_KEYS 批量加载模板，返回 {key: ndarray|None}。
+        共享模板优先从 tc["templates"] 读取，任务自己的标定优先。"""
         templates = tc.get("templates", {})
         return {k: vision.load_template(templates.get(k)) if templates.get(k) else None
                 for k in self._FLAG_KEYS}

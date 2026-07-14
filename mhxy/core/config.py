@@ -223,7 +223,6 @@ DEFAULT_CONFIG = {
             },
             "templates": {               # 状态标志模板路径（标定向导裁图写入，tm_ 前缀）
                 "escort_entry": None,    # 活动列表里「运镖」条目
-                "escort_join": None,     # 「运镖」那一行右侧的「参加」按钮（按行匹配点它）
                 "escort_silver": None,   # 对话框「押送普通镖银」按钮
                 "escort_confirm": None,  # 点押送后再弹出的「确认」按钮
                 "escort_ongoing": None,  # 运镖途中常驻的「运镖中」标志（在=还在运镖、不停）
@@ -265,7 +264,6 @@ DEFAULT_CONFIG = {
             },
             "templates": {               # 状态标志模板路径（标定向导裁图写入，tm_ 前缀）
                 "sr_entry": None,            # 活动列表里要点「参加」的那张卡片
-                "sr_join": None,             # 那张卡片右侧的「参加」按钮（按行匹配点它）
                 "sr_select": None,           # 对话框里「秘境降妖」选项
                 "sr_dungeon_enter": None,    # 「选择副本」界面左下角的「进入」按钮（可选）
                 "sr_confirm": None,          # 「确定」按钮
@@ -497,6 +495,46 @@ def _deep_merge(base, new):
     return out
 
 
+# 旧的 task-specific join keys → 共享 activity_join 的迁移映射
+_JOIN_MIGRATION = {
+    "ghost_join": "activity_join",
+    "shimen_join": "activity_join",
+    "sanjie_join": "activity_join",
+    "quwen_join": "activity_join",
+    "keju_join": "activity_join",
+    "escort_join": "activity_join",
+    "sr_join": "activity_join",
+    "flag_join": "activity_join",  # treasure_map 旧 key
+}
+
+
+def _migrate_join_keys(cfg):
+    """将旧的 task-specific join keys 迁移到共享的 shared_templates，并迁移 activity_list 到 shared_regions。"""
+    # 迁移 join keys
+    shared_templates = cfg.setdefault("shared_templates", {})
+    tasks = cfg.get("tasks", {})
+    for task_name, task_cfg in tasks.items():
+        templates = task_cfg.get("templates", {})
+        for old_key, new_key in _JOIN_MIGRATION.items():
+            if old_key in templates:
+                if new_key not in shared_templates:
+                    shared_templates[new_key] = templates[old_key]
+                del templates[old_key]
+        # 清理任务自己的 activity_join（应该使用共享的）
+        if "activity_join" in templates:
+            del templates["activity_join"]
+    # 迁移 activity_list 区域
+    shared_regions = cfg.setdefault("shared_regions", {})
+    for task_name, task_cfg in tasks.items():
+        regions = task_cfg.get("regions", {})
+        if "activity_list" in regions and "activity_list" not in shared_regions:
+            shared_regions["activity_list"] = regions["activity_list"]
+        # 清理任务自己的 activity_list（应该使用共享的）
+        if "activity_list" in regions:
+            del regions["activity_list"]
+    return cfg
+
+
 def load_config():
     if not CONFIG_PATH.exists():
         return copy.deepcopy(DEFAULT_CONFIG)
@@ -505,7 +543,14 @@ def load_config():
             user_cfg = json.load(f)
     except (json.JSONDecodeError, OSError):
         return copy.deepcopy(DEFAULT_CONFIG)
-    return _deep_merge(DEFAULT_CONFIG, user_cfg)
+    cfg = _deep_merge(DEFAULT_CONFIG, user_cfg)
+    cfg = _migrate_join_keys(cfg)
+    # 保存迁移后的配置（清理旧 key）
+    try:
+        save_config(cfg)
+    except Exception:
+        pass
+    return cfg
 
 
 def save_config(cfg):
@@ -527,9 +572,24 @@ def save_config(cfg):
 
 
 def task_config(cfg, task_name):
-    """取某任务的配置块，缺失则用默认补。"""
+    """取某任务的配置块，缺失则用默认补。共享模板/区域从 cfg["shared_templates"]/cfg["shared_regions"] 合并。"""
     default = DEFAULT_CONFIG["tasks"].get(task_name, {})
-    return _deep_merge(default, cfg.get("tasks", {}).get(task_name, {}))
+    task_cfg = _deep_merge(default, cfg.get("tasks", {}).get(task_name, {}))
+    # 合并共享模板到任务配置（None/空视为未标定，允许共享值覆盖）
+    shared_templates = cfg.get("shared_templates", {})
+    if shared_templates:
+        templates = task_cfg.setdefault("templates", {})
+        for key, path in shared_templates.items():
+            if not templates.get(key):
+                templates[key] = path
+    # 合并共享区域到任务配置（None/空视为未标定，允许共享值覆盖）
+    shared_regions = cfg.get("shared_regions", {})
+    if shared_regions:
+        regions = task_cfg.setdefault("regions", {})
+        for key, path in shared_regions.items():
+            if not regions.get(key):
+                regions[key] = path
+    return task_cfg
 
 
 def set_task_config(cfg, task_name, task_cfg):

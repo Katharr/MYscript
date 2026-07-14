@@ -41,7 +41,12 @@ _PROGRESS_FILE = Path("config.json").parent / "daily_progress.json"
 # 可进一条龙的任务 = 所有支持「每窗口独立链」的任务（CHAINS_PER_WINDOW=True）
 #  + 特殊值 "dungeon"（副本中枢步，见 _resolve）。加新任务只需设置 CHAINS_PER_WINDOW=True。
 # 秒装备 sniper 不在候选内：它是无限盯市场抢货、不会自己跑完，会卡死整条龙。
-CHAINABLE = [c.name for c in all_tasks() if getattr(c, "CHAINS_PER_WINDOW", False)] + ["dungeon"]
+# 注意：必须用函数动态计算，因为 daily.py 导入时部分任务尚未注册。
+def chainable():
+    return [c.name for c in all_tasks() if getattr(c, "CHAINS_PER_WINDOW", False)] + ["dungeon"]
+
+# 集体屏障：这些任务需要所有号汇合后统一执行（如组队后跑副本/捉鬼）
+COLLECTIVE_BARRIERS = {"dungeon", "catch_ghost"}
 
 
 @register
@@ -123,17 +128,26 @@ class DailyTask(Task):
             if not alive:
                 break
 
-            # —— 集体屏障：未完成的号是否都停靠在「刷副本」步？都到齐就集体跑一次、放行 ——
+            # —— 集体屏障：未完成的号是否都停靠在集体屏障步？都到齐就集体跑一次、放行 ——
             parked = [c for c in alive if self._at_dungeon(c, steps)]
             if parked and len(parked) == len(alive):
-                self._run_collective_dungeon(ctx)
+                # 确定当前集体屏障类型
+                barrier_step = steps[parked[0]["idx"]]
+                if barrier_step == "dungeon":
+                    self._run_collective_dungeon(ctx)
+                elif barrier_step == "catch_ghost":
+                    self._run_collective_catch_ghost(ctx)
                 for c in parked:
                     self._advance(c, steps)
                 continue
             # 部分号已停靠等待：各提示一次（节流），免得用户以为卡住
             for c in parked:
                 if not c["park_logged"]:
-                    c["wctx"].log("已完成刷副本前的任务，等其它号汇合到「刷副本」一起组队…")
+                    barrier_name = steps[c["idx"]] if c["idx"] < len(steps) else "未知"
+                    if barrier_name == "dungeon":
+                        c["wctx"].log("已完成刷副本前的任务，等其它号汇合到「刷副本」一起组队…")
+                    elif barrier_name == "catch_ghost":
+                        c["wctx"].log("已完成捉鬼前的任务，等其它号汇合到「捉鬼」一起组队…")
                     c["park_logged"] = True
 
             # —— 推进各「未停靠、未完成」窗口的独立链一段 ——
@@ -187,6 +201,18 @@ class DailyTask(Task):
         if save_progress and all(c["done"] for c in chains):
             self._clear_progress()
 
+        # 一条龙结束后自动关机
+        if all(c["done"] for c in chains) and not ctx.should_stop():
+            shutdown_cfg = tc.get("shutdown_after_chain", False)
+            if shutdown_cfg:
+                ctx.log("一条龙全部完成，准备关机（60秒后）…", level="warn")
+                import subprocess
+                try:
+                    subprocess.run(["shutdown", "/s", "/t", "60"], check=True)
+                    ctx.log("已发送关机指令，60秒后关机。", level="hit")
+                except Exception as e:
+                    ctx.log(f"关机指令发送失败：{e}", level="error")
+
     # ------------------------------------------------------------------
     # 每窗口独立链：链记录 + 推进引擎
     # ------------------------------------------------------------------
@@ -199,9 +225,9 @@ class DailyTask(Task):
 
     @staticmethod
     def _at_dungeon(c, steps):
-        """该窗口当前停靠在「刷副本」集体屏障上（未完成、未在跑子任务、当前步是 dungeon）。"""
+        """该窗口当前停靠在集体屏障上（未完成、未在跑子任务、当前步是 dungeon 或 catch_ghost）。"""
         return (not c["done"] and c["sub_step"] is None
-                and c["idx"] < len(steps) and steps[c["idx"]] == "dungeon")
+                and c["idx"] < len(steps) and steps[c["idx"]] in COLLECTIVE_BARRIERS)
 
     @staticmethod
     def _advance(c, steps):
@@ -233,7 +259,7 @@ class DailyTask(Task):
                 if c["idx"] >= len(steps):
                     c["done"] = True
                     return
-                if steps[c["idx"]] == "dungeon":
+                if steps[c["idx"]] in COLLECTIVE_BARRIERS:
                     return                              # 停靠集体屏障，交回主循环
                 if self._begin_step(ctx, c, steps[c["idx"]]) != "ready":
                     c["idx"] += 1                       # 跳过该步（未就绪/演练/不支持），接着下一步
@@ -320,6 +346,31 @@ class DailyTask(Task):
         if not ctx.should_stop():
             ctx.log(f"───── 「{title}」完成 ─────", level="hit")
 
+    def _run_collective_catch_ghost(self, ctx):
+        """集体跑一次「捉鬼」步：组队 → 队长跑捉鬼流程。用主 ctx。
+        阻塞执行，期间各队员号在屏障上待命。"""
+        title = self._title_of("catch_ghost", ctx)
+        task_cls = get_task("catch_ghost")
+        if task_cls is None:
+            ctx.log(f"「{title}」任务未找到，跳过该步。", level="warn")
+            return
+        task = task_cls()
+        if ctx.task_cfg("catch_ghost").get("dry_run", True):
+            ctx.log(f"「{title}」处于演练模式，一条龙不实跑，跳过该步。", level="warn")
+            return
+        ok, probs = task.preflight(ctx)
+        if not ok:
+            ctx.log(f"跳过「{title}」（未就绪）：" + "；".join(probs), level="warn")
+            return
+        ctx.log(f"───── 所有号已汇合，开始集体「{title}」（组队 → 队长跑）─────", level="hit")
+        try:
+            task.run(ctx)
+        except Exception as e:
+            ctx.log(f"「{title}」运行异常：{e}，继续后续任务。", level="error")
+            return
+        if not ctx.should_stop():
+            ctx.log(f"───── 「{title}」完成 ─────", level="hit")
+
     # ------------------------------------------------------------------
     # 配置读取
     # ------------------------------------------------------------------
@@ -359,7 +410,7 @@ class DailyTask(Task):
             if not isinstance(step, dict):
                 continue
             name = step.get("task")
-            if step.get("enabled") and name in CHAINABLE and name not in out:
+            if step.get("enabled") and name in chainable() and name not in out:
                 out.append(name)
         return out
 

@@ -17,7 +17,7 @@ from ..core import window as win_mod
 from ..core.runner import TaskRunner
 from ..tasks import get_task
 from ..tasks.base import dungeon_tasks
-from ..tasks.daily import CHAINABLE
+from ..tasks.daily import chainable
 from ..core.teaming import TEAM_REQUIRED_REGIONS, TEAM_REQUIRED_TEMPLATES
 from ..core.inventory import required_templates
 from ..core.input import get_cursor
@@ -879,7 +879,7 @@ class EscortPage(ctk.CTkFrame):
         regions = tc.get("regions", {})
         templates = tc.get("templates", {})
         need_r = ["scene", "activity_list"]
-        need_t = ["escort_entry", "escort_join", "escort_silver", "escort_confirm", "escort_ongoing"]
+        need_t = ["escort_entry", "activity_join", "escort_silver", "escort_confirm", "escort_ongoing"]
         rdone = sum(1 for k in need_r if regions.get(k))
         tdone = sum(1 for k in need_t if templates.get(k))
         self.lbl_calib.configure(
@@ -1624,7 +1624,7 @@ class SecretRealmPage(ctk.CTkFrame):
         regions = tc.get("regions", {})
         templates = tc.get("templates", {})
         need_r = ["scene", "activity_list"]
-        need_t = ["sr_entry", "sr_join", "sr_select",
+        need_t = ["sr_entry", "activity_join", "sr_select",
                   "sr_continue", "sr_challenge", "sr_enter_battle", "sr_leave"]
         rdone = sum(1 for k in need_r if regions.get(k))
         tdone = sum(1 for k in need_t if templates.get(k))
@@ -1916,7 +1916,7 @@ class CatchGhostPage(ctk.CTkFrame):
         regions = tc.get("regions", {})
         templates = tc.get("templates", {})
         need_r = ["activity_list"]
-        need_t = ["ghost_entry", "ghost_join", "ghost_accept_task", "ghost_task", "ghost_round_end", "ghost_confirm"]
+        need_t = ["ghost_entry", "activity_join", "ghost_accept_task", "ghost_task", "ghost_round_end", "ghost_confirm"]
         rdone = sum(1 for k in need_r if regions.get(k))
         tdone = sum(1 for k in need_t if templates.get(k))
         # 组队标定（非已组队时需要）
@@ -2109,6 +2109,898 @@ class CatchGhostPage(ctk.CTkFrame):
 
     def _clear_log(self):
         self.app.clear_log()
+
+
+# ----------------------------------------------------------------------
+# 师门页面
+# ----------------------------------------------------------------------
+class ShimenPage(ctk.CTkFrame):
+    TASK_NAME = "shimen"
+    LOG_SOURCE = "师门"
+    RUN_LABEL = "▶  开始师门"
+
+    def __init__(self, master, app):
+        super().__init__(master, fg_color="transparent")
+        self.app = app
+        self.fonts = app.fonts
+        self.runner = None
+        self._cal_dialog = None
+
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(2, weight=1)
+
+        self._build_header()
+        self._build_control()
+        self._build_body()
+        self.refresh()
+
+    def _build_header(self):
+        bar = ctk.CTkFrame(self, fg_color="transparent")
+        bar.grid(row=0, column=0, sticky="ew", padx=4, pady=(2, 14))
+        bar.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(bar, text="师门", font=self.fonts["title"], text_color=T.TEXT).grid(
+            row=0, column=0, sticky="w")
+        right = ctk.CTkFrame(bar, fg_color="transparent")
+        right.grid(row=0, column=1, sticky="e")
+        self.pill_game = Pill(right, self.fonts)
+        self.pill_game.pack(side="left", padx=(0, 8))
+        self.pill_mode = Pill(right, self.fonts)
+        self.pill_mode.pack(side="left")
+        sub = ctk.CTkLabel(bar, text="自动开活动→参加师门→去完成→等系统跑完十轮→点确定→领奖→关闭→使用",
+                           font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left", anchor="w")
+        sub.grid(row=1, column=0, sticky="ew", pady=(2, 0))
+        bind_wraplength(sub)
+
+    def _build_control(self):
+        card = Card(self)
+        card.grid(row=1, column=0, sticky="ew", padx=4, pady=(0, 14))
+        card.grid_columnconfigure(0, weight=1)
+        top = ctk.CTkFrame(card, fg_color="transparent")
+        top.grid(row=0, column=0, sticky="ew", padx=16, pady=(16, 10))
+        top.grid_columnconfigure(1, weight=1)
+        self.btn_run = ctk.CTkButton(top, text=self.RUN_LABEL, font=self.fonts["btn"],
+                                     height=46, width=200, corner_radius=T.RADIUS_SM,
+                                     fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER, text_color=T.ON_ACCENT,
+                                     command=self._toggle_run)
+        self.btn_run.grid(row=0, column=0, sticky="w")
+        tools = ctk.CTkFrame(top, fg_color="transparent")
+        tools.grid(row=0, column=2, sticky="e")
+        ctk.CTkButton(tools, text="选择窗口", font=self.fonts["body"], height=36, width=104,
+                      corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
+                      border_width=1, border_color=T.BORDER,
+                      command=lambda: self.app.open_window_picker(self.refresh)).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(tools, text="标定", font=self.fonts["body"], height=36, width=104,
+                      corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
+                      border_width=1, border_color=T.BORDER,
+                      command=self._open_calibrate).pack(side="left")
+        ctk.CTkFrame(card, fg_color=T.BORDER, height=1).grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 4))
+        opts = ctk.CTkFrame(card, fg_color="transparent")
+        opts.grid(row=2, column=0, sticky="ew", padx=16, pady=(8, 16))
+        self.switch_mode = ctk.CTkSwitch(opts, text="实战模式", font=self.fonts["body"],
+                                         progress_color=T.DANGER, command=self._toggle_mode)
+        self.switch_mode.pack(anchor="w")
+
+    def _build_body(self):
+        body = ctk.CTkFrame(self, fg_color="transparent")
+        body.grid(row=2, column=0, sticky="nsew", padx=4)
+        left = Card(body)
+        left.grid(row=0, column=0, sticky="nsew")
+        ctk.CTkLabel(left, text="运行参数", font=self.fonts["h2"], text_color=T.TEXT).pack(anchor="w", padx=16, pady=(14, 6))
+        lim = ctk.CTkFrame(left, fg_color="transparent")
+        lim.pack(fill="x", padx=16, pady=(0, 6))
+        ctk.CTkLabel(lim, text="时间上限(分钟)", font=self.fonts["body"], text_color=T.TEXT).pack(side="left")
+        self.var_limit = ctk.StringVar(value="30")
+        ctk.CTkEntry(lim, textvariable=self.var_limit, width=70, font=self.fonts["body"],
+                     fg_color=T.SURFACE_2, border_color=T.BORDER).pack(side="left", padx=(8, 0))
+        self.lbl_calib = ctk.CTkLabel(left, text="", font=self.fonts["small"], text_color=T.TEXT_DIM)
+        self.lbl_calib.pack(fill="x", padx=16, pady=(2, 14))
+
+    def refresh(self):
+        self.app.cfg = cfg_mod.load_config()
+        tc = cfg_mod.task_config(self.app.cfg, self.TASK_NAME)
+        dry = tc.get("dry_run", True)
+        (self.switch_mode.select if not dry else self.switch_mode.deselect)()
+        self._render_mode_pill(dry)
+        self.var_limit.set(str(tc.get("loop", {}).get("time_limit_min", 30)))
+        templates = tc.get("templates", {})
+        need_t = ["shimen_entry", "activity_join", "shimen_go", "shimen_complete_panel", "shimen_confirm", "shimen_close"]
+        tdone = sum(1 for k in need_t if templates.get(k))
+        self.lbl_calib.configure(text=f"标定：必要模板 {tdone}/{len(need_t)}" + ("　✓ 可运行" if tdone == len(need_t) else "　（还需标定）"))
+
+    def _render_mode_pill(self, dry):
+        if dry:
+            self.pill_mode.configure(text="演练", fg_color=T.PILL_OK_BG, text_color=T.SUCCESS)
+        else:
+            self.pill_mode.configure(text="实战", fg_color=T.PILL_DANGER_BG, text_color=T.DANGER)
+
+    def update_game_pill(self, connected, summary=""):
+        if connected:
+            self.pill_game.configure(text="● " + (summary or "已连接"), fg_color=T.PILL_OK_BG, text_color=T.SUCCESS)
+        else:
+            self.pill_game.configure(text="○ 未连接", fg_color=T.SURFACE_2, text_color=T.TEXT_DIM)
+
+    def _toggle_run(self):
+        if self.runner and self.runner.is_running():
+            self.runner.stop()
+            self.btn_run.configure(text="停止中…", state="disabled")
+            return
+        self.app.cfg = cfg_mod.load_config()
+        task_cls = get_task(self.TASK_NAME)
+        self.runner = TaskRunner(task_cls(), self.app.cfg)
+        ok, problems = self.runner.start()
+        if not ok:
+            for p in problems:
+                self._log_line("无法启动：" + p, "error")
+            self.runner = None
+            return
+        self.btn_run.configure(text="■  停止", fg_color=T.DANGER, hover_color=T.DANGER_HOVER)
+
+    def _toggle_mode(self):
+        live = bool(self.switch_mode.get())
+        cfg = cfg_mod.load_config()
+        tc = cfg_mod.task_config(cfg, self.TASK_NAME)
+        tc["dry_run"] = not live
+        cfg_mod.set_task_config(cfg, self.TASK_NAME, tc)
+        cfg_mod.save_config(cfg)
+        self.app.cfg = cfg
+        self._render_mode_pill(not live)
+
+    def _open_calibrate(self):
+        from .calibrate_dialog import CalibrateDialog
+        def _after():
+            self._cal_dialog = None
+            self.refresh()
+        try:
+            self._cal_dialog = CalibrateDialog(self.app, task_name=self.TASK_NAME, on_done=_after)
+        except Exception as e:
+            self._log_line(f"打开标定失败：{e}", "error")
+
+    def pump(self):
+        if self.runner:
+            q = self.runner.log_queue
+            while not q.empty():
+                level, msg = q.get()
+                self._log_line(msg, level)
+            if not self.runner.is_running() and self.btn_run.cget("text") != self.RUN_LABEL:
+                self.btn_run.configure(text=self.RUN_LABEL, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER)
+
+    def _log_line(self, msg, level="info"):
+        self.app.log_line(msg, level, getattr(self, "LOG_SOURCE", None))
+
+
+# ----------------------------------------------------------------------
+# 趣闻鉴赏页面
+# ----------------------------------------------------------------------
+class QuwenPage(ctk.CTkFrame):
+    TASK_NAME = "quwen"
+    LOG_SOURCE = "趣闻鉴赏"
+    RUN_LABEL = "▶  开始趣闻鉴赏"
+
+    def __init__(self, master, app):
+        super().__init__(master, fg_color="transparent")
+        self.app = app
+        self.fonts = app.fonts
+        self.runner = None
+        self._cal_dialog = None
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(2, weight=1)
+        self._build_header()
+        self._build_control()
+        self._build_body()
+        self.refresh()
+
+    def _build_header(self):
+        bar = ctk.CTkFrame(self, fg_color="transparent")
+        bar.grid(row=0, column=0, sticky="ew", padx=4, pady=(2, 14))
+        bar.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(bar, text="趣闻鉴赏", font=self.fonts["title"], text_color=T.TEXT).grid(row=0, column=0, sticky="w")
+        right = ctk.CTkFrame(bar, fg_color="transparent")
+        right.grid(row=0, column=1, sticky="e")
+        self.pill_game = Pill(right, self.fonts)
+        self.pill_game.pack(side="left", padx=(0, 8))
+        self.pill_mode = Pill(right, self.fonts)
+        self.pill_mode.pack(side="left")
+        sub = ctk.CTkLabel(bar, text="自动开活动→参加趣闻鉴赏→点赞5次→关闭", font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
+        sub.grid(row=1, column=0, sticky="ew", pady=(2, 0))
+        bind_wraplength(sub)
+
+    def _build_control(self):
+        card = Card(self)
+        card.grid(row=1, column=0, sticky="ew", padx=4, pady=(0, 14))
+        top = ctk.CTkFrame(card, fg_color="transparent")
+        top.grid(row=0, column=0, sticky="ew", padx=16, pady=(16, 10))
+        self.btn_run = ctk.CTkButton(top, text=self.RUN_LABEL, font=self.fonts["btn"], height=46, width=200,
+                                     corner_radius=T.RADIUS_SM, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
+                                     text_color=T.ON_ACCENT, command=self._toggle_run)
+        self.btn_run.pack(side="left")
+        tools = ctk.CTkFrame(top, fg_color="transparent")
+        tools.pack(side="right")
+        ctk.CTkButton(tools, text="选择窗口", font=self.fonts["body"], height=36, width=104,
+                      corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
+                      border_width=1, border_color=T.BORDER,
+                      command=lambda: self.app.open_window_picker(self.refresh)).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(tools, text="标定", font=self.fonts["body"], height=36, width=104,
+                      corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
+                      border_width=1, border_color=T.BORDER, command=self._open_calibrate).pack(side="left")
+        ctk.CTkFrame(card, fg_color=T.BORDER, height=1).grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 4))
+        opts = ctk.CTkFrame(card, fg_color="transparent")
+        opts.grid(row=2, column=0, sticky="ew", padx=16, pady=(8, 16))
+        self.switch_mode = ctk.CTkSwitch(opts, text="实战模式", font=self.fonts["body"], progress_color=T.DANGER, command=self._toggle_mode)
+        self.switch_mode.pack(anchor="w")
+
+    def _build_body(self):
+        body = ctk.CTkFrame(self, fg_color="transparent")
+        body.grid(row=2, column=0, sticky="nsew", padx=4)
+        left = Card(body)
+        left.grid(row=0, column=0, sticky="nsew")
+        ctk.CTkLabel(left, text="运行参数", font=self.fonts["h2"], text_color=T.TEXT).pack(anchor="w", padx=16, pady=(14, 6))
+        lim = ctk.CTkFrame(left, fg_color="transparent")
+        lim.pack(fill="x", padx=16, pady=(0, 6))
+        ctk.CTkLabel(lim, text="点赞数量", font=self.fonts["body"], text_color=T.TEXT).pack(side="left")
+        self.var_count = ctk.StringVar(value="5")
+        ctk.CTkEntry(lim, textvariable=self.var_count, width=70, font=self.fonts["body"], fg_color=T.SURFACE_2, border_color=T.BORDER).pack(side="left", padx=(8, 0))
+        self.lbl_calib = ctk.CTkLabel(left, text="", font=self.fonts["small"], text_color=T.TEXT_DIM)
+        self.lbl_calib.pack(fill="x", padx=16, pady=(2, 14))
+
+    def refresh(self):
+        self.app.cfg = cfg_mod.load_config()
+        tc = cfg_mod.task_config(self.app.cfg, self.TASK_NAME)
+        dry = tc.get("dry_run", True)
+        (self.switch_mode.select if not dry else self.switch_mode.deselect)()
+        self._render_mode_pill(dry)
+        self.var_count.set(str(tc.get("loop", {}).get("max_likes", 5)))
+        templates = tc.get("templates", {})
+        need_t = ["quwen_entry", "activity_join", "quwen_like", "quwen_close"]
+        tdone = sum(1 for k in need_t if templates.get(k))
+        self.lbl_calib.configure(text=f"标定：必要模板 {tdone}/{len(need_t)}" + ("　✓ 可运行" if tdone == len(need_t) else "　（还需标定）"))
+
+    def _render_mode_pill(self, dry):
+        if dry:
+            self.pill_mode.configure(text="演练", fg_color=T.PILL_OK_BG, text_color=T.SUCCESS)
+        else:
+            self.pill_mode.configure(text="实战", fg_color=T.PILL_DANGER_BG, text_color=T.DANGER)
+
+    def update_game_pill(self, connected, summary=""):
+        if connected:
+            self.pill_game.configure(text="● " + (summary or "已连接"), fg_color=T.PILL_OK_BG, text_color=T.SUCCESS)
+        else:
+            self.pill_game.configure(text="○ 未连接", fg_color=T.SURFACE_2, text_color=T.TEXT_DIM)
+
+    def _toggle_run(self):
+        if self.runner and self.runner.is_running():
+            self.runner.stop()
+            self.btn_run.configure(text="停止中…", state="disabled")
+            return
+        self.app.cfg = cfg_mod.load_config()
+        task_cls = get_task(self.TASK_NAME)
+        self.runner = TaskRunner(task_cls(), self.app.cfg)
+        ok, problems = self.runner.start()
+        if not ok:
+            for p in problems:
+                self._log_line("无法启动：" + p, "error")
+            self.runner = None
+            return
+        self.btn_run.configure(text="■  停止", fg_color=T.DANGER, hover_color=T.DANGER_HOVER)
+
+    def _toggle_mode(self):
+        live = bool(self.switch_mode.get())
+        cfg = cfg_mod.load_config()
+        tc = cfg_mod.task_config(cfg, self.TASK_NAME)
+        tc["dry_run"] = not live
+        cfg_mod.set_task_config(cfg, self.TASK_NAME, tc)
+        cfg_mod.save_config(cfg)
+        self.app.cfg = cfg
+        self._render_mode_pill(not live)
+
+    def _open_calibrate(self):
+        from .calibrate_dialog import CalibrateDialog
+        def _after():
+            self._cal_dialog = None
+            self.refresh()
+        try:
+            self._cal_dialog = CalibrateDialog(self.app, task_name=self.TASK_NAME, on_done=_after)
+        except Exception as e:
+            self._log_line(f"打开标定失败：{e}", "error")
+
+    def pump(self):
+        if self.runner:
+            q = self.runner.log_queue
+            while not q.empty():
+                level, msg = q.get()
+                self._log_line(msg, level)
+            if not self.runner.is_running() and self.btn_run.cget("text") != self.RUN_LABEL:
+                self.btn_run.configure(text=self.RUN_LABEL, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER)
+
+    def _log_line(self, msg, level="info"):
+        self.app.log_line(msg, level, getattr(self, "LOG_SOURCE", None))
+
+
+# ----------------------------------------------------------------------
+# 使用活力页面
+# ----------------------------------------------------------------------
+class VitalityPage(ctk.CTkFrame):
+    TASK_NAME = "vitality"
+    LOG_SOURCE = "使用活力"
+    RUN_LABEL = "▶  开始使用活力"
+
+    def __init__(self, master, app):
+        super().__init__(master, fg_color="transparent")
+        self.app = app
+        self.fonts = app.fonts
+        self.runner = None
+        self._cal_dialog = None
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(2, weight=1)
+        self._build_header()
+        self._build_control()
+        self._build_body()
+        self.refresh()
+
+    def _build_header(self):
+        bar = ctk.CTkFrame(self, fg_color="transparent")
+        bar.grid(row=0, column=0, sticky="ew", padx=4, pady=(2, 14))
+        bar.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(bar, text="使用活力", font=self.fonts["title"], text_color=T.TEXT).grid(row=0, column=0, sticky="w")
+        right = ctk.CTkFrame(bar, fg_color="transparent")
+        right.grid(row=0, column=1, sticky="e")
+        self.pill_game = Pill(right, self.fonts)
+        self.pill_game.pack(side="left", padx=(0, 8))
+        self.pill_mode = Pill(right, self.fonts)
+        self.pill_mode.pack(side="left")
+        sub = ctk.CTkLabel(bar, text="自动打开人物属性→使用活力→打工18次→关闭", font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
+        sub.grid(row=1, column=0, sticky="ew", pady=(2, 0))
+        bind_wraplength(sub)
+
+    def _build_control(self):
+        card = Card(self)
+        card.grid(row=1, column=0, sticky="ew", padx=4, pady=(0, 14))
+        top = ctk.CTkFrame(card, fg_color="transparent")
+        top.grid(row=0, column=0, sticky="ew", padx=16, pady=(16, 10))
+        self.btn_run = ctk.CTkButton(top, text=self.RUN_LABEL, font=self.fonts["btn"], height=46, width=200,
+                                     corner_radius=T.RADIUS_SM, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
+                                     text_color=T.ON_ACCENT, command=self._toggle_run)
+        self.btn_run.pack(side="left")
+        tools = ctk.CTkFrame(top, fg_color="transparent")
+        tools.pack(side="right")
+        ctk.CTkButton(tools, text="选择窗口", font=self.fonts["body"], height=36, width=104,
+                      corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
+                      border_width=1, border_color=T.BORDER,
+                      command=lambda: self.app.open_window_picker(self.refresh)).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(tools, text="标定", font=self.fonts["body"], height=36, width=104,
+                      corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
+                      border_width=1, border_color=T.BORDER, command=self._open_calibrate).pack(side="left")
+        ctk.CTkFrame(card, fg_color=T.BORDER, height=1).grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 4))
+        opts = ctk.CTkFrame(card, fg_color="transparent")
+        opts.grid(row=2, column=0, sticky="ew", padx=16, pady=(8, 16))
+        self.switch_mode = ctk.CTkSwitch(opts, text="实战模式", font=self.fonts["body"], progress_color=T.DANGER, command=self._toggle_mode)
+        self.switch_mode.pack(anchor="w")
+
+    def _build_body(self):
+        body = ctk.CTkFrame(self, fg_color="transparent")
+        body.grid(row=2, column=0, sticky="nsew", padx=4)
+        left = Card(body)
+        left.grid(row=0, column=0, sticky="nsew")
+        ctk.CTkLabel(left, text="运行参数", font=self.fonts["h2"], text_color=T.TEXT).pack(anchor="w", padx=16, pady=(14, 6))
+        lim = ctk.CTkFrame(left, fg_color="transparent")
+        lim.pack(fill="x", padx=16, pady=(0, 6))
+        ctk.CTkLabel(lim, text="打工次数", font=self.fonts["body"], text_color=T.TEXT).pack(side="left")
+        self.var_count = ctk.StringVar(value="18")
+        ctk.CTkEntry(lim, textvariable=self.var_count, width=70, font=self.fonts["body"], fg_color=T.SURFACE_2, border_color=T.BORDER).pack(side="left", padx=(8, 0))
+        self.lbl_calib = ctk.CTkLabel(left, text="", font=self.fonts["small"], text_color=T.TEXT_DIM)
+        self.lbl_calib.pack(fill="x", padx=16, pady=(2, 14))
+
+    def refresh(self):
+        self.app.cfg = cfg_mod.load_config()
+        tc = cfg_mod.task_config(self.app.cfg, self.TASK_NAME)
+        dry = tc.get("dry_run", True)
+        (self.switch_mode.select if not dry else self.switch_mode.deselect)()
+        self._render_mode_pill(dry)
+        self.var_count.set(str(tc.get("work_count", 18)))
+        templates = tc.get("templates", {})
+        need_t = ["vitality_btn", "vitality_work", "vitality_close"]
+        tdone = sum(1 for k in need_t if templates.get(k))
+        self.lbl_calib.configure(text=f"标定：必要模板 {tdone}/{len(need_t)}" + ("　✓ 可运行" if tdone == len(need_t) else "　（还需标定）"))
+
+    def _render_mode_pill(self, dry):
+        if dry:
+            self.pill_mode.configure(text="演练", fg_color=T.PILL_OK_BG, text_color=T.SUCCESS)
+        else:
+            self.pill_mode.configure(text="实战", fg_color=T.PILL_DANGER_BG, text_color=T.DANGER)
+
+    def update_game_pill(self, connected, summary=""):
+        if connected:
+            self.pill_game.configure(text="● " + (summary or "已连接"), fg_color=T.PILL_OK_BG, text_color=T.SUCCESS)
+        else:
+            self.pill_game.configure(text="○ 未连接", fg_color=T.SURFACE_2, text_color=T.TEXT_DIM)
+
+    def _toggle_run(self):
+        if self.runner and self.runner.is_running():
+            self.runner.stop()
+            self.btn_run.configure(text="停止中…", state="disabled")
+            return
+        self.app.cfg = cfg_mod.load_config()
+        task_cls = get_task(self.TASK_NAME)
+        self.runner = TaskRunner(task_cls(), self.app.cfg)
+        ok, problems = self.runner.start()
+        if not ok:
+            for p in problems:
+                self._log_line("无法启动：" + p, "error")
+            self.runner = None
+            return
+        self.btn_run.configure(text="■  停止", fg_color=T.DANGER, hover_color=T.DANGER_HOVER)
+
+    def _toggle_mode(self):
+        live = bool(self.switch_mode.get())
+        cfg = cfg_mod.load_config()
+        tc = cfg_mod.task_config(cfg, self.TASK_NAME)
+        tc["dry_run"] = not live
+        cfg_mod.set_task_config(cfg, self.TASK_NAME, tc)
+        cfg_mod.save_config(cfg)
+        self.app.cfg = cfg
+        self._render_mode_pill(not live)
+
+    def _open_calibrate(self):
+        from .calibrate_dialog import CalibrateDialog
+        def _after():
+            self._cal_dialog = None
+            self.refresh()
+        try:
+            self._cal_dialog = CalibrateDialog(self.app, task_name=self.TASK_NAME, on_done=_after)
+        except Exception as e:
+            self._log_line(f"打开标定失败：{e}", "error")
+
+    def pump(self):
+        if self.runner:
+            q = self.runner.log_queue
+            while not q.empty():
+                level, msg = q.get()
+                self._log_line(msg, level)
+            if not self.runner.is_running() and self.btn_run.cget("text") != self.RUN_LABEL:
+                self.btn_run.configure(text=self.RUN_LABEL, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER)
+
+    def _log_line(self, msg, level="info"):
+        self.app.log_line(msg, level, getattr(self, "LOG_SOURCE", None))
+
+
+# ----------------------------------------------------------------------
+# 三界奇缘页面
+# ----------------------------------------------------------------------
+class SanjiePage(ctk.CTkFrame):
+    TASK_NAME = "sanjie"
+    LOG_SOURCE = "三界奇缘"
+    RUN_LABEL = "▶  开始三界奇缘"
+
+    def __init__(self, master, app):
+        super().__init__(master, fg_color="transparent")
+        self.app = app
+        self.fonts = app.fonts
+        self.runner = None
+        self._cal_dialog = None
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(2, weight=1)
+        self._build_header()
+        self._build_control()
+        self._build_body()
+        self.refresh()
+
+    def _build_header(self):
+        bar = ctk.CTkFrame(self, fg_color="transparent")
+        bar.grid(row=0, column=0, sticky="ew", padx=4, pady=(2, 14))
+        bar.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(bar, text="三界奇缘", font=self.fonts["title"], text_color=T.TEXT).grid(row=0, column=0, sticky="w")
+        right = ctk.CTkFrame(bar, fg_color="transparent")
+        right.grid(row=0, column=1, sticky="e")
+        self.pill_game = Pill(right, self.fonts)
+        self.pill_game.pack(side="left", padx=(0, 8))
+        self.pill_mode = Pill(right, self.fonts)
+        self.pill_mode.pack(side="left")
+        sub = ctk.CTkLabel(bar, text="自动开活动→参加三界奇缘→答题10次→领奖→关闭（11:00之后才有）", font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
+        sub.grid(row=1, column=0, sticky="ew", pady=(2, 0))
+        bind_wraplength(sub)
+
+    def _build_control(self):
+        card = Card(self)
+        card.grid(row=1, column=0, sticky="ew", padx=4, pady=(0, 14))
+        top = ctk.CTkFrame(card, fg_color="transparent")
+        top.grid(row=0, column=0, sticky="ew", padx=16, pady=(16, 10))
+        self.btn_run = ctk.CTkButton(top, text=self.RUN_LABEL, font=self.fonts["btn"], height=46, width=200,
+                                     corner_radius=T.RADIUS_SM, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
+                                     text_color=T.ON_ACCENT, command=self._toggle_run)
+        self.btn_run.pack(side="left")
+        tools = ctk.CTkFrame(top, fg_color="transparent")
+        tools.pack(side="right")
+        ctk.CTkButton(tools, text="选择窗口", font=self.fonts["body"], height=36, width=104,
+                      corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
+                      border_width=1, border_color=T.BORDER,
+                      command=lambda: self.app.open_window_picker(self.refresh)).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(tools, text="标定", font=self.fonts["body"], height=36, width=104,
+                      corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
+                      border_width=1, border_color=T.BORDER, command=self._open_calibrate).pack(side="left")
+        ctk.CTkFrame(card, fg_color=T.BORDER, height=1).grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 4))
+        opts = ctk.CTkFrame(card, fg_color="transparent")
+        opts.grid(row=2, column=0, sticky="ew", padx=16, pady=(8, 16))
+        self.switch_mode = ctk.CTkSwitch(opts, text="实战模式", font=self.fonts["body"], progress_color=T.DANGER, command=self._toggle_mode)
+        self.switch_mode.pack(anchor="w")
+
+    def _build_body(self):
+        body = ctk.CTkFrame(self, fg_color="transparent")
+        body.grid(row=2, column=0, sticky="nsew", padx=4)
+        left = Card(body)
+        left.grid(row=0, column=0, sticky="nsew")
+        ctk.CTkLabel(left, text="运行参数", font=self.fonts["h2"], text_color=T.TEXT).pack(anchor="w", padx=16, pady=(14, 6))
+        lim = ctk.CTkFrame(left, fg_color="transparent")
+        lim.pack(fill="x", padx=16, pady=(0, 6))
+        ctk.CTkLabel(lim, text="答题数量", font=self.fonts["body"], text_color=T.TEXT).pack(side="left")
+        self.var_count = ctk.StringVar(value="10")
+        ctk.CTkEntry(lim, textvariable=self.var_count, width=70, font=self.fonts["body"], fg_color=T.SURFACE_2, border_color=T.BORDER).pack(side="left", padx=(8, 0))
+        self.lbl_calib = ctk.CTkLabel(left, text="", font=self.fonts["small"], text_color=T.TEXT_DIM)
+        self.lbl_calib.pack(fill="x", padx=16, pady=(2, 14))
+
+    def refresh(self):
+        self.app.cfg = cfg_mod.load_config()
+        tc = cfg_mod.task_config(self.app.cfg, self.TASK_NAME)
+        dry = tc.get("dry_run", True)
+        (self.switch_mode.select if not dry else self.switch_mode.deselect)()
+        self._render_mode_pill(dry)
+        self.var_count.set(str(tc.get("loop", {}).get("answer_count", 10)))
+        templates = tc.get("templates", {})
+        need_t = ["sanjie_entry", "activity_join", "sanjie_answer", "sanjie_close"]
+        tdone = sum(1 for k in need_t if templates.get(k))
+        self.lbl_calib.configure(text=f"标定：必要模板 {tdone}/{len(need_t)}" + ("　✓ 可运行" if tdone == len(need_t) else "　（还需标定）"))
+
+    def _render_mode_pill(self, dry):
+        if dry:
+            self.pill_mode.configure(text="演练", fg_color=T.PILL_OK_BG, text_color=T.SUCCESS)
+        else:
+            self.pill_mode.configure(text="实战", fg_color=T.PILL_DANGER_BG, text_color=T.DANGER)
+
+    def update_game_pill(self, connected, summary=""):
+        if connected:
+            self.pill_game.configure(text="● " + (summary or "已连接"), fg_color=T.PILL_OK_BG, text_color=T.SUCCESS)
+        else:
+            self.pill_game.configure(text="○ 未连接", fg_color=T.SURFACE_2, text_color=T.TEXT_DIM)
+
+    def _toggle_run(self):
+        if self.runner and self.runner.is_running():
+            self.runner.stop()
+            self.btn_run.configure(text="停止中…", state="disabled")
+            return
+        self.app.cfg = cfg_mod.load_config()
+        task_cls = get_task(self.TASK_NAME)
+        self.runner = TaskRunner(task_cls(), self.app.cfg)
+        ok, problems = self.runner.start()
+        if not ok:
+            for p in problems:
+                self._log_line("无法启动：" + p, "error")
+            self.runner = None
+            return
+        self.btn_run.configure(text="■  停止", fg_color=T.DANGER, hover_color=T.DANGER_HOVER)
+
+    def _toggle_mode(self):
+        live = bool(self.switch_mode.get())
+        cfg = cfg_mod.load_config()
+        tc = cfg_mod.task_config(cfg, self.TASK_NAME)
+        tc["dry_run"] = not live
+        cfg_mod.set_task_config(cfg, self.TASK_NAME, tc)
+        cfg_mod.save_config(cfg)
+        self.app.cfg = cfg
+        self._render_mode_pill(not live)
+
+    def _open_calibrate(self):
+        from .calibrate_dialog import CalibrateDialog
+        def _after():
+            self._cal_dialog = None
+            self.refresh()
+        try:
+            self._cal_dialog = CalibrateDialog(self.app, task_name=self.TASK_NAME, on_done=_after)
+        except Exception as e:
+            self._log_line(f"打开标定失败：{e}", "error")
+
+    def pump(self):
+        if self.runner:
+            q = self.runner.log_queue
+            while not q.empty():
+                level, msg = q.get()
+                self._log_line(msg, level)
+            if not self.runner.is_running() and self.btn_run.cget("text") != self.RUN_LABEL:
+                self.btn_run.configure(text=self.RUN_LABEL, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER)
+
+    def _log_line(self, msg, level="info"):
+        self.app.log_line(msg, level, getattr(self, "LOG_SOURCE", None))
+
+
+# ----------------------------------------------------------------------
+# 科举页面
+# ----------------------------------------------------------------------
+class KejuPage(ctk.CTkFrame):
+    TASK_NAME = "keju"
+    LOG_SOURCE = "科举"
+    RUN_LABEL = "▶  开始科举"
+
+    def __init__(self, master, app):
+        super().__init__(master, fg_color="transparent")
+        self.app = app
+        self.fonts = app.fonts
+        self.runner = None
+        self._cal_dialog = None
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(2, weight=1)
+        self._build_header()
+        self._build_control()
+        self._build_body()
+        self.refresh()
+
+    def _build_header(self):
+        bar = ctk.CTkFrame(self, fg_color="transparent")
+        bar.grid(row=0, column=0, sticky="ew", padx=4, pady=(2, 14))
+        bar.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(bar, text="科举", font=self.fonts["title"], text_color=T.TEXT).grid(row=0, column=0, sticky="w")
+        right = ctk.CTkFrame(bar, fg_color="transparent")
+        right.grid(row=0, column=1, sticky="e")
+        self.pill_game = Pill(right, self.fonts)
+        self.pill_game.pack(side="left", padx=(0, 8))
+        self.pill_mode = Pill(right, self.fonts)
+        self.pill_mode.pack(side="left")
+        sub = ctk.CTkLabel(bar, text="自动开活动→参加科举→答题（只选A）→关闭", font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
+        sub.grid(row=1, column=0, sticky="ew", pady=(2, 0))
+        bind_wraplength(sub)
+
+    def _build_control(self):
+        card = Card(self)
+        card.grid(row=1, column=0, sticky="ew", padx=4, pady=(0, 14))
+        top = ctk.CTkFrame(card, fg_color="transparent")
+        top.grid(row=0, column=0, sticky="ew", padx=16, pady=(16, 10))
+        self.btn_run = ctk.CTkButton(top, text=self.RUN_LABEL, font=self.fonts["btn"], height=46, width=200,
+                                     corner_radius=T.RADIUS_SM, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
+                                     text_color=T.ON_ACCENT, command=self._toggle_run)
+        self.btn_run.pack(side="left")
+        tools = ctk.CTkFrame(top, fg_color="transparent")
+        tools.pack(side="right")
+        ctk.CTkButton(tools, text="选择窗口", font=self.fonts["body"], height=36, width=104,
+                      corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
+                      border_width=1, border_color=T.BORDER,
+                      command=lambda: self.app.open_window_picker(self.refresh)).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(tools, text="标定", font=self.fonts["body"], height=36, width=104,
+                      corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
+                      border_width=1, border_color=T.BORDER, command=self._open_calibrate).pack(side="left")
+        ctk.CTkFrame(card, fg_color=T.BORDER, height=1).grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 4))
+        opts = ctk.CTkFrame(card, fg_color="transparent")
+        opts.grid(row=2, column=0, sticky="ew", padx=16, pady=(8, 16))
+        self.switch_mode = ctk.CTkSwitch(opts, text="实战模式", font=self.fonts["body"], progress_color=T.DANGER, command=self._toggle_mode)
+        self.switch_mode.pack(anchor="w")
+
+    def _build_body(self):
+        body = ctk.CTkFrame(self, fg_color="transparent")
+        body.grid(row=2, column=0, sticky="nsew", padx=4)
+        left = Card(body)
+        left.grid(row=0, column=0, sticky="nsew")
+        ctk.CTkLabel(left, text="运行参数", font=self.fonts["h2"], text_color=T.TEXT).pack(anchor="w", padx=16, pady=(14, 6))
+        lim = ctk.CTkFrame(left, fg_color="transparent")
+        lim.pack(fill="x", padx=16, pady=(0, 6))
+        ctk.CTkLabel(lim, text="时间上限(分钟)", font=self.fonts["body"], text_color=T.TEXT).pack(side="left")
+        self.var_limit = ctk.StringVar(value="10")
+        ctk.CTkEntry(lim, textvariable=self.var_limit, width=70, font=self.fonts["body"], fg_color=T.SURFACE_2, border_color=T.BORDER).pack(side="left", padx=(8, 0))
+        self.lbl_calib = ctk.CTkLabel(left, text="", font=self.fonts["small"], text_color=T.TEXT_DIM)
+        self.lbl_calib.pack(fill="x", padx=16, pady=(2, 14))
+
+    def refresh(self):
+        self.app.cfg = cfg_mod.load_config()
+        tc = cfg_mod.task_config(self.app.cfg, self.TASK_NAME)
+        dry = tc.get("dry_run", True)
+        (self.switch_mode.select if not dry else self.switch_mode.deselect)()
+        self._render_mode_pill(dry)
+        self.var_limit.set(str(tc.get("loop", {}).get("time_limit_min", 10)))
+        templates = tc.get("templates", {})
+        need_t = ["keju_entry", "activity_join", "keju_answer_a", "keju_close"]
+        tdone = sum(1 for k in need_t if templates.get(k))
+        self.lbl_calib.configure(text=f"标定：必要模板 {tdone}/{len(need_t)}" + ("　✓ 可运行" if tdone == len(need_t) else "　（还需标定）"))
+
+    def _render_mode_pill(self, dry):
+        if dry:
+            self.pill_mode.configure(text="演练", fg_color=T.PILL_OK_BG, text_color=T.SUCCESS)
+        else:
+            self.pill_mode.configure(text="实战", fg_color=T.PILL_DANGER_BG, text_color=T.DANGER)
+
+    def update_game_pill(self, connected, summary=""):
+        if connected:
+            self.pill_game.configure(text="● " + (summary or "已连接"), fg_color=T.PILL_OK_BG, text_color=T.SUCCESS)
+        else:
+            self.pill_game.configure(text="○ 未连接", fg_color=T.SURFACE_2, text_color=T.TEXT_DIM)
+
+    def _toggle_run(self):
+        if self.runner and self.runner.is_running():
+            self.runner.stop()
+            self.btn_run.configure(text="停止中…", state="disabled")
+            return
+        self.app.cfg = cfg_mod.load_config()
+        task_cls = get_task(self.TASK_NAME)
+        self.runner = TaskRunner(task_cls(), self.app.cfg)
+        ok, problems = self.runner.start()
+        if not ok:
+            for p in problems:
+                self._log_line("无法启动：" + p, "error")
+            self.runner = None
+            return
+        self.btn_run.configure(text="■  停止", fg_color=T.DANGER, hover_color=T.DANGER_HOVER)
+
+    def _toggle_mode(self):
+        live = bool(self.switch_mode.get())
+        cfg = cfg_mod.load_config()
+        tc = cfg_mod.task_config(cfg, self.TASK_NAME)
+        tc["dry_run"] = not live
+        cfg_mod.set_task_config(cfg, self.TASK_NAME, tc)
+        cfg_mod.save_config(cfg)
+        self.app.cfg = cfg
+        self._render_mode_pill(not live)
+
+    def _open_calibrate(self):
+        from .calibrate_dialog import CalibrateDialog
+        def _after():
+            self._cal_dialog = None
+            self.refresh()
+        try:
+            self._cal_dialog = CalibrateDialog(self.app, task_name=self.TASK_NAME, on_done=_after)
+        except Exception as e:
+            self._log_line(f"打开标定失败：{e}", "error")
+
+    def pump(self):
+        if self.runner:
+            q = self.runner.log_queue
+            while not q.empty():
+                level, msg = q.get()
+                self._log_line(msg, level)
+            if not self.runner.is_running() and self.btn_run.cget("text") != self.RUN_LABEL:
+                self.btn_run.configure(text=self.RUN_LABEL, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER)
+
+    def _log_line(self, msg, level="info"):
+        self.app.log_line(msg, level, getattr(self, "LOG_SOURCE", None))
+
+
+# ----------------------------------------------------------------------
+# 领取奖励页面
+# ----------------------------------------------------------------------
+class RewardPage(ctk.CTkFrame):
+    TASK_NAME = "reward"
+    LOG_SOURCE = "领取奖励"
+    RUN_LABEL = "▶  开始领取奖励"
+
+    def __init__(self, master, app):
+        super().__init__(master, fg_color="transparent")
+        self.app = app
+        self.fonts = app.fonts
+        self.runner = None
+        self._cal_dialog = None
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(2, weight=1)
+        self._build_header()
+        self._build_control()
+        self._build_body()
+        self.refresh()
+
+    def _build_header(self):
+        bar = ctk.CTkFrame(self, fg_color="transparent")
+        bar.grid(row=0, column=0, sticky="ew", padx=4, pady=(2, 14))
+        bar.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(bar, text="领取活跃奖励", font=self.fonts["title"], text_color=T.TEXT).grid(row=0, column=0, sticky="w")
+        right = ctk.CTkFrame(bar, fg_color="transparent")
+        right.grid(row=0, column=1, sticky="e")
+        self.pill_game = Pill(right, self.fonts)
+        self.pill_game.pack(side="left", padx=(0, 8))
+        self.pill_mode = Pill(right, self.fonts)
+        self.pill_mode.pack(side="left")
+        sub = ctk.CTkLabel(bar, text="自动开活动→点击活动列表顶端的5个活跃奖励", font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
+        sub.grid(row=1, column=0, sticky="ew", pady=(2, 0))
+        bind_wraplength(sub)
+
+    def _build_control(self):
+        card = Card(self)
+        card.grid(row=1, column=0, sticky="ew", padx=4, pady=(0, 14))
+        top = ctk.CTkFrame(card, fg_color="transparent")
+        top.grid(row=0, column=0, sticky="ew", padx=16, pady=(16, 10))
+        self.btn_run = ctk.CTkButton(top, text=self.RUN_LABEL, font=self.fonts["btn"], height=46, width=200,
+                                     corner_radius=T.RADIUS_SM, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
+                                     text_color=T.ON_ACCENT, command=self._toggle_run)
+        self.btn_run.pack(side="left")
+        tools = ctk.CTkFrame(top, fg_color="transparent")
+        tools.pack(side="right")
+        ctk.CTkButton(tools, text="选择窗口", font=self.fonts["body"], height=36, width=104,
+                      corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
+                      border_width=1, border_color=T.BORDER,
+                      command=lambda: self.app.open_window_picker(self.refresh)).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(tools, text="标定", font=self.fonts["body"], height=36, width=104,
+                      corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
+                      border_width=1, border_color=T.BORDER, command=self._open_calibrate).pack(side="left")
+        ctk.CTkFrame(card, fg_color=T.BORDER, height=1).grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 4))
+        opts = ctk.CTkFrame(card, fg_color="transparent")
+        opts.grid(row=2, column=0, sticky="ew", padx=16, pady=(8, 16))
+        self.switch_mode = ctk.CTkSwitch(opts, text="实战模式", font=self.fonts["body"], progress_color=T.DANGER, command=self._toggle_mode)
+        self.switch_mode.pack(anchor="w")
+
+    def _build_body(self):
+        body = ctk.CTkFrame(self, fg_color="transparent")
+        body.grid(row=2, column=0, sticky="nsew", padx=4)
+        left = Card(body)
+        left.grid(row=0, column=0, sticky="nsew")
+        ctk.CTkLabel(left, text="运行参数", font=self.fonts["h2"], text_color=T.TEXT).pack(anchor="w", padx=16, pady=(14, 6))
+        lim = ctk.CTkFrame(left, fg_color="transparent")
+        lim.pack(fill="x", padx=16, pady=(0, 6))
+        ctk.CTkLabel(lim, text="领取数量", font=self.fonts["body"], text_color=T.TEXT).pack(side="left")
+        self.var_count = ctk.StringVar(value="5")
+        ctk.CTkEntry(lim, textvariable=self.var_count, width=70, font=self.fonts["body"], fg_color=T.SURFACE_2, border_color=T.BORDER).pack(side="left", padx=(8, 0))
+        self.lbl_calib = ctk.CTkLabel(left, text="", font=self.fonts["small"], text_color=T.TEXT_DIM)
+        self.lbl_calib.pack(fill="x", padx=16, pady=(2, 14))
+
+    def refresh(self):
+        self.app.cfg = cfg_mod.load_config()
+        tc = cfg_mod.task_config(self.app.cfg, self.TASK_NAME)
+        dry = tc.get("dry_run", True)
+        (self.switch_mode.select if not dry else self.switch_mode.deselect)()
+        self._render_mode_pill(dry)
+        self.var_count.set(str(tc.get("reward_count", 5)))
+        templates = tc.get("templates", {})
+        need_t = ["reward_entry"]
+        tdone = sum(1 for k in need_t if templates.get(k))
+        self.lbl_calib.configure(text=f"标定：必要模板 {tdone}/{len(need_t)}" + ("　✓ 可运行" if tdone == len(need_t) else "　（还需标定）"))
+
+    def _render_mode_pill(self, dry):
+        if dry:
+            self.pill_mode.configure(text="演练", fg_color=T.PILL_OK_BG, text_color=T.SUCCESS)
+        else:
+            self.pill_mode.configure(text="实战", fg_color=T.PILL_DANGER_BG, text_color=T.DANGER)
+
+    def update_game_pill(self, connected, summary=""):
+        if connected:
+            self.pill_game.configure(text="● " + (summary or "已连接"), fg_color=T.PILL_OK_BG, text_color=T.SUCCESS)
+        else:
+            self.pill_game.configure(text="○ 未连接", fg_color=T.SURFACE_2, text_color=T.TEXT_DIM)
+
+    def _toggle_run(self):
+        if self.runner and self.runner.is_running():
+            self.runner.stop()
+            self.btn_run.configure(text="停止中…", state="disabled")
+            return
+        self.app.cfg = cfg_mod.load_config()
+        task_cls = get_task(self.TASK_NAME)
+        self.runner = TaskRunner(task_cls(), self.app.cfg)
+        ok, problems = self.runner.start()
+        if not ok:
+            for p in problems:
+                self._log_line("无法启动：" + p, "error")
+            self.runner = None
+            return
+        self.btn_run.configure(text="■  停止", fg_color=T.DANGER, hover_color=T.DANGER_HOVER)
+
+    def _toggle_mode(self):
+        live = bool(self.switch_mode.get())
+        cfg = cfg_mod.load_config()
+        tc = cfg_mod.task_config(cfg, self.TASK_NAME)
+        tc["dry_run"] = not live
+        cfg_mod.set_task_config(cfg, self.TASK_NAME, tc)
+        cfg_mod.save_config(cfg)
+        self.app.cfg = cfg
+        self._render_mode_pill(not live)
+
+    def _open_calibrate(self):
+        from .calibrate_dialog import CalibrateDialog
+        def _after():
+            self._cal_dialog = None
+            self.refresh()
+        try:
+            self._cal_dialog = CalibrateDialog(self.app, task_name=self.TASK_NAME, on_done=_after)
+        except Exception as e:
+            self._log_line(f"打开标定失败：{e}", "error")
+
+    def pump(self):
+        if self.runner:
+            q = self.runner.log_queue
+            while not q.empty():
+                level, msg = q.get()
+                self._log_line(msg, level)
+            if not self.runner.is_running() and self.btn_run.cget("text") != self.RUN_LABEL:
+                self.btn_run.configure(text=self.RUN_LABEL, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER)
+
+    def _log_line(self, msg, level="info"):
+        self.app.log_line(msg, level, getattr(self, "LOG_SOURCE", None))
 
 
 # ----------------------------------------------------------------------
@@ -3389,9 +4281,9 @@ class DailyPage(ctk.CTkFrame):
     # 各子任务「就绪」所需的区域/模板（与各任务页保持一致；仅用于状态显示）
     _READY = {
         "escort": (["activity_list"],
-                   ["escort_entry", "escort_join", "escort_silver", "escort_confirm", "escort_ongoing"]),
+                   ["escort_entry", "activity_join", "escort_silver", "escort_confirm", "escort_ongoing"]),
         "secret_realm": (["activity_list"],
-                         ["sr_entry", "sr_join", "sr_select", "sr_continue",
+                         ["sr_entry", "activity_join", "sr_select", "sr_continue",
                           "sr_challenge", "sr_enter_battle", "sr_leave"]),
     }
 
@@ -3516,11 +4408,12 @@ class DailyPage(ctk.CTkFrame):
     def _normalize(stored):
         """把存储的 steps 规整成「含全部可串联任务、保留已存顺序、缺的补到末尾」。"""
         out, seen = [], []
+        chain = chainable()
         for s in stored or []:
-            if isinstance(s, dict) and s.get("task") in CHAINABLE and s["task"] not in seen:
+            if isinstance(s, dict) and s.get("task") in chain and s["task"] not in seen:
                 out.append({"task": s["task"], "enabled": bool(s.get("enabled", True))})
                 seen.append(s["task"])
-        for t in CHAINABLE:
+        for t in chain:
             if t not in seen:
                 out.append({"task": t, "enabled": True})
                 seen.append(t)
@@ -3553,7 +4446,7 @@ class DailyPage(ctk.CTkFrame):
             skip = sub.get("skip_collect", False)
             need_r = ["bag_list"] if skip else ["activity_list", "bag_list"]
             need_t = (["flag_next_map", "treasure_item"] if skip else
-                      ["flag_treasure_entry", "flag_join", "flag_tingting", "flag_next_map", "treasure_item"])
+                      ["flag_treasure_entry", "activity_join", "flag_tingting", "flag_next_map", "treasure_item"])
         else:
             need_r, need_t = self._READY.get(name, ([], []))
         regions = sub.get("regions", {})
@@ -3790,12 +4683,15 @@ class App(ctk.CTk):
            ("daily", "🐉  日常一条龙"),
            ("sniper", "🗡  秒装备"), ("treasure_map", "🗺  宝图"),
            ("escort", "🚚  运镖"), ("secret_realm", "👹  秘境降妖"),
-           ("catch_ghost", "👻  捉鬼"),
+           ("catch_ghost", "👻  捉鬼"), ("shimen", "📋  师门"),
+           ("quwen", "📰  趣闻鉴赏"), ("vitality", "⚡  使用活力"),
+           ("sanjie", "🎯  三界奇缘"), ("keju", "📝  科举"),
+           ("reward", "🎁  领取奖励"),
            ("dungeon", "🏰  刷副本"),
            ("settings", "⚙  设置"), ("about", "ⓘ  关于")]
     # 可运行任务页（有 runner/pump/update_game_pill），App 的定时器/热键/关闭钩子按此遍历。
     # general 也在内：它的「一键组队」会跑后台任务，需要 pump 抽日志、关闭时停 runner。
-    RUNNABLE_KEYS = ("general", "daily", "sniper", "treasure_map", "escort", "secret_realm", "catch_ghost", "dungeon")
+    RUNNABLE_KEYS = ("general", "daily", "sniper", "treasure_map", "escort", "secret_realm", "catch_ghost", "shimen", "quwen", "vitality", "sanjie", "keju", "reward", "dungeon")
 
     def __init__(self):
         super().__init__()
@@ -3992,6 +4888,12 @@ class App(ctk.CTk):
         "escort": EscortPage,
         "secret_realm": SecretRealmPage,
         "catch_ghost": CatchGhostPage,
+        "shimen": ShimenPage,
+        "quwen": QuwenPage,
+        "vitality": VitalityPage,
+        "sanjie": SanjiePage,
+        "keju": KejuPage,
+        "reward": RewardPage,
         "dungeon": DungeonPage,
         "general": GeneralPage,
         "settings": SettingsPage,

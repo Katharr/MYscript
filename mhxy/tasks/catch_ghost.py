@@ -45,17 +45,7 @@ S_CATCHING = "CATCHING"             # 捉鬼中：监控战斗状态/一轮结�
 S_ROUND_END = "ROUND_END"           # 一轮结束弹窗 → 点确定
 S_NEXT_ROUND = "NEXT_ROUND"         # 点确定后 → 回NPC对话框 → 判断是否继续
 
-# 模板键（用 ghost_ 前缀）
-_FLAG_KEYS = [
-    "ghost_entry",       # 捉鬼入口（活动列表里的图标+文字）
-    "ghost_join",        # 参加按钮（活动列表右侧）
-    "ghost_accept_task", # 接任务按钮（NPC对话框里的「捉鬼」选项）
-    "ghost_task",        # 任务列表·捉鬼任务条目
-    "ghost_round_end",   # 一轮结束弹窗
-    "ghost_confirm",     # 确定按钮（一轮结束弹窗里）
-    "ghost_battle",      # 战斗界面标志（可选）
-]
-_REQUIRED_FLAGS = ["ghost_entry", "ghost_join", "ghost_accept_task", "ghost_task", "ghost_round_end", "ghost_confirm"]
+_REQUIRED_FLAGS = ["ghost_entry", "activity_join", "ghost_accept_task", "ghost_task", "ghost_round_end", "ghost_confirm"]
 
 
 @register
@@ -66,14 +56,23 @@ class CatchGhostTask(Task):
     is_dungeon = False
     CHAINS_PER_WINDOW = True
 
+    _FLAG_KEYS = [
+        "ghost_entry",       # 捉鬼入口（活动列表里的图标+文字）
+        "activity_join",     # 参加按钮（活动列表右侧，共用）
+        "ghost_accept_task", # 接任务按钮（NPC对话框里的「捉鬼」选项）
+        "ghost_task",        # 任务列表·捉鬼任务条目
+        "ghost_round_end",   # 一轮结束弹窗
+        "ghost_confirm",     # 确定按钮（一轮结束弹窗里）
+        "ghost_battle",      # 战斗界面标志（可选）
+    ]
+
     CALIBRATION = {
         "regions": [
-            ("scene", "主识别区", "留空=整个窗口当识别区(推荐)；对话框等标志都在这里找", True),
-            ("activity_list", "活动列表区域", "「活动」界面里那片列表，滚轮在此翻找「捉鬼」条目"),
+            *Task.BASE_CALIBRATION_REGIONS,
         ],
         "templates": [
+            *Task.BASE_CALIBRATION_TEMPLATES,
             ("ghost_entry", "捉鬼入口", "活动列表里「捉鬼」那一条，框图标+文字（左侧），不要框参加按钮"),
-            ("ghost_join", "参加按钮", "活动列表里「捉鬼」那一行右侧的「参加」按钮，框按钮本身"),
             ("ghost_accept_task", "接任务按钮", "NPC对话框里的「捉鬼」选项/按钮，用于接任务"),
             ("ghost_task", "任务列表·捉鬼任务条目", "点接任务按钮后，任务列表里「捉鬼」这一条任务——先点中它，才开始捉鬼"),
             ("ghost_round_end", "一轮结束弹窗", "一轮捉鬼结束后弹出的提示框（可框整个弹窗或独特部分）"),
@@ -149,13 +148,6 @@ class CatchGhostTask(Task):
         return (len(problems) == 0), problems
 
     # ------------------------------------------------------------------
-    def _focus(self, ctx):
-        """激活窗口到前台"""
-        try:
-            ctx.window.activate()
-        except Exception:
-            pass
-
     def run(self, ctx):
         tc = ctx.task_cfg(self.name)
         loop = tc["loop"]
@@ -177,7 +169,7 @@ class CatchGhostTask(Task):
         ctx.log(f"队长 [{captain.title}] 开始捉鬼，计划 {max_rounds} 轮。")
 
         # 加载模板
-        self.flags = {k: vision.load_template(tc.get("templates", {}).get(k)) for k in _FLAG_KEYS}
+        self.flags = self._load_flags(tc)
 
         # 组队阶段
         if not skip_team:
@@ -185,7 +177,18 @@ class CatchGhostTask(Task):
             if dry_run:
                 ctx.log("演练模式：跳过真实组队，仅检查组队模板。", level="warn")
             else:
-                tf = TeamFormation(ctx)
+                # 构建 assignments 列表
+                cap_pair = None
+                member_pairs = []
+                for i, w in enumerate(wins):
+                    child = ctx.make_child(w, f"号{i + 1}")
+                    if i == cap:
+                        cap_pair = (child, TeamFormation.ROLE_CAPTAIN)
+                    else:
+                        member_pairs.append((child, TeamFormation.ROLE_MEMBER))
+                assignments = [cap_pair] + member_pairs
+                team_cfg = ctx.task_cfg("teaming")
+                tf = TeamFormation(ctx, assignments, team_cfg, dry_run=False)
                 tf.run_teaming(ctx)
                 ctx.log("组队成功，队长开始捉鬼流程。", level="hit")
 
@@ -270,9 +273,10 @@ class CatchGhostTask(Task):
                 # 检查战斗状态（可选）
                 in_battle = self._present(cur, "ghost_battle", threshold)
                 if in_battle:
-                    # 战斗中，不计超时，继续监控
+                    # 战斗中，不计超时，继续监控（战斗持续时间长，降低检测频率）
+                    battle_tick = loop.get("battle_check_interval_sec", 20.0)
                     ctx.log("战斗中，等待战斗结束…", level="info")
-                    self._interruptible_sleep(ctx, tick)
+                    self._interruptible_sleep(ctx, battle_tick)
                     continue
 
                 # 检查一轮结束弹窗
@@ -339,7 +343,7 @@ class CatchGhostTask(Task):
                 scene = win_mod.grab(rect) if rect else None
                 if scene is not None:
                     # 尝试匹配任意一个活动入口模板（证明活动列表已打开）
-                    for flag_key in ["ghost_entry", "ghost_join"]:
+                    for flag_key in ["ghost_entry", "activity_join"]:
                         tpl = self.flags.get(flag_key)
                         if tpl is not None:
                             hit = vision.match(scene, tpl, threshold)
@@ -365,13 +369,13 @@ class CatchGhostTask(Task):
         """滚轮找捉鬼条目 → 点参加"""
         list_region = regions.get("activity_list")
         entry_tpl = self.flags.get("ghost_entry")
-        join_tpl = self.flags.get("ghost_join")
+        join_tpl = self.flags.get("activity_join")
 
         if entry_tpl is None:
             ctx.log("❌ ghost_entry 模板未加载：请先标定「捉鬼入口」。", level="error")
             return False
         if join_tpl is None:
-            ctx.log("❌ ghost_join 模板未加载：请先标定「参加按钮」。", level="error")
+            ctx.log("❌ activity_join 模板未加载：请先标定「参加按钮」。", level="error")
             return False
 
         def grab_rect():
@@ -396,7 +400,8 @@ class CatchGhostTask(Task):
             entry_xy = (rect[0] + cx, rect[1] + cy)
             ctx.log(f"✓ 找到「捉鬼」图标（{score:.3f}），坐标 {entry_xy}，开始找「参加」按钮…", level="info")
 
-            join = self._find_join_on_row(ctx, list_region, entry_xy, threshold, loop)
+            join = self._find_join_on_row(ctx, list_region, entry_xy, threshold, loop,
+                                          join_key="activity_join", entry_key="ghost_entry")
             if join is not None:
                 if not dry_run:
                     ctx.mouse.click(join[0], join[1])
@@ -405,7 +410,7 @@ class CatchGhostTask(Task):
                     ctx.log(f"演练：找到「捉鬼」和「参加」按钮（{join[2]:.3f}），跳过点击。", level="warn")
                 return scan.ACCEPT, join
 
-            ctx.log("认出「捉鬼」但没找到「参加」（检查 ghost_join 模板/阈值）。", level="warn")
+            ctx.log("认出「捉鬼」但没找到「参加」（检查 activity_join 模板/阈值）。", level="warn")
             return scan.STAY, None
 
         ctx.log(f"🔍 开始在活动列表搜索「捉鬼」（阈值 {threshold}）…")
@@ -421,68 +426,6 @@ class CatchGhostTask(Task):
             reset_max=loop.get("scroll_reset_max", 20),
             log=ctx.log, label="活动列表")
         return res.found
-
-    def _find_join_on_row(self, ctx, list_region, entry_screen_xy, threshold, loop):
-        """在捉鬼条目右侧条带里匹配参加按钮"""
-        join_tpl = self.flags.get("ghost_join")
-        entry_tpl = self.flags.get("ghost_entry")
-        if join_tpl is None:
-            ctx.log("❌ ghost_join 模板未标定。", level="error")
-            return None
-
-        rect = (ctx.window.region_to_screen_rect(list_region)
-                if list_region else ctx.window.rect())
-        if rect is None:
-            ctx.log("❌ 无法获取活动列表区域坐标。", level="error")
-            return None
-        scene = win_mod.grab(rect)
-        if scene is None:
-            ctx.log("❌ 活动列表截图失败。", level="error")
-            return None
-
-        rx, ry = rect[0], rect[1]
-        ex, ey = entry_screen_xy
-
-        row_h = entry_tpl.shape[0] if entry_tpl is not None else 40
-        band = max(40, int(row_h * 2))
-        sh, sw = scene.shape[:2]
-
-        ey_local = int(ey - ry)
-        ex_local = int(ex - rx)
-
-        cols = max(1, int(loop.get("activity_columns", 2)))
-        col_w = sw / cols
-        col_idx = min(cols - 1, max(0, int(ex_local // col_w)))
-        col_right = int(round((col_idx + 1) * col_w))
-
-        y0 = max(0, ey_local - band // 2)
-        y1 = min(sh, ey_local + band // 2)
-        x0 = max(0, ex_local)
-        x1 = min(sw, col_right)
-
-        ctx.log(f"📍 参加按钮搜索：条目({ex_local},{ey_local})，卡片{col_idx+1}/{cols}，"
-                f"裁剪[{x0}:{x1}, {y0}:{y1}]（宽{x1-x0}px高{y1-y0}px）", level="info")
-
-        if y1 - y0 < 1 or x1 - x0 < 1:
-            ctx.log("❌裁剪区域无效。", level="error")
-            return None
-
-        crop = scene[y0:y1, x0:x1]
-        m = vision.match(crop, join_tpl, threshold)
-
-        if m is None:
-            m_low = vision.match(crop, join_tpl, 0.70)
-            if m_low:
-                cx, cy, score = m_low
-                ctx.log(f"⚠ 低阈值(0.70)找到疑似「参加」（{score:.3f}<{threshold}），建议降低阈值。", level="warn")
-            else:
-                ctx.log(f"❌ 未找到「参加」（阈值 {threshold}），裁剪区域宽{x1-x0}px高{y1-y0}px。", level="warn")
-            return None
-
-        cx, cy, score = m
-        screen_xy = (rx + x0 + cx, ry + y0 + cy, score)
-        ctx.log(f"✓ 找到「参加」按钮（{score:.3f}）→ ({screen_xy[0]}, {screen_xy[1]})", level="info")
-        return screen_xy
 
     def _wait_npc_dialog(self, ctx, regions, threshold, dry_run, timeout=10):
         """等NPC对话框（接任务按钮）出现"""
@@ -569,7 +512,7 @@ class CatchGhostTask(Task):
                     ctx.log(f"演练：点「捉鬼」任务条目({screen_x}, {screen_y})。", level="warn")
                     return True
                 else:
-                    ctx.mouse.click(screen_x, screen_y, humanlike=True)
+                    ctx.mouse.click(screen_x, screen_y)
                     ctx.log(f"✓ 点击「捉鬼」任务条目（{score:.3f}）。", level="hit")
                     self._interruptible_sleep(ctx, 1.0)
                     return True
@@ -611,29 +554,6 @@ class CatchGhostTask(Task):
         return True
 
     # ------------------------------------------------------------------
-    def _scene_rect(self, ctx, regions):
-        region = regions.get("scene")
-        return ctx.window.region_to_screen_rect(region) if region else ctx.window.rect()
-
-    def _grab_scene(self, ctx, regions):
-        rect = self._scene_rect(ctx, regions)
-        return win_mod.grab(rect) if rect else None
-
-    def _present(self, scene, flag_key, threshold):
-        tpl = self.flags.get(flag_key)
-        if scene is None or tpl is None:
-            return False
-        return vision.match(scene, tpl, threshold) is not None
-
-    def _match_scene(self, cur, scene_rect, flag_key, threshold):
-        tpl = self.flags.get(flag_key)
-        if cur is None or tpl is None or scene_rect is None:
-            return None
-        m = vision.match(cur, tpl, threshold)
-        if m is None:
-            return None
-        return (scene_rect[0] + m[0], scene_rect[1] + m[1], m[2])
-
     def _interruptible_sleep(self, ctx, sec):
         interval = 0.1
         elapsed = 0.0

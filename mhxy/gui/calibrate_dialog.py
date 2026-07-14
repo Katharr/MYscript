@@ -21,6 +21,7 @@ from ..core import window as win_mod
 from ..core import vision
 from ..core.teaming import TEAM_CALIBRATION
 from ..tasks import get_task
+from ..tasks.base import Task
 
 # 非注册的「共享命名空间」标定 spec（key = 写入 cfg.tasks.<key>）。
 # 组队是跨任务共享资产、不是可运行任务，故 get_task("teaming") 拿不到，走这里。
@@ -367,7 +368,11 @@ class CalibrateDialog(ctk.CTkToplevel):
         rel, _crop = self._grab_roi(f"框选「{name}」")
         if rel is None:
             return
-        self.tc.setdefault("regions", {})[key] = rel
+        # 共享区域保存到全局命名空间，所有任务共用
+        if key in Task.SHARED_REGION_KEYS:
+            self.cfg.setdefault("shared_regions", {})[key] = rel
+        else:
+            self.tc.setdefault("regions", {})[key] = rel
         self._save()
         self._refresh()
         self._toast(f"已记录 {name}：{rel}", T.SUCCESS)
@@ -384,7 +389,11 @@ class CalibrateDialog(ctk.CTkToplevel):
         if not vision.save_image(rel_path, crop):
             self._toast("保存模板图失败。", T.DANGER)
             return
-        self.tc.setdefault("templates", {})[key] = rel_path
+        # 共享模板保存到全局命名空间，所有任务共用
+        if key in Task.SHARED_TEMPLATE_KEYS:
+            self.cfg.setdefault("shared_templates", {})[key] = rel_path
+        else:
+            self.tc.setdefault("templates", {})[key] = rel_path
         self._save()
         self._refresh()
         self._toast(f"已记录模板 {name}", T.SUCCESS)
@@ -437,8 +446,10 @@ class CalibrateDialog(ctk.CTkToplevel):
     def _refresh(self):
         self._thumbs.clear()
         regions = self.tc.get("regions", {})
+        shared_regions = self.cfg.get("shared_regions", {})
         for key, status in self.region_rows.items():
-            if regions.get(key):
+            # 共享区域优先从 shared_regions 读取
+            if regions.get(key) or shared_regions.get(key):
                 status.configure(text="● 已框选", text_color=T.SUCCESS)
             elif key in self._full_window_keys:
                 status.configure(text="○ 整窗(默认)", text_color=T.TEXT_DIM)
@@ -455,9 +466,11 @@ class CalibrateDialog(ctk.CTkToplevel):
         for w in self.template_grid.winfo_children():
             w.destroy()
         saved = self.tc.get("templates", {})
+        shared = self.cfg.get("shared_templates", {})
         for i, (key, name, desc) in enumerate(self.spec.get("templates", [])):
             r, col = divmod(i, self.n_cols)
-            rel = saved.get(key)
+            # 共享模板优先从 shared_templates 读取
+            rel = saved.get(key) or shared.get(key)
             thumb = load_thumb(rel, self._thumbs, max_h=46) if rel else None
             self._thumb_card(self.template_grid, r, col, name=name,
                              thumb=thumb, has_path=bool(rel), rel=rel,

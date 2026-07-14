@@ -18,3 +18,9 @@ from . import organize_bag   # noqa: F401,E402
 from . import daily          # noqa: F401,E402
 from . import catch_ghost    # noqa: F401,E402
 from . import five_start     # noqa: F401,E402
+from . import keju           # noqa: F401,E402
+from . import quwen          # noqa: F401,E402
+from . import reward         # noqa: F401,E402
+from . import sanjie         # noqa: F401,E402
+from . import shimen         # noqa: F401,E402
+from . import vitality       # noqa: F401,E402
