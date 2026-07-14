@@ -45,10 +45,10 @@ class TaohaiquTask(Task):
     description = "组队后由队长跑完整条蹈海去(50级)副本：参加→选副本→进入→三场剧情战斗→小闹钟收尾，跑一遍即停"
     is_dungeon = True       # 「刷副本」页收录它作为可选副本之一
     # 本副本自身模板键（thq_ 前缀，存盘 templates/tm_thq_*.png，避免与别的任务同名互相覆盖）。
-    _FLAG_KEYS = ["thq_entry", "thq_join", "thq_select", "thq_enter", "thq_skip",
+    _FLAG_KEYS = ["thq_entry", "activity_join", "thq_select", "thq_enter", "thq_skip",
                   "thq_daily", "thq_task", "thq_teleport", "thq_opt1", "thq_opt2", "thq_opt3", "thq_clock"]
     # 预检必选的模板（thq_daily 运行时可选，不强制标定）。
-    _REQUIRED_FLAGS = ["thq_entry", "thq_join", "thq_select", "thq_enter", "thq_skip",
+    _REQUIRED_FLAGS = ["thq_entry", "activity_join", "thq_select", "thq_enter", "thq_skip",
                        "thq_task", "thq_teleport", "thq_opt1", "thq_opt2", "thq_opt3", "thq_clock"]
 
     CALIBRATION = {
@@ -56,8 +56,8 @@ class TaohaiquTask(Task):
             *Task.BASE_CALIBRATION_REGIONS,
         ],
         "templates": [
+            *Task.BASE_CALIBRATION_TEMPLATES,
             ("thq_entry", "活动卡片入口", "活动列表里「蹈海去」那张卡片，框图标+文字、要独特"),
-            ("thq_join", "参加按钮", "蹈海去卡片右侧的「参加」按钮，框按钮本身、要独特"),
             ("thq_select", "「选择副本」按钮", "寻路到 NPC 后对话框里的「选择副本」按钮"),
             ("thq_enter", "蹈海去「进入」按钮", "副本列表里蹈海去【下方】的「进入」按钮。几个进入长得一样，"
                                           "运行时只在比例框 enter_box 里找它（默认整屏；点错就收窄到蹈海去那块）"),
@@ -292,7 +292,7 @@ class TaohaiquTask(Task):
                 return scan.SCROLL, None
             entry_xy = (rect[0] + hit[0], rect[1] + hit[1])
             join = self._find_join_on_row(ctx, list_region, entry_xy, threshold, loop,
-                                            "thq_join", "thq_entry")
+                                            "activity_join", "thq_entry")
             if join is not None:
                 ctx.mouse.click(join[0], join[1])
                 ctx.log(f"找到蹈海去卡片（{hit[2]:.3f}）→ 点「参加」（{join[2]:.3f}），等寻路到 NPC。", level="hit")

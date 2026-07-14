@@ -53,7 +53,7 @@ class EscortTask(Task):
     CHAINS_PER_WINDOW = True   # 可做「日常一条龙·每窗口独立链」
     # 模板键（用 escort_ 前缀，避免和「宝图」任务的同名模板在磁盘上互相覆盖——
     #   标定存盘按 templates/tm_<key>.png 命名，只按 key 区分，不区分任务）。
-    _FLAG_KEYS = ["escort_entry", "escort_join", "escort_silver", "escort_confirm",
+    _FLAG_KEYS = ["escort_entry", "activity_join", "escort_silver", "escort_confirm",
                   "escort_ongoing", "escort_battle"]
 
     CALIBRATION = {
@@ -61,8 +61,8 @@ class EscortTask(Task):
             *Task.BASE_CALIBRATION_REGIONS,
         ],
         "templates": [
+            *Task.BASE_CALIBRATION_TEMPLATES,
             ("escort_entry", "运镖入口", "活动列表里「运镖」那一条，框图标+文字、要独特"),
-            ("escort_join", "参加按钮", "活动列表里「运镖」那一行右侧的「参加」按钮，框按钮本身、要独特"),
             ("escort_silver", "「押送普通镖银」按钮", "弹出对话框里要点的那个「押送普通镖银」按钮"),
             ("escort_confirm", "「确认」按钮", "点完「押送普通镖银」后再弹出的确认按钮，框按钮本身、要独特"),
             ("escort_ongoing", "「运镖中」标志", "运镖途中一直挂在屏幕上的标志（如镖银图标/运镖任务追踪条），"
@@ -228,7 +228,7 @@ class EscortTask(Task):
             cx, cy, score = hit
             entry_xy = (rect[0] + cx, rect[1] + cy)
             join = self._find_join_on_row(ctx, list_region, entry_xy, threshold, loop,
-                                            "escort_join", "escort_entry")
+                                            "activity_join", "escort_entry")
             if join is not None:
                 ctx.mouse.click(join[0], join[1])
                 ctx.log(f"找到「运镖」（{score:.3f}）→ 点「参加」（{join[2]:.3f}），等对话框。", level="hit")

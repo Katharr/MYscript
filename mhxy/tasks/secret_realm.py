@@ -57,17 +57,17 @@ class SecretRealmTask(Task):
     description = "自动开活动→参加→秘境降妖→选副本/确定/继续挑战/挑战→盯进入战斗续战，失败/超时自动离开（支持多开轮转）"
     CHAINS_PER_WINDOW = True   # 可做「日常一条龙·每窗口独立链」
     # 模板键（用 sr_ 前缀，避免与运镖/宝图同名模板在磁盘互相覆盖——存盘按 templates/tm_<key>.png）。
-    _FLAG_KEYS = ["sr_entry", "sr_join", "sr_select", "sr_dungeon_enter", "sr_confirm",
+    _FLAG_KEYS = ["sr_entry", "activity_join", "sr_select", "sr_dungeon_enter", "sr_confirm",
                   "sr_continue", "sr_challenge", "sr_enter_battle", "sr_leave",
-                  "sr_fail", "sr_battle"]
+                  "sr_fail", "sr_battle", "reward_use"]
 
     CALIBRATION = {
         "regions": [
             *Task.BASE_CALIBRATION_REGIONS,
         ],
         "templates": [
+            *Task.BASE_CALIBRATION_TEMPLATES,
             ("sr_entry", "活动卡片入口", "活动列表里要点「参加」的那张卡片，框图标+文字、要独特"),
-            ("sr_join", "参加按钮", "那张卡片右侧的「参加」按钮，框按钮本身、要独特"),
             ("sr_select", "「秘境降妖」选项", "点参加后弹出的对话框里那个「秘境降妖」选项/按钮"),
             ("sr_dungeon_enter", "「进入」按钮(选副本，可选)", "若有「选择副本」界面，框左下角那个「进入」按钮。"
                                                        "几个进入长得一样，运行时只在左下角比例框里找；没有选副本环节可不标"),
@@ -243,7 +243,7 @@ class SecretRealmTask(Task):
             cx, cy, score = hit
             entry_xy = (rect[0] + cx, rect[1] + cy)
             join = self._find_join_on_row(ctx, list_region, entry_xy, threshold, loop,
-                                            "sr_join", "sr_entry")
+                                            "activity_join", "sr_entry")
             if join is not None:
                 ctx.mouse.click(join[0], join[1])
                 ctx.log(f"找到卡片（{score:.3f}）→ 点「参加」（{join[2]:.3f}），等对话框。", level="hit")
@@ -383,12 +383,59 @@ class SecretRealmTask(Task):
         if hit is not None:
             ctx.mouse.click(hit[0], hit[1])
             ctx.log(f"点「离开」（{hit[2]:.3f}）退出秘境。", level="hit")
-            self._interruptible_sleep(ctx, self._jitter(0.4, ctx))
+            self._interruptible_sleep(ctx, self._jitter(0.6, ctx))
+
+            # 循环处理可能出现的奖励弹窗
+            self._handle_rewards(ctx, rec, loop, regions, threshold)
+
             self._finish_run(ctx, rec)
             return
         if self._state_elapsed(rec) > loop.get("step_timeout_sec", 20):
             ctx.log("等「离开」按钮超时，按本轮结束处理。", level="warn")
             self._finish_run(ctx, rec)
+
+    def _handle_rewards(self, ctx, rec, loop, regions, threshold):
+        """点「离开」后循环处理奖励弹窗，点掉所有「使用」按钮。
+
+        注意：点「离开」后游戏场景在转换（秘境→主场景），需要等待场景稳定后
+        再检测奖励弹窗。奖励可能在场景转换期间或之后弹出。
+        """
+        max_rewards = 10  # 安全上限，避免无限循环
+        max_wait_sec = loop.get("reward_max_wait_sec", 5.0)  # 最多等5秒等第一个奖励
+        wait_between = loop.get("reward_wait_sec", 0.8)  # 点击后等下一个弹窗
+        handled = 0
+
+        # 阶段1：等待场景转换完成 + 首个奖励弹窗
+        t0 = time.time()
+        while time.time() - t0 < max_wait_sec:
+            if ctx.should_stop():
+                return
+            self._interruptible_sleep(ctx, self._jitter(0.3, ctx))
+            scene_rect = self._scene_rect(ctx, regions)
+            cur = win_mod.grab(scene_rect)
+            hit = self._match_scene(cur, scene_rect, "reward_use", threshold)
+            if hit is not None:
+                break
+        else:
+            # 超时无奖励，直接返回
+            return
+
+        # 阶段2：循环处理所有奖励弹窗
+        while handled < max_rewards:
+            ctx.mouse.click(hit[0], hit[1])
+            handled += 1
+            ctx.log(f"获得奖励，点「使用」（{hit[2]:.3f}），已处理 {handled} 个。", level="hit")
+
+            # 等下一个奖励弹窗
+            self._interruptible_sleep(ctx, self._jitter(wait_between, ctx))
+            scene_rect = self._scene_rect(ctx, regions)
+            cur = win_mod.grab(scene_rect)
+            hit = self._match_scene(cur, scene_rect, "reward_use", threshold)
+            if hit is None:
+                break
+
+        if handled > 0:
+            ctx.log(f"共处理 {handled} 个奖励弹窗。")
 
     def _finish_run(self, ctx, rec):
         """一轮秘境收尾：计数 + 决定该号结束还是再跑一轮。"""

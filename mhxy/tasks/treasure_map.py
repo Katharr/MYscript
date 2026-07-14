@@ -54,9 +54,9 @@ _STILL_DIFF = 8.0   # 帧差低于此视为画面静止（人物不动）的默�
 #   运行时日志会实时打印真实帧差，照着把阈值设到「静止时帧差」之上、「走动时帧差」之下即可。
 
 # 必备模板（缺失则 preflight 阻断）与可选模板（缺失仅 warn）
-#   flag_join=活动列表里「宝图任务」那一行右侧的「参加」按钮——按行匹配点它（不是点条目本身）。
-_REQUIRED_FLAGS = ["flag_treasure_entry", "flag_join", "flag_tingting",
-                   "flag_next_map", "treasure_item"]
+#   activity_join=活动列表里「宝图任务」那一行右侧的「参加」按钮——按行匹配点它（不是点条目本身）。
+_REQUIRED_FLAGS = ["flag_treasure_entry", "activity_join", "flag_tingting",
+                   "reward_use", "treasure_item"]
 
 
 @register
@@ -65,8 +65,8 @@ class TreasureMapTask(Task):
     title = "宝图"
     description = "自动开活动→收藏宝图→挖宝→领奖，一条龙（战斗交给游戏自动，支持多开轮转）"
     CHAINS_PER_WINDOW = True   # 可做「日常一条龙·每窗口独立链」
-    _FLAG_KEYS = ["flag_treasure_entry", "flag_join", "flag_tingting",
-                  "flag_battle", "flag_next_map", "treasure_item"]
+    _FLAG_KEYS = ["flag_treasure_entry", "activity_join", "flag_tingting",
+                  "flag_battle", "reward_use", "treasure_item"]
 
     CALIBRATION = {
         "regions": [
@@ -74,10 +74,9 @@ class TreasureMapTask(Task):
             ("bag_list", "背包列表区域", "背包里道具格那片区域，滚轮在此翻找藏宝图"),
         ],
         "templates": [
+            *Task.BASE_CALIBRATION_TEMPLATES,
             ("flag_treasure_entry", "宝图任务入口", "活动列表里「宝图任务」那一条，框图标+文字、要独特"),
-            ("flag_join", "参加按钮", "活动列表里「宝图任务」那一行右侧的「参加」按钮，框按钮本身、要独特"),
             ("flag_tingting", "「听听无妨」选项", "和 NPC 对话弹框里要点的那个选项"),
-            ("flag_next_map", "「下一张使用」按钮", "挖完一张后游戏自动弹出的继续按钮"),
             ("treasure_item", "藏宝图道具", "背包里藏宝图那个图标的样子"),
             ("flag_battle", "战斗界面标志(可选)", "战斗独有的画面元素，用于避免战斗期被误判卡死"),
         ],
@@ -101,9 +100,9 @@ class TreasureMapTask(Task):
                 problems.append(f"『{label}』未标定 —— 请先做标定")
 
         # 模板：挖宝必备始终要；领宝图相关仅阶段A要（含「参加」按钮）
-        need_flags = ["flag_next_map", "treasure_item"]
+        need_flags = ["reward_use", "treasure_item"]
         if not skip_collect:
-            need_flags += ["flag_treasure_entry", "flag_join", "flag_tingting"]
+            need_flags += ["flag_treasure_entry", "activity_join", "flag_tingting"]
         for tk in need_flags:
             path = templates.get(tk)
             if not path or vision.load_template(path) is None:
@@ -283,13 +282,13 @@ class TreasureMapTask(Task):
                 return (scan.SCROLL, None)
             entry_xy = (rect[0] + hit[0], rect[1] + hit[1])
             join = self._find_join_on_row(ctx, list_region, entry_xy, threshold, loop,
-                                            "flag_join", "flag_treasure_entry")
+                                            "activity_join", "flag_treasure_entry")
             if join is not None:
                 ctx.mouse.click(join[0], join[1])
                 ctx.log(f"找到「宝图任务」（{hit[2]:.3f}）→ 点「参加」（{join[2]:.3f}），开始传送找 NPC。",
                         level="hit")
                 return (scan.ACCEPT, join)
-            ctx.log("认出「宝图任务」但没找到右侧「参加」（检查 flag_join 模板/阈值）。", level="warn")
+            ctx.log("认出「宝图任务」但没找到右侧「参加」（检查 activity_join 模板/阈值）。", level="warn")
             return (scan.STAY, None)
 
         res = scan.scroll_search(
@@ -428,7 +427,7 @@ class TreasureMapTask(Task):
         scene_rect = self._scene_rect(ctx, regions)
         cur = win_mod.grab(scene_rect)
 
-        nxt = self._match_scene(cur, scene_rect, "flag_next_map", threshold)
+        nxt = self._match_scene(cur, scene_rect, "reward_use", threshold)
         if nxt is not None:
             ctx.mouse.click(nxt[0], nxt[1])
             rec["dug"] += 1
@@ -512,12 +511,12 @@ class TreasureMapTask(Task):
         """演练：周期性对【每个号】当前屏幕识别各标志，报告命中，便于用户验证模板/阈值。
         已有宝图(skip_collect)时只自检挖宝相关标志，不提阶段A的宝图入口/听听无妨/对话框。"""
         if skip_collect:
-            keys = [("flag_battle", "战斗"), ("flag_next_map", "下一张使用"),
+            keys = [("flag_battle", "战斗"), ("reward_use", "使用"),
                     ("treasure_item", "藏宝图")]
         else:
-            keys = [("flag_treasure_entry", "宝图入口"), ("flag_join", "参加按钮"),
+            keys = [("flag_treasure_entry", "宝图入口"), ("activity_join", "参加按钮"),
                     ("flag_tingting", "听听无妨"), ("flag_battle", "战斗"),
-                    ("flag_next_map", "下一张使用"), ("treasure_item", "藏宝图")]
+                    ("reward_use", "使用"), ("treasure_item", "藏宝图")]
         while not ctx.should_stop():
             if deadline and time.time() >= deadline:
                 ctx.log("演练时间上限到，停止。")
