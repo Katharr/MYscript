@@ -59,8 +59,9 @@ mhxy/
     rotation.py 多开轮转推进器：连续推进到等待点才让出；详见 docstring + memory rotation-engine
     teaming.py  TeamFormation：跨窗口组队握手编排 + run_disband() 解散队伍（每号同一套退队流程）
     inventory.py InventoryOrganizer：整理背包（翻包裹逐物使用/丢弃/出售）的可复用编排，只依赖 ctx；详见 memory organize-bag-task
+    arrange.py  arrange_windows()：从左到右水平排列多开窗口（一键五开后自动排整齐）
   tasks/  可插拔任务
-    base.py     Task 基类 + 注册表（register/get_task/all_tasks）+ _make_rotation()（包多开轮转）+ dungeon_tasks()
+    base.py     Task 基类 + 注册表（register/get_task/all_tasks）+ 11 个共用工具方法（_focus/_load_flags/_scene_rect/_grab_scene/_present/_match_scene/_find_join_on_row/_goto/_state_elapsed/_resolve_contexts/_make_rotation）+ BASE_CALIBRATION_REGIONS + dungeon_tasks()
     sniper.py   SniperTask（秒装备）：preflight() 自检 + run() 主循环；刷新=每轮重进货架 _enter_shelf()
     escort.py        EscortTask（运镖）：开活动→参加→押送普通镖银→循环押满次数
     treasure_map.py  TreasureMapTask（宝图）：开活动→收图→挖宝→领奖 两阶段状态机
@@ -71,12 +72,14 @@ mhxy/
                       复用 teaming.run_disband；通用页「一键解散」跑它，副本勾「跑完解散队伍」也调它
     taohaiqu.py      TaohaiquTask（蹈海去·50，is_dungeon=True）：组队后队长跑完整条剧情战斗，跑一遍即停
     organize_bag.py  OrganizeBagTask（整理背包）：通用页可单独跑的共享能力封装，逐号 activate→core/inventory 整理；详见 memory organize-bag-task
+    catch_ghost.py   CatchGhostTask（捉鬼）：组队后队长开活动→参加→NPC接任务→循环捉鬼（CHAINS_PER_WINDOW=True，可进一条龙）
+    five_start.py    FiveStartTask（一键五开）：运行计划任务启动客户端→开窗→选账号→登录→排队→关广告
   tools/
     calibrate.py 旧的命令行标定（已不被 GUI 调用，仅留作 CLI 备用）
   gui/
     theme.py            配色/字体/圆角令牌（改这里整体换肤）+ bind_wraplength 换行助手（见约束 8）
     app.py              主窗口：侧边导航 + 通用页(置顶,默认)/各任务Page/SettingsPage/AboutPage
-    roi_overlay.py      全屏框选组件（纯 tk，冻结截图上拖框，返回屏幕绝对 ROI）
+    roi_overlay.py      全屏框选组件（纯 tk，冻结截图上拖框，返回屏幕绝对 ROI，带鼠标放大镜辅助精确定位）
     calibrate_dialog.py GUI 内标定对话框（区域 + 模板缩略图画廊 + 加装备），按任务 CALIBRATION spec 驱动
     leader_gallery.py   队长ID 库画廊（见下「队长ID 库」约束）
     inventory_items_dialog.py 整理背包「物品清单」管理弹窗（缩略图+名字+动作下拉+框选添加，写 tasks.organize_bag.items）
@@ -92,11 +95,16 @@ mhxy/
   **铁律：监控态未触发转移时绝不 `_goto`**，否则在一个号上空转盯屏、饿死别号。详见 memory `rotation-engine`。
 - 加新任务示例：新建 `mhxy/tasks/xxx.py` 写 `@register class XxxTask(Task)`；在 `tasks/__init__.py` import；
   在 `gui/app.py` 仿 `SniperPage` 加页面 + 在 `App.NAV` 加项。
+  类上定义 `_FLAG_KEYS` 列表，`run()` 里 `self.flags = self._load_flags(tc)` 批量加载模板；
+  共用工具方法（`_focus/_scene_rect/_grab_scene/_present/_match_scene/_find_join_on_row/_goto/_state_elapsed/_resolve_contexts`）
+  已在 `Task` 基类里，直接 `self.xxx()` 调用，不要在子类重定义。
 - **日志统一到「全局日志面板」（约束，别再各页造日志框）**：日志框只此一处——常驻主窗口右侧（`App._build_log_panel`），
   统一出口 `App.log_line(msg, level, source)`。新页面**不要**自建日志框：设个类属性 `LOG_SOURCE = "短名"`，
   页内 `_log_line` 照范式写成一行转发 `self.app.log_line(msg, level, getattr(self,"LOG_SOURCE",None))`，
   全局面板会按 source 打来源标签（如「秒装备 ›」）。一页里有多种来源（如通用页的组队/整理背包）就在
   `pump`/各消息处显式把第三个参 source 传成对应短名覆盖。
+- **一条龙可进任务发现**：`daily.py` 的 `CHAINABLE` 通过 `all_tasks()` 自动发现所有设置了 `CHAINS_PER_WINDOW = True`
+  的任务类（加新任务只需设此属性即可进一条龙，无需手动改 daily.py）。
 - **副本中枢（「刷副本」页 = DungeonPage）**：副本统一收进该页用「选择副本」下拉切换、选谁跑谁。
   **加新副本只需写个 `is_dungeon = True` 的 Task**（照 `taohaiqu.py`）、在 `tasks/__init__.py` import——
   `base.dungeon_tasks()` 自动把它列进下拉，GUI 不用改。约定：选谁跑存 `tasks.dungeon.selected`；每个副本自己的
