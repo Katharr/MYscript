@@ -63,7 +63,7 @@ class CatchGhostTask(Task):
         "ghost_task",        # 任务列表·捉鬼任务条目
         "ghost_round_end",   # 一轮结束弹窗
         "ghost_confirm",     # 确定按钮（一轮结束弹窗里）
-        "ghost_battle",      # 战斗界面标志（可选）
+        "battle_flag",      # 战斗界面标志（可选）
     ]
 
     CALIBRATION = {
@@ -71,13 +71,11 @@ class CatchGhostTask(Task):
             *Task.BASE_CALIBRATION_REGIONS,
         ],
         "templates": [
-            *Task.BASE_CALIBRATION_TEMPLATES,
             ("ghost_entry", "捉鬼入口", "活动列表里「捉鬼」那一条，框图标+文字（左侧），不要框参加按钮"),
             ("ghost_accept_task", "接任务按钮", "NPC对话框里的「捉鬼」选项/按钮，用于接任务"),
             ("ghost_task", "任务列表·捉鬼任务条目", "点接任务按钮后，任务列表里「捉鬼」这一条任务——先点中它，才开始捉鬼"),
             ("ghost_round_end", "一轮结束弹窗", "一轮捉鬼结束后弹出的提示框（可框整个弹窗或独特部分）"),
             ("ghost_confirm", "确定按钮", "一轮结束弹窗里的「确定」按钮"),
-            ("ghost_battle", "战斗界面标志(可选)", "战斗独有的画面元素，用于避免战斗期被误判卡死"),
         ],
         "watchlist": False,
     }
@@ -140,7 +138,7 @@ class CatchGhostTask(Task):
             problems.append("打开『任务列表』缺快捷键：请在 config.hotkeys.open_task 填上（如 alt+y）")
 
         # 可选模板缺失只提示
-        optional = ["ghost_battle"]
+        optional = ["battle_flag"]
         for tk in optional:
             if not tc.get("templates", {}).get(tk) or vision.load_template(tc.get("templates", {}).get(tk)) is None:
                 ctx.log(f"提示：可选模板『{tk}』未标定，将降级靠超时推进（可靠性略降）。", level="warn")
@@ -182,7 +180,7 @@ class CatchGhostTask(Task):
                 member_pairs = []
                 for i, w in enumerate(wins):
                     child = ctx.make_child(w, f"号{i + 1}")
-                    if i == cap:
+                    if i == captain_idx:
                         cap_pair = (child, TeamFormation.ROLE_CAPTAIN)
                     else:
                         member_pairs.append((child, TeamFormation.ROLE_MEMBER))
@@ -271,7 +269,7 @@ class CatchGhostTask(Task):
                 cur = win_mod.grab(scene_rect)
 
                 # 检查战斗状态（可选）
-                in_battle = self._present(cur, "ghost_battle", threshold)
+                in_battle = self._present(cur, "battle_flag", threshold)
                 if in_battle:
                     # 战斗中，不计超时，继续监控（战斗持续时间长，降低检测频率）
                     battle_tick = loop.get("battle_check_interval_sec", 20.0)

@@ -25,7 +25,25 @@ from ..tasks.base import Task
 
 # 非注册的「共享命名空间」标定 spec（key = 写入 cfg.tasks.<key>）。
 # 组队是跨任务共享资产、不是可运行任务，故 get_task("teaming") 拿不到，走这里。
-_VIRTUAL_SPECS = {"teaming": ("组队（全局共享）", TEAM_CALIBRATION)}
+# _shared 是通用识别（活动列表区域/参加按钮/使用按钮），从各 task 标定里移出统一标定。
+_VIRTUAL_SPECS = {
+    "teaming": ("组队（全局共享）", TEAM_CALIBRATION),
+    "_shared": ("通用识别（全局共享）", {
+        "regions": [
+            ("activity_list", "活动列表区域",
+             "「活动」界面里那片列表，滚轮在此翻找活动条目"),
+        ],
+        "templates": [
+            ("activity_join", "参加按钮",
+             "活动列表里条目右侧的「参加」按钮，框按钮本身、要独特。各活动共用"),
+            ("reward_use", "「使用」按钮",
+             "游戏奖励弹窗里的「使用」按钮（如宝图下一张、消耗品获取通知等）。各任务共用"),
+            ("battle_flag", "战斗界面标志",
+             "战斗独有的画面元素，用于各任务判断是否在战斗中，避免误判卡死。各任务共用"),
+        ],
+        "watchlist": False,
+    }),
+}
 
 
 # ----------------------------------------------------------------------
@@ -605,7 +623,9 @@ class CalibrateDialog(ctk.CTkToplevel):
                 self._toast(f"❌ 未找到「{name}」：模板可能不准确或不在当前窗口中", T.DANGER)
 
     def _save(self):
-        cfg_mod.set_task_config(self.cfg, self.task_name, self.tc)
+        # 虚拟 spec（以下划线开头）不写入 tasks 命名空间，避免污染 cfg["tasks"]["_shared"]
+        if not self.task_name.startswith("_"):
+            cfg_mod.set_task_config(self.cfg, self.task_name, self.tc)
         cfg_mod.save_config(self.cfg)
 
     def _toast(self, msg, color=T.TEXT_DIM):

@@ -186,7 +186,6 @@ DEFAULT_CONFIG = {
                 "flag_treasure_entry": None, # 活动列表里「宝图任务」条目
                 "flag_join": None,           # 「宝图任务」那一行右侧的「参加」按钮（按行匹配点它）
                 "flag_tingting": None,       # 对话框「听听无妨」选项
-                "flag_battle": None,         # 战斗界面独有标志（监控用，避免误判卡死）
                 "flag_next_map": None,       # 挖完弹出的「下一张使用」按钮
                 "treasure_item": None        # 背包里藏宝图道具图标（双击用图靠它定位）
             }
@@ -226,7 +225,6 @@ DEFAULT_CONFIG = {
                 "escort_silver": None,   # 对话框「押送普通镖银」按钮
                 "escort_confirm": None,  # 点押送后再弹出的「确认」按钮
                 "escort_ongoing": None,  # 运镖途中常驻的「运镖中」标志（在=还在运镖、不停）
-                "escort_battle": None    # 战斗界面独有标志（监控用，避免误判结束）
             }
         },
 
@@ -272,7 +270,6 @@ DEFAULT_CONFIG = {
                 "sr_enter_battle": None,     # 难度关卡的「进入战斗」按钮（监控期一出现就点）
                 "sr_leave": None,            # 「离开」按钮（失败/超时/结束后点它退出秘境）
                 "sr_fail": None,             # 「失败」标志（可选，判定该退出）
-                "sr_battle": None            # 战斗界面独有标志（可选，仅日志诊断）
             }
         },
 
@@ -480,7 +477,10 @@ DEFAULT_CONFIG = {
                 "welcome_screen": None      # 开屏宣传广告（可选）
             }
         }
-    }
+    },
+    # 全局共享标定（由各 task 的 CALIBRATION 中移出，统一管理）
+    "shared_templates": {},  # {"activity_join": "templates/tm_activity_join.png", ...}
+    "shared_regions": {},    # {"activity_list": [x, y, w, h]}
 }
 
 
@@ -506,11 +506,17 @@ _JOIN_MIGRATION = {
     "sr_join": "activity_join",
     "flag_join": "activity_join",  # treasure_map 旧 key
 }
+# 旧的 task-specific battle keys → 共享 battle_flag 的迁移映射
+_BATTLE_MIGRATION = {
+    "escort_battle": "battle_flag",
+    "flag_battle": "battle_flag",
+    "sr_battle": "battle_flag",
+    "ghost_battle": "battle_flag",
+}
 
 
 def _migrate_join_keys(cfg):
-    """将旧的 task-specific join keys 迁移到共享的 shared_templates，并迁移 activity_list 到 shared_regions。"""
-    # 迁移 join keys
+    """将旧的 task-specific join/activity_list/battle keys 迁移到共享命名空间。"""
     shared_templates = cfg.setdefault("shared_templates", {})
     tasks = cfg.get("tasks", {})
     for task_name, task_cfg in tasks.items():
@@ -520,9 +526,18 @@ def _migrate_join_keys(cfg):
                 if new_key not in shared_templates:
                     shared_templates[new_key] = templates[old_key]
                 del templates[old_key]
+        # 迁移 battle 键
+        for old_key, new_key in _BATTLE_MIGRATION.items():
+            if old_key in templates:
+                if new_key not in shared_templates:
+                    shared_templates[new_key] = templates[old_key]
+                del templates[old_key]
         # 清理任务自己的 activity_join（应该使用共享的）
         if "activity_join" in templates:
             del templates["activity_join"]
+        # 清理任务自己的 battle_flag（应该使用共享的）
+        if "battle_flag" in templates:
+            del templates["battle_flag"]
     # 迁移 activity_list 区域
     shared_regions = cfg.setdefault("shared_regions", {})
     for task_name, task_cfg in tasks.items():

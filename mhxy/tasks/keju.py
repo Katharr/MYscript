@@ -54,7 +54,6 @@ class KejuTask(Task):
             *Task.BASE_CALIBRATION_REGIONS,
         ],
         "templates": [
-            *Task.BASE_CALIBRATION_TEMPLATES,
             ("keju_entry", "科举入口", "活动列表里「科举」那一条，框图标+文字（左侧），不要框参加按钮"),
             ("keju_answer_a", "答案A按钮", "选择题的第一个选项按钮（只选A）"),
             ("keju_close", "关闭按钮", "面板右上角的关闭按钮（X 或 关闭）"),
@@ -183,47 +182,7 @@ class KejuTask(Task):
     # 流程步骤
     # ------------------------------------------------------------------
     def _do_open_activity(self, ctx, rec, loop, regions, threshold):
-        """发活动快捷键，检测活动列表是否出现，失败重试"""
-        self._focus(ctx)
-
-        max_retries = loop.get("activity_open_retries", 3)
-        retry_delay = loop.get("activity_open_delay_sec", 1.0)
-
-        for attempt in range(1, max_retries + 1):
-            ctx.log(f"发送活动快捷键（尝试 {attempt}/{max_retries}）…", level="info")
-            if not ctx.send_hotkey("open_activity"):
-                ctx.log("打不开活动界面（open_activity 快捷键未配置），放弃该号。", level="error")
-                rec["done"] = True
-                return
-            self._interruptible_sleep(ctx, retry_delay)
-
-            # 检测活动列表是否出现
-            list_region = regions.get("activity_list")
-            if list_region:
-                rect = ctx.window.region_to_screen_rect(list_region)
-                scene = win_mod.grab(rect) if rect else None
-                if scene is not None:
-                    for flag_key in ["keju_entry", "activity_join"]:
-                        tpl = self.flags.get(flag_key)
-                        if tpl is not None:
-                            hit = vision.match(scene, tpl, threshold)
-                            if hit:
-                                ctx.log("✓ 活动列表已打开（检测到活动卡片）。", level="info")
-                                self._goto(rec, S_FIND_CARD)
-                                return
-                    ctx.log("活动列表已打开（截图成功，未立即找到科举卡片）。", level="info")
-                    self._goto(rec, S_FIND_CARD)
-                    return
-            else:
-                ctx.log("已发送活动快捷键（未标定活动列表区域，跳过检测）。", level="info")
-                self._goto(rec, S_FIND_CARD)
-                return
-
-            if attempt < max_retries:
-                ctx.log(f"活动列表未出现，{retry_delay}秒后重试…", level="warn")
-
-        ctx.log("❌ 发送活动快捷键多次后仍未检测到活动列表，放弃该号。", level="error")
-        rec["done"] = True
+        self._ensure_activity_open(ctx, rec, loop, regions, threshold, S_FIND_CARD)
 
     def _do_find_card(self, ctx, rec, loop, regions, threshold):
         """滚轮找科举条目 → 点参加"""

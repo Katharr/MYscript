@@ -54,20 +54,18 @@ class EscortTask(Task):
     # 模板键（用 escort_ 前缀，避免和「宝图」任务的同名模板在磁盘上互相覆盖——
     #   标定存盘按 templates/tm_<key>.png 命名，只按 key 区分，不区分任务）。
     _FLAG_KEYS = ["escort_entry", "activity_join", "escort_silver", "escort_confirm",
-                  "escort_ongoing", "escort_battle"]
+                  "escort_ongoing", "battle_flag"]
 
     CALIBRATION = {
         "regions": [
             *Task.BASE_CALIBRATION_REGIONS,
         ],
         "templates": [
-            *Task.BASE_CALIBRATION_TEMPLATES,
             ("escort_entry", "运镖入口", "活动列表里「运镖」那一条，框图标+文字、要独特"),
             ("escort_silver", "「押送普通镖银」按钮", "弹出对话框里要点的那个「押送普通镖银」按钮"),
             ("escort_confirm", "「确认」按钮", "点完「押送普通镖银」后再弹出的确认按钮，框按钮本身、要独特"),
             ("escort_ongoing", "「运镖中」标志", "运镖途中一直挂在屏幕上的标志（如镖银图标/运镖任务追踪条），"
                                               "只要它在就说明还在运镖、不会停。框它独特的部分"),
-            ("escort_battle", "战斗界面标志(可选)", "战斗独有的画面元素，用于避免战斗期被误判为运镖结束"),
         ],
         "watchlist": False,
     }
@@ -97,8 +95,8 @@ class EscortTask(Task):
                             "，请先打开游戏并在「选择窗口」里选好")
 
         # 可选模板缺失只提示
-        if not templates.get("escort_battle") or vision.load_template(templates.get("escort_battle")) is None:
-            ctx.log("提示：可选模板『escort_battle』未标定，将降级靠帧差+超时推进（可靠性略降）。", level="warn")
+        if not templates.get("battle_flag") or vision.load_template(templates.get("battle_flag")) is None:
+            ctx.log("提示：可选模板『battle_flag』未标定，将降级靠帧差+超时推进（可靠性略降）。", level="warn")
 
         return (len(problems) == 0), problems
 
@@ -201,14 +199,7 @@ class EscortTask(Task):
 
     # ---- 开活动 ----
     def _do_open_activity(self, ctx, rec, loop, regions, threshold):
-        self._focus(ctx)
-        if not ctx.send_hotkey("open_activity"):
-            ctx.log("打不开活动界面（open_activity 快捷键未配置），放弃该号。", level="error")
-            rec["done"] = True
-            return
-        ctx.log("已打开活动，滚轮翻找「运镖」…")
-        self._interruptible_sleep(ctx, self._jitter(0.6, ctx))
-        self._goto(rec, S_FIND_CARD)
+        self._ensure_activity_open(ctx, rec, loop, regions, threshold, S_FIND_CARD)
 
     # ---- 找「运镖」条目 → 点「参加」----
     #   用户要求：滚轮查找要在【同一个号】上一气呵成跑完（找到/翻完都没找到才轮转下个号），
@@ -323,7 +314,7 @@ class EscortTask(Task):
             return
 
         ongoing = self._present(cur, "escort_ongoing", threshold)
-        in_battle = self._present(cur, "escort_battle", threshold)
+        in_battle = self._present(cur, "battle_flag", threshold)
 
         if ongoing or in_battle:
             # 明确在运镖途中/战斗中 → 绝不停，刷新计时
@@ -400,7 +391,7 @@ class EscortTask(Task):
         """演练：周期性对【每个号】当前屏幕识别各标志，报告命中，便于用户验证模板/阈值。"""
         keys = [("escort_entry", "运镖入口"), ("activity_join", "参加按钮"),
                 ("escort_silver", "押送普通镖银"), ("escort_confirm", "确认"),
-                ("escort_ongoing", "运镖中"), ("escort_battle", "战斗")]
+                ("escort_ongoing", "运镖中"), ("battle_flag", "战斗")]
         while not ctx.should_stop():
             if deadline and time.time() >= deadline:
                 ctx.log("演练时间上限到，停止。")

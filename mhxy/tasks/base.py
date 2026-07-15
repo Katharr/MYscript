@@ -205,18 +205,12 @@ class Task:
     # 避免每个任务把「主识别区/活动列表区域」等公共项各抄一遍。
     # 注意：大多数模板【键名】是 task 专有的（如 escort_entry），绝不能统一改名——
     # 标定存盘按 templates/tm_<key>.png，改名会让用户已有的标定文件失效。
-    # 但「参加」按钮在活动列表里视觉完全一致，抽取为 activity_join 通用一次标定。
-    # 「使用」按钮是游戏奖励弹窗的通用按钮（如宝图下一张、消耗品获取通知等）。
+    # 但「参加」按钮和「使用」按钮是通用共享项，从各 task 标定里移到了「通用」页统一标定。
     BASE_CALIBRATION_REGIONS = [
         ("scene", "主识别区", "留空=整个窗口当识别区(推荐)；对话框/战斗等标志都在这里找", True),
-        ("activity_list", "活动列表区域", "「活动」界面里那片列表，滚轮在此翻找活动条目"),
-    ]
-    BASE_CALIBRATION_TEMPLATES = [
-        ("activity_join", "参加按钮", "活动列表里条目右侧的「参加」按钮，框按钮本身、要独特。各活动共用"),
-        ("reward_use", "「使用」按钮", "游戏奖励弹窗里的「使用」按钮（如宝图下一张、消耗品获取通知等）。各任务共用"),
     ]
     # 共享模板键：标定一次，所有任务共用。存储在 cfg["shared_templates"] 而非各任务命名空间。
-    SHARED_TEMPLATE_KEYS = {"activity_join", "reward_use"}
+    SHARED_TEMPLATE_KEYS = {"activity_join", "reward_use", "battle_flag"}
     # 共享区域键：标定一次，所有任务共用。存储在 cfg["shared_regions"] 而非各任务命名空间。
     SHARED_REGION_KEYS = {"activity_list"}
 
@@ -322,6 +316,60 @@ class Task:
             return None
         cx, cy, score = m
         return (rx + x0 + cx, ry + y0 + cy, score)
+
+    def _ensure_activity_open(self, ctx, rec, loop, regions, threshold, next_state):
+        """确保活动列表打开：发快捷键 + 检测是否出现，失败重试。
+
+        Args:
+            ctx: 上下文
+            rec: 状态记录
+            loop: 配置的 loop 参数
+            regions: 标定区域
+            threshold: 匹配阈值
+            next_state: 成功后跳转的状态
+        """
+        self._focus(ctx)
+
+        max_retries = loop.get("activity_open_retries", 3)
+        retry_delay = loop.get("activity_open_delay_sec", 1.0)
+
+        for attempt in range(1, max_retries + 1):
+            ctx.log(f"发送活动快捷键（尝试 {attempt}/{max_retries}）…")
+            if not ctx.send_hotkey("open_activity"):
+                ctx.log("打不开活动界面（open_activity 快捷键未配置），放弃该号。", level="error")
+                rec["done"] = True
+                return
+
+            self._interruptible_sleep(ctx, retry_delay)
+
+            # 检测活动列表是否出现：匹配 activity_join（通用模板）
+            list_region = regions.get("activity_list")
+            if list_region:
+                rect = ctx.window.region_to_screen_rect(list_region)
+                scene = win_mod.grab(rect) if rect else None
+                if scene is not None:
+                    tpl = self.flags.get("activity_join")
+                    if tpl is not None:
+                        hit = vision.match(scene, tpl, threshold)
+                        if hit:
+                            ctx.log("✓ 活动列表已打开（检测到「参加」按钮）。")
+                            self._goto(rec, next_state)
+                            return
+                    # 截图成功但未匹配到，也认为已打开（可能刚好在边界外）
+                    ctx.log("活动列表已打开（截图成功）。")
+                    self._goto(rec, next_state)
+                    return
+            else:
+                # 未标定活动列表区域，跳过检测
+                ctx.log("已发送活动快捷键（未标定活动列表区域，跳过检测）。")
+                self._goto(rec, next_state)
+                return
+
+            if attempt < max_retries:
+                ctx.log(f"活动列表未出现，{retry_delay}秒后重试…", level="warn")
+
+        ctx.log("❌ 发送活动快捷键多次后仍未检测到活动列表，放弃该号。", level="error")
+        rec["done"] = True
 
     @staticmethod
     def _goto(rec, state):

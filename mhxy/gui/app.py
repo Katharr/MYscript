@@ -3320,6 +3320,7 @@ class GeneralPage(ctk.CTkFrame):
         self._team_cal_dialog = None    # 「标定（组队）」去重槽（队长ID 走无弹窗直接标定，无需去重槽）
         self._ob_cal_dialog = None      # 「标定（整理背包）」去重槽
         self._fs_cal_dialog = None      # 「标定（五开）」去重槽
+        self._shared_cal_dialog = None  # 「标定（通用识别）」去重槽
         self.btn_ob = None          # 「一键整理」按钮（_refresh_body 每次重建）
         self.switch_ob = None       # 整理背包实战/演练开关
         self.switch_auto_ob = None  # 「自动整理背包」开关（任何任务检测到背包满自动整理）
@@ -3579,6 +3580,9 @@ class GeneralPage(ctk.CTkFrame):
 
         # ── 整理背包（跨任务共享：任何任务流程都可穿插调用，这里可单独一键运行）──
         self._build_organize_card()
+
+        # ── 通用识别标定（全局共享：活动列表区域 + 参加按钮 + 使用按钮）──
+        self._build_shared_calibration_card()
 
         # ── 窗口尺寸归一化 ──
         c2 = self._card()
@@ -4228,6 +4232,63 @@ class GeneralPage(ctk.CTkFrame):
                            "warn" if not tpl_ok else "info", "整理背包")
         else:
             self._log_line("已关闭「自动整理背包」。", "info", "整理背包")
+
+    # ------------------------------------------------------------------
+    # 通用识别标定（全局共享：活动列表区域 + 参加按钮 + 使用按钮）
+    # ------------------------------------------------------------------
+    def _build_shared_calibration_card(self):
+        """标定「活动列表区域」+「参加按钮」+「使用按钮」（全局共享）。"""
+        cfg = self.cfg
+        shared_regions = cfg.get("shared_regions", {}) or {}
+        shared_templates = cfg.get("shared_templates", {}) or {}
+        rdone = 1 if shared_regions.get("activity_list") else 0
+        tdone = sum(1 for k in ("activity_join", "reward_use") if shared_templates.get(k))
+        ready = (rdone == 1 and tdone == 2)
+
+        c = self._card()
+        head = ctk.CTkFrame(c, fg_color="transparent")
+        head.pack(fill="x", padx=10, pady=(8, 4))
+        head.grid_columnconfigure(0, weight=1)
+        txt = ctk.CTkFrame(head, fg_color="transparent")
+        txt.grid(row=0, column=0, sticky="ew")
+        ctk.CTkLabel(txt, text="通用识别（全局共享）", font=self.fonts["h2"], text_color=T.TEXT).pack(anchor="w")
+        ctk.CTkLabel(txt, text=f"区域 {rdone}/1，模板 {tdone}/2 已标定"
+                               + ("　✓ 已就绪" if ready else "　（还需标定）"),
+                     font=self.fonts["body"],
+                     text_color=T.SUCCESS if ready else T.WARN).pack(anchor="w", pady=(4, 0))
+        sub = ctk.CTkLabel(txt, text="「活动列表区域」「参加按钮」「使用按钮」是所有用到活动列表的任务共用，"
+                                     "标定一次全局生效，不再在每个任务里重复标定。",
+                          font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
+        sub.pack(fill="x", pady=(2, 0))
+        bind_wraplength(sub)
+        btns = ctk.CTkFrame(head, fg_color="transparent")
+        btns.grid(row=0, column=1, padx=(12, 0))
+        ctk.CTkButton(btns, text="标定（通用识别）", font=self.fonts["body"], height=28, width=90,
+                      corner_radius=T.RADIUS_SM, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
+                      text_color=T.ON_ACCENT, command=self._open_shared_calibrate).pack()
+
+    def _open_shared_calibrate(self):
+        """打开通用识别标定（_shared 虚拟 spec，存 cfg.shared_regions/shared_templates）。"""
+        existing = self._shared_cal_dialog
+        if existing is not None:
+            try:
+                if existing.winfo_exists():
+                    existing.lift()
+                    existing.focus_force()
+                    return
+            except Exception:
+                pass
+        from .calibrate_dialog import CalibrateDialog
+
+        def _after():
+            self._shared_cal_dialog = None
+            self.refresh()
+
+        try:
+            self._shared_cal_dialog = CalibrateDialog(self.app, task_name="_shared", on_done=_after)
+        except Exception as e:
+            self._shared_cal_dialog = None
+            self.app.toast(f"打开通用识别标定失败：{e}")
 
     def _start_organize(self):
         if self.runner_ob and self.runner_ob.is_running():

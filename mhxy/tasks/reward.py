@@ -32,7 +32,6 @@ class RewardTask(Task):
     CALIBRATION = {
         "regions": [
             ("scene", "主识别区", "留空=整个窗口当识别区(推荐)", True),
-            ("activity_list", "活动列表区域", "「活动」界面里那片列表，奖励在顶端"),
         ],
         "templates": [
             ("reward_entry", "奖励按钮", "活动列表顶端的奖励图标（5个奖励共用一个标定，从上到下点击）"),

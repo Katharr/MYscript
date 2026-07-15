@@ -66,7 +66,7 @@ class TreasureMapTask(Task):
     description = "自动开活动→收藏宝图→挖宝→领奖，一条龙（战斗交给游戏自动，支持多开轮转）"
     CHAINS_PER_WINDOW = True   # 可做「日常一条龙·每窗口独立链」
     _FLAG_KEYS = ["flag_treasure_entry", "activity_join", "flag_tingting",
-                  "flag_battle", "reward_use", "treasure_item"]
+                  "battle_flag", "reward_use", "treasure_item"]
 
     CALIBRATION = {
         "regions": [
@@ -74,11 +74,9 @@ class TreasureMapTask(Task):
             ("bag_list", "背包列表区域", "背包里道具格那片区域，滚轮在此翻找藏宝图"),
         ],
         "templates": [
-            *Task.BASE_CALIBRATION_TEMPLATES,
             ("flag_treasure_entry", "宝图任务入口", "活动列表里「宝图任务」那一条，框图标+文字、要独特"),
             ("flag_tingting", "「听听无妨」选项", "和 NPC 对话弹框里要点的那个选项"),
             ("treasure_item", "藏宝图道具", "背包里藏宝图那个图标的样子"),
-            ("flag_battle", "战斗界面标志(可选)", "战斗独有的画面元素，用于避免战斗期被误判卡死"),
         ],
         "watchlist": False,
     }
@@ -120,7 +118,7 @@ class TreasureMapTask(Task):
                             "，请先打开游戏并在「选择窗口」里选好")
 
         # 可选模板缺失只提示
-        optional = ["flag_battle"]
+        optional = ["battle_flag"]
         for tk in optional:
             if not templates.get(tk) or vision.load_template(templates.get(tk)) is None:
                 ctx.log(f"提示：可选模板『{tk}』未标定，将降级靠帧差+超时推进（可靠性略降）。", level="warn")
@@ -256,14 +254,7 @@ class TreasureMapTask(Task):
 
     # ---- 阶段 A：开活动 ----
     def _do_open_activity(self, ctx, rec, loop, regions, threshold):
-        self._focus(ctx)
-        if not ctx.send_hotkey("open_activity"):
-            ctx.log("打不开活动界面（open_activity 快捷键未配置），放弃该号。", level="error")
-            rec["done"] = True
-            return
-        ctx.log("已打开活动，滚轮翻找「宝图任务」…")
-        self._interruptible_sleep(ctx, self._jitter(0.6, ctx))
-        self._goto(rec, S_FIND_CARD)
+        self._ensure_activity_open(ctx, rec, loop, regions, threshold, S_FIND_CARD)
 
     # ---- 阶段 A：找卡片 → 点「参加」（每访问一次：找不到就滚一屏，超 scroll_max_tries 屏则恢复）----
     # 用户要求：滚轮查找在【同一个号】上一气呵成跑完（找到/翻完才轮转下个号），不在滚动中途返回。
@@ -347,7 +338,7 @@ class TreasureMapTask(Task):
             return
         scene_rect = self._scene_rect(ctx, regions)
         cur = win_mod.grab(scene_rect)
-        in_battle = self._present(cur, "flag_battle", threshold)
+        in_battle = self._present(cur, "battle_flag", threshold)
         diff = self._frame_diff(rec["last"], cur) if rec["last"] is not None else None
         if in_battle:
             rec["still_since"], rec["last"] = None, None   # 战斗中不计静止
@@ -436,7 +427,7 @@ class TreasureMapTask(Task):
             self._interruptible_sleep(ctx, self._jitter(1.0, ctx))
             return
 
-        in_battle = self._present(cur, "flag_battle", threshold)
+        in_battle = self._present(cur, "battle_flag", threshold)
         diff = self._frame_diff(rec["last"], cur) if rec["last"] is not None else None
         if in_battle:
             rec["t0"], rec["last"], rec["still_since"] = time.time(), None, None   # 战斗中刷新计时
@@ -511,11 +502,11 @@ class TreasureMapTask(Task):
         """演练：周期性对【每个号】当前屏幕识别各标志，报告命中，便于用户验证模板/阈值。
         已有宝图(skip_collect)时只自检挖宝相关标志，不提阶段A的宝图入口/听听无妨/对话框。"""
         if skip_collect:
-            keys = [("flag_battle", "战斗"), ("reward_use", "使用"),
+            keys = [("battle_flag", "战斗"), ("reward_use", "使用"),
                     ("treasure_item", "藏宝图")]
         else:
             keys = [("flag_treasure_entry", "宝图入口"), ("activity_join", "参加按钮"),
-                    ("flag_tingting", "听听无妨"), ("flag_battle", "战斗"),
+                    ("flag_tingting", "听听无妨"), ("battle_flag", "战斗"),
                     ("reward_use", "使用"), ("treasure_item", "藏宝图")]
         while not ctx.should_stop():
             if deadline and time.time() >= deadline:

@@ -56,7 +56,6 @@ class TaohaiquTask(Task):
             *Task.BASE_CALIBRATION_REGIONS,
         ],
         "templates": [
-            *Task.BASE_CALIBRATION_TEMPLATES,
             ("thq_entry", "活动卡片入口", "活动列表里「蹈海去」那张卡片，框图标+文字、要独特"),
             ("thq_select", "「选择副本」按钮", "寻路到 NPC 后对话框里的「选择副本」按钮"),
             ("thq_enter", "蹈海去「进入」按钮", "副本列表里蹈海去【下方】的「进入」按钮。几个进入长得一样，"

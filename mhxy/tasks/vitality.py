@@ -142,22 +142,6 @@ class VitalityTask(Task):
 
         ctx.log("所有号使用活力任务完成。", level="hit")
 
-    # ------------------------------------------------------------------
-    # 日常一条龙·每窗口独立链：暴露「单窗口一份 record + 单步推进函数」
-    # ------------------------------------------------------------------
-    def make_chain_driver(self, wctx):
-        """给定单窗口上下文，返回 (record, step_fn)。step_fn() 推进该窗口本任务状态机一步。
-        vitality 是简单任务：一轮 run 就完成，所以 step_fn 直接跑 run()。"""
-        tc = wctx.task_cfg(self.name)
-        self.flags = self._load_flags(tc)
-        rec = {"ctx": wctx, "done": False, "dead_logged": False}
-        def step():
-            if rec["done"]:
-                return
-            self._run_single(wctx, tc)
-            rec["done"] = True
-        return rec, step
-
     def _run_single(self, ctx, tc):
         """单号执行使用活力"""
         dry_run = tc.get("dry_run", True)

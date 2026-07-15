@@ -59,14 +59,13 @@ class SecretRealmTask(Task):
     # 模板键（用 sr_ 前缀，避免与运镖/宝图同名模板在磁盘互相覆盖——存盘按 templates/tm_<key>.png）。
     _FLAG_KEYS = ["sr_entry", "activity_join", "sr_select", "sr_dungeon_enter", "sr_confirm",
                   "sr_continue", "sr_challenge", "sr_enter_battle", "sr_leave",
-                  "sr_fail", "sr_battle", "reward_use"]
+                  "sr_fail", "battle_flag", "reward_use"]
 
     CALIBRATION = {
         "regions": [
             *Task.BASE_CALIBRATION_REGIONS,
         ],
         "templates": [
-            *Task.BASE_CALIBRATION_TEMPLATES,
             ("sr_entry", "活动卡片入口", "活动列表里要点「参加」的那张卡片，框图标+文字、要独特"),
             ("sr_select", "「秘境降妖」选项", "点参加后弹出的对话框里那个「秘境降妖」选项/按钮"),
             ("sr_dungeon_enter", "「进入」按钮(选副本，可选)", "若有「选择副本」界面，框左下角那个「进入」按钮。"
@@ -77,7 +76,6 @@ class SecretRealmTask(Task):
             ("sr_enter_battle", "「进入战斗」按钮", "难度关卡处不再自动、需要手动点的「进入战斗」按钮（监控期一出现就点）"),
             ("sr_leave", "「离开」按钮", "失败/超时后点的「离开」按钮，点它退出秘境"),
             ("sr_fail", "「失败」标志(可选)", "战斗失败时屏幕上的「失败」字样/弹窗，判定该退出（先点它结算，离开才点得到）"),
-            ("sr_battle", "战斗界面标志(可选)", "战斗独有的画面元素，仅用于日志诊断"),
         ],
         "watchlist": False,
     }
@@ -108,7 +106,8 @@ class SecretRealmTask(Task):
 
         # 可选模板缺失只提示
         for tk, label in [("sr_dungeon_enter", "选副本-进入"), ("sr_confirm", "确定(选副本后才有)"),
-                          ("sr_enter_battle", "进入战斗(难度关卡)"), ("sr_fail", "失败"), ("sr_battle", "战斗")]:
+                          ("sr_enter_battle", "进入战斗(难度关卡)"), ("sr_fail", "失败"),
+                          ("battle_flag", "战斗标志(共享)")]:
             if not templates.get(tk) or vision.load_template(templates.get(tk)) is None:
                 ctx.log(f"提示：可选模板『{tk}』({label})未标定，将降级处理（可靠性略降）。", level="warn")
 
@@ -217,14 +216,7 @@ class SecretRealmTask(Task):
 
     # ---- 开活动 ----
     def _do_open_activity(self, ctx, rec, loop, regions, threshold):
-        self._focus(ctx)
-        if not ctx.send_hotkey("open_activity"):
-            ctx.log("打不开活动界面（open_activity 快捷键未配置），放弃该号。", level="error")
-            rec["done"] = True
-            return
-        ctx.log("已打开活动，翻找秘境降妖卡片…")
-        self._interruptible_sleep(ctx, self._jitter(0.6, ctx))
-        self._goto(rec, S_FIND_CARD)
+        self._ensure_activity_open(ctx, rec, loop, regions, threshold, S_FIND_CARD)
 
     # ---- 找卡片 → 点「参加」----
     #   用户要求：滚轮查找在【同一个号】上一气呵成跑完（找到/翻完才轮转下个号），不在滚动中途返回。
@@ -371,7 +363,7 @@ class SecretRealmTask(Task):
         # 否则：自动战斗中/过场——节流打印诊断
         now = time.time()
         if now - rec["t_diag"] >= 10.0:
-            st = "战斗中" if self._present(cur, "sr_battle", threshold) else "自动推进/过场"
+            st = "战斗中" if self._present(cur, "battle_flag", threshold) else "自动推进/过场"
             ctx.log(f"监控…{st}（已 {now - rec['t_battle']:.0f}/{overall:.0f}s）")
             rec["t_diag"] = now
 
@@ -494,7 +486,7 @@ class SecretRealmTask(Task):
                 ("sr_dungeon_enter", "选副本-进入"), ("sr_confirm", "确定"),
                 ("sr_continue", "继续挑战"), ("sr_challenge", "挑战"),
                 ("sr_enter_battle", "进入战斗"), ("sr_leave", "离开"),
-                ("sr_fail", "失败"), ("sr_battle", "战斗")]
+                ("sr_fail", "失败"), ("battle_flag", "战斗")]
         while not ctx.should_stop():
             if deadline and time.time() >= deadline:
                 ctx.log("演练时间上限到，停止。")
