@@ -545,7 +545,8 @@ class TeamFormation:
 
     def _find_arrow_on_row(self, ctx, region_key, leader_screen_xy):
         """在队长ID命中【行/卡片】的右侧找箭头按钮(team_arrow)。返回屏幕 (x, y, score)。
-        参照 secret_realm._find_join_on_row 的「按行」思路抗布局漂移、不串到别人那行：
+        参照 core.list_row（活动列表「条目 → 右侧参加按钮」定位）的「按行 + 按模板比例撑开带」思路
+        抗布局漂移、不串到别人那行：
         - 横向：从队长名字的【右边缘】一直扫到该区域【右缘】（整行右半部分都找）。
           注意 match() 返回的是模板【中心】，名字模板有几十像素宽，老逻辑从中心起算只取 80px
           常够不到更靠右的箭头 → 「认出队长却找不到箭头」。改成扫到行尾，彻底消除这个够不着。

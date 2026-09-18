@@ -32,6 +32,7 @@ from ..core import vision
 from ..core import window as win_mod
 from ..core import rotation
 from ..core import scan
+from ..core import list_row
 from .base import Task, register
 
 # 每个号的状态机状态（非阻塞：每访问一次只推进一步）
@@ -298,19 +299,23 @@ class TreasureMapTask(Task):
                     if list_region else ctx.window.rect())
 
         def probe(scene, rect):
-            hit = (vision.match(scene, self.flags.get("flag_treasure_entry"), threshold)
-                   if scene is not None else None)
-            if hit is None:
+            if scene is None:
                 return (scan.SCROLL, None)
-            entry_xy = (rect[0] + hit[0], rect[1] + hit[1])
-            join = self._find_join_on_row(ctx, list_region, entry_xy, threshold, loop)
-            if join is not None:
-                ctx.mouse.click(join[0], join[1])
-                ctx.log(f"找到「宝图任务」（{hit[2]:.3f}）→ 点「参加」（{join[2]:.3f}），开始传送找 NPC。",
-                        level="hit")
-                return (scan.ACCEPT, join)
-            ctx.log("认出「宝图任务」但没找到右侧「参加」（检查 flag_join 模板/阈值）。", level="warn")
-            return (scan.STAY, None)
+            got = list_row.locate_card(scene, rect, self.flags.get("flag_treasure_entry"),
+                                       self.flags.get("flag_join"), threshold,
+                                       self._calib_size(ctx), loop, log=ctx.log,
+                                       window_rect=ctx.window.rect())
+            if got is None:
+                return (scan.SCROLL, None)
+            if got.join_x is None:
+                ctx.log("认出「宝图任务」但右侧没找到「参加」——按上面那行『最佳候选 xx < 下限 yy』判断："
+                        "差一点点就把 tasks.treasure_map.loop.join_min_score 调低些，差很多就重标 flag_join 模板。"
+                        "原地重试、不滚动。", level="warn")
+                return (scan.STAY, None)
+            ctx.mouse.click(got.join_x, got.join_y)
+            ctx.log(f"找到「宝图任务」（{got.anchor_score:.3f}）→ 点「参加」"
+                    f"（{got.join_score:.3f}），开始传送找 NPC。", level="hit")
+            return (scan.ACCEPT, (got.join_x, got.join_y, got.join_score))
 
         res = scan.scroll_search(
             grab_rect=grab_rect, probe=probe, mouse=ctx.mouse,
@@ -522,51 +527,13 @@ class TreasureMapTask(Task):
         ctx.log(f"{label}…帧差 {d}（静止阈值 {still_diff}，已静止 {held:.1f}/{idle_need}s）{extra}")
         rec["t_diag"] = now
 
-    def _find_join_on_row(self, ctx, list_region, entry_screen_xy, threshold, loop):
-        """在「宝图任务」条目所在【那张卡片】的右侧条带里匹配「参加」按钮(flag_join)。
-        命中返回 (screen_x, screen_y, score)，否则 None。
-        按行+只取条目右侧、且限制在条目所属卡片列内，能抗滚动、抗「一排多张卡片」时
-        扫进右邻卡片点到它的「参加」按钮（活动列表默认两张卡片一排）。"""
-        join_tpl = self.flags.get("flag_join")
-        entry_tpl = self.flags.get("flag_treasure_entry")
-        if join_tpl is None:
-            ctx.log("找「参加」失败：flag_join 模板未标定。", level="warn")
+    def _calib_size(self, ctx):
+        """标定时记录的窗口尺寸（config.targets.base_size），用于估窗口缩放、做多尺度匹配。
+        没标过/取不到返回 None（则只按 1.0 尺度匹配，与旧行为一致）。"""
+        try:
+            return (ctx.cfg.get("targets") or {}).get("base_size")
+        except Exception:
             return None
-        rect = (ctx.window.region_to_screen_rect(list_region)
-                if list_region else ctx.window.rect())
-        if rect is None:
-            return None
-        scene = win_mod.grab(rect)
-        if scene is None:
-            return None
-        rx, ry = rect[0], rect[1]
-        ex, ey = entry_screen_xy
-        # 行条带高度：取条目模板高 ×2，下限 40px；纵向以条目中心为中线
-        row_h = entry_tpl.shape[0] if entry_tpl is not None else 40
-        band = max(40, int(row_h * 2))
-        sh, sw = scene.shape[:2]
-        # 换算到 scene 局部坐标：纵向取条带、横向从条目中心到列表右缘（只看右侧）
-        ey_local = int(ey - ry)
-        ex_local = int(ex - rx)
-        # 活动列表是「每排多张卡片」(默认两张一排)：参加按钮只在【条目所属那张卡片】内。
-        # 若一路扫到列表右缘(x1=sw)，右邻卡片的「参加」按钮会被一并扫进来、甚至胜出，
-        # 导致点到右边卡片的参加。故把列表按列等分，定位条目所在列，x1 收到该列右边界。
-        cols = max(1, int(loop.get("activity_columns", 2)))
-        col_w = sw / cols
-        col_idx = min(cols - 1, max(0, int(ex_local // col_w)))
-        col_right = int(round((col_idx + 1) * col_w))
-        y0 = max(0, ey_local - band // 2)
-        y1 = min(sh, ey_local + band // 2)
-        x0 = max(0, ex_local)
-        x1 = min(sw, col_right)
-        if y1 - y0 < 1 or x1 - x0 < 1:
-            return None
-        crop = scene[y0:y1, x0:x1]
-        m = vision.match(crop, join_tpl, threshold)
-        if m is None:
-            return None
-        cx, cy, score = m
-        return (rx + x0 + cx, ry + y0 + cy, score)
 
     def _load_flags(self, tc):
         templates = tc.get("templates", {})

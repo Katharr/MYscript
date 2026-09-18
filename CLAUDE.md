@@ -28,10 +28,18 @@
 4. **安全默认 dry_run=true**（只识别不下单）。
 5. 用户**基本不读代码**，只在被明确告知“需要你亲手改的地方”才动手；要尽量傻瓜化（一键 + GUI）。
 6. 用户要求**模块化**、可持续扩展，并要一个**现代、简约、精致、信息密度适中**的 GUI。
-7. **活动列表卡片布局（运镖/宝图等「开活动→参加」类任务共用）**：活动入口是**卡片**、**默认两张一排**，
-   每张右侧有「参加」。按行找「参加」时**只能在条目所属那张卡片的列内找**，不能横向扫到列表右缘——
-   否则会圈进右邻卡片的「参加」、点到隔壁（已踩坑修复）。排数变了改配置 `tasks.<name>.loop.activity_columns`
-   即可，不必改代码；实现见 `escort.py` 的 `_find_join_on_row` docstring。
+7. **活动列表卡片布局（运镖/宝图/秘境/蹈海去等「开活动→参加」类任务共用 `core/list_row.py`）**：
+   活动入口是**卡片**、**默认两张一排**，每张右侧有「参加」。定位「参加」一律走 `core/list_row.locate_card`——
+   ① 位置【几何绑定】：以条目命中点为锚，取「同一条行带 × 锚点往右 `join_reach_ratio` 个条目宽」，
+   **不再用列等分猜卡片右缘**（实测等分线会压在邻卡按钮上、切进来 2px 就点到隔壁）；
+   ② 判分【只排序不切】：条目照 `match_threshold` 卡，但「参加」是 30×15 小字按钮，同一颗按钮因卡片底色/
+   进度文字不同分数在 0.7~1.0 飘（实测真按钮 0.8496 被 0.85 卡掉 = 「认出运镖却找不到参加」的根因），
+   故按 `join_min_score`（默认 0.7）接受；
+   ③ 条目模板会**撞脸**（运镖图标对蹈海去图标也给 0.877），故把过阈值的条目候选都取出来、
+   按「条目分 + 半个参加分」选那一对，互相印证，认错卡片时会自然落选。
+   ⚠ **别改回「取最高分 + 全局阈值一刀切」，也别改回列等分**——那两条正是三个号无法同时认出的成因；
+   换窗口尺寸/布局只调 `tasks.<name>.loop.join_reach_ratio` / `join_band_ratio` / `join_min_score`。
+   多尺度兜底（窗口缩放了没重标也能认）与全部理由见该模块 docstring。
 8. **GUI 文字换行铁律（已踩坑两轮）**：所有「可能超一行」的说明性文字（副标题/开关说明/卡内提示/标定状态）
    一律套 `theme.bind_wraplength(label)` + 让标签 `sticky="ew"`/`fill="x"` 占满父容器，
    **禁止写死 `wraplength=数字`**（窗口比它窄就溢出截断）。三个非显而易见的坑见 `theme.bind_wraplength`
@@ -53,6 +61,7 @@ mhxy/
     window.py   GameWindow（locate/rect/activate/坐标换算）+ grab() 截图 + set_dpi_aware()
     vision.py   load_template / save_image / match() / frame_diff()（兼容中文路径）
     scan.py     通用「滚动查找」scroll_search()（翻列表/翻包裹统一底层）；详见 docstring + memory scroll-search-scan
+    list_row.py 活动列表「卡片 → 右侧参加按钮」定位 locate_card()（见约束 7）；运镖/宝图/秘境/蹈海去共用
     input.py    Mouse 类：SendInput 底层 + human_move/click/sleep/maybe_idle
     context.py  TaskContext：打包 window/mouse/cfg/log/stop_event 给任务
     runner.py   TaskRunner：后台线程跑 Task + 线程安全日志队列

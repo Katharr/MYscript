@@ -30,6 +30,7 @@ import time
 from ..core import scan
 from ..core import vision
 from ..core import window as win_mod
+from ..core import list_row
 from ..core.teaming import (TeamFormation, TEAM_REQUIRED_REGIONS, TEAM_REQUIRED_TEMPLATES,
                             DISBAND_REQUIRED_TEMPLATES)
 from .base import Task, register
@@ -286,17 +287,23 @@ class TaohaiquTask(Task):
             return rect
 
         def probe(scene, rect):
-            hit = vision.match(scene, self.flags.get("thq_entry"), threshold) if scene is not None else None
-            if hit is None:
+            if scene is None:
                 return scan.SCROLL, None
-            entry_xy = (rect[0] + hit[0], rect[1] + hit[1])
-            join = self._find_join_on_row(ctx, list_region, entry_xy, threshold, loop)
-            if join is not None:
-                ctx.mouse.click(join[0], join[1])
-                ctx.log(f"找到蹈海去卡片（{hit[2]:.3f}）→ 点「参加」（{join[2]:.3f}），等寻路到 NPC。", level="hit")
-                return scan.ACCEPT, join
-            ctx.log("认出卡片但没找到右侧「参加」（检查 thq_join 模板/阈值）。", level="warn")
-            return scan.STAY, None
+            got = list_row.locate_card(scene, rect, self.flags.get("thq_entry"),
+                                       self.flags.get("thq_join"), threshold,
+                                       self._calib_size(ctx), loop, log=ctx.log,
+                                       window_rect=ctx.window.rect())
+            if got is None:
+                return scan.SCROLL, None
+            if got.join_x is None:
+                ctx.log("认出卡片但右侧没找到「参加」——按上面那行『最佳候选 xx < 下限 yy』判断："
+                        "差一点点就把 tasks.taohaiqu.loop.join_min_score 调低些，差很多就重标 thq_join 模板。"
+                        "原地重试、不滚动。", level="warn")
+                return scan.STAY, None
+            ctx.mouse.click(got.join_x, got.join_y)
+            ctx.log(f"找到蹈海去卡片（{got.anchor_score:.3f}）→ 点「参加」"
+                    f"（{got.join_score:.3f}），等寻路到 NPC。", level="hit")
+            return scan.ACCEPT, (got.join_x, got.join_y, got.join_score)
 
         res = scan.scroll_search(
             grab_rect=grab_rect, probe=probe, mouse=ctx.mouse,
@@ -458,42 +465,10 @@ class TaohaiquTask(Task):
         cx, cy, score = m
         return (rect[0] + x0 + cx, rect[1] + y0 + cy, score)
 
-    def _find_join_on_row(self, ctx, list_region, entry_screen_xy, threshold, loop):
-        """在卡片所在【那张卡片】的右侧条带里匹配「参加」按钮(thq_join)。命中返回 (x,y,score)，否则 None。
-        按行 + 只取条目右侧、且限制在条目所属卡片列内，避免两张卡片一排时点到右邻卡片的「参加」
-        （活动卡片默认两张一排，见 CLAUDE.md 活动列表卡片布局约束）。"""
-        join_tpl = self.flags.get("thq_join")
-        entry_tpl = self.flags.get("thq_entry")
-        if join_tpl is None:
-            ctx.log("找「参加」失败：thq_join 模板未标定。", level="warn")
+    def _calib_size(self, ctx):
+        """标定时记录的窗口尺寸（config.targets.base_size），用于估窗口缩放、做多尺度匹配。
+        没标过/取不到返回 None（则只按 1.0 尺度匹配，与旧行为一致）。"""
+        try:
+            return (ctx.cfg.get("targets") or {}).get("base_size")
+        except Exception:
             return None
-        rect = (ctx.window.region_to_screen_rect(list_region)
-                if list_region else ctx.window.rect())
-        if rect is None:
-            return None
-        scene = win_mod.grab(rect)
-        if scene is None:
-            return None
-        rx, ry = rect[0], rect[1]
-        ex, ey = entry_screen_xy
-        row_h = entry_tpl.shape[0] if entry_tpl is not None else 40
-        band = max(40, int(row_h * 2))
-        sh, sw = scene.shape[:2]
-        ey_local = int(ey - ry)
-        ex_local = int(ex - rx)
-        cols = max(1, int(loop.get("activity_columns", 2)))
-        col_w = sw / cols
-        col_idx = min(cols - 1, max(0, int(ex_local // col_w)))
-        col_right = int(round((col_idx + 1) * col_w))
-        y0 = max(0, ey_local - band // 2)
-        y1 = min(sh, ey_local + band // 2)
-        x0 = max(0, ex_local)
-        x1 = min(sw, col_right)
-        if y1 - y0 < 1 or x1 - x0 < 1:
-            return None
-        crop = scene[y0:y1, x0:x1]
-        m = vision.match(crop, join_tpl, threshold)
-        if m is None:
-            return None
-        cx, cy, score = m
-        return (rx + x0 + cx, ry + y0 + cy, score)
