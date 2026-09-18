@@ -30,9 +30,12 @@ CAPTURES_DIR = DATA_ROOT / "captures"
 DEFAULT_CONFIG = {
     # ---- 跨任务共享 ----
     "window_title": "梦幻西游",          # 游戏窗口标题关键字（模糊匹配）
-    "window_process": "MyGame_x64r.exe", # 只认这个进程的窗口：标题会和终端/编辑器等撞，进程名才稳
-                                         #   （游戏窗口类名是随机串无法白名单）。空串=退回纯标题匹配。
-                                         #   客户端 exe 改名了就改这里。见 core/window.set_game_process。
+    "window_process": "MyTabCtrl_x64r.exe,MyGame_x64r.exe",
+                                         # 只认这些进程的窗口：标题会和终端/编辑器等撞，进程名才稳
+                                         #   （类名是随机串无法白名单）。多个用逗号分隔；空串=退回纯标题匹配。
+                                         #   2026-09 更新后可见窗口改由标签外壳 MyTabCtrl_x64r.exe 持有，
+                                         #   MyGame_x64r.exe 只剩隐藏渲染窗口，两个都认以兼容新旧客户端。
+                                         #   客户端 exe 再改名就改这里。见 core/window.set_game_process。
     "input_backend": "sendinput",        # sendinput(底层+拟人化, 推荐) / pyautogui / pydirectinput
     "window_offset": [0, 0],             # 整体点击偏移修正 [dx, dy]
     "hotkey_stop": "ctrl+alt+F12",       # 全局【急停】组合键：游戏前台也能按，按一下立刻停止一切正在跑的任务

@@ -5,6 +5,7 @@
 """
 
 import os
+import re
 import time
 import ctypes
 import ctypes.wintypes
@@ -39,19 +40,71 @@ _kernel32.CloseHandle.argtypes = [ctypes.wintypes.HANDLE]
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 
 
+# ---- SendInput（仅用于新外壳窗口的「拖边缩放」，见 GameWindow.resize_to）----
+_user32.SetCursorPos.argtypes = [ctypes.c_int, ctypes.c_int]
+_user32.SetCursorPos.restype = ctypes.wintypes.BOOL
+_user32.GetCursorPos.argtypes = [ctypes.POINTER(ctypes.wintypes.POINT)]
+_user32.GetCursorPos.restype = ctypes.wintypes.BOOL
+_user32.SendInput.argtypes = [ctypes.wintypes.UINT, ctypes.c_void_p, ctypes.c_int]
+_user32.SendInput.restype = ctypes.wintypes.UINT
+
+_INPUT_MOUSE = 0
+_MOUSEEVENTF_LEFTDOWN = 0x0002
+_MOUSEEVENTF_LEFTUP = 0x0004
+
+
+class _MOUSEINPUT(ctypes.Structure):
+    _fields_ = [("dx", ctypes.wintypes.LONG), ("dy", ctypes.wintypes.LONG),
+                ("mouseData", ctypes.wintypes.DWORD), ("dwFlags", ctypes.wintypes.DWORD),
+                ("time", ctypes.wintypes.DWORD),
+                ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong))]
+
+
+class _INPUT(ctypes.Structure):
+    _fields_ = [("type", ctypes.wintypes.DWORD), ("mi", _MOUSEINPUT)]
+
+
+def _mouse_button(down):
+    inp = _INPUT(type=_INPUT_MOUSE,
+                 mi=_MOUSEINPUT(0, 0, 0, _MOUSEEVENTF_LEFTDOWN if down else _MOUSEEVENTF_LEFTUP, 0, None))
+    _user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(inp))
+
+
 # ---- 游戏窗口识别：按「进程 exe 名」过滤（标题会和别的窗口撞，进程名才稳）----
 #   背景（踩坑）：原先只按标题子串 "梦幻西游" 匹配，结果【终端/编辑器等标题里恰好含这几个字的窗口】
 #   会被误认成游戏窗口去点击（实测把 Windows Terminal 当成了「号1」，因为它的标签名含「梦幻西游」）。
 #   游戏窗口类名是【随机串】（每个窗口都不同，无法白名单），但进程 exe 名稳定，故据此过滤最可靠。
-#   默认值对应《时空》客户端；若客户端 exe 改名，改 config 顶层 window_process 即可（空串=退回纯标题匹配）。
-_GAME_PROCESS = "MyGame_x64r.exe"
+#
+#   2026-09 客户端大更新后架构变化（脚本「识别不到窗口」的根因）：可见顶层窗口改由【标签外壳】
+#   进程 MyTabCtrl_x64r.exe 持有（类名 __my_tabctrl_winclass_<随机>，标题仍是「梦幻西游：时空」，
+#   每个游戏号一个顶层窗口）；真正的游戏进程 MyGame_x64r.exe 退居渲染子进程，只剩 1×1 不可见的
+#   GDI/IME 隐藏窗口，pygetwindow 枚举不到可用矩形。故默认两个进程名都认（新外壳 + 旧客户端，
+#   兼容回退与多版本）。若以后 exe 再改名，改 config 顶层 window_process 即可（空串=退回纯标题匹配）。
+DEFAULT_GAME_PROCESS_SPEC = "MyTabCtrl_x64r.exe,MyGame_x64r.exe"
+_GAME_PROCESSES = {"mytabctrl_x64r.exe", "mygame_x64r.exe"}
+# window_process 里多个名字的分隔符：中英文逗号/分号、竖线、空白
+_SPLIT_RE = re.compile(r"[,，;；|\s]+")
+
+
+def _parse_process_names(name):
+    """把 config.window_process 解析成「小写 exe basename 集合」。
+    接受：字符串（单个名，或用逗号/分号/竖线/空白分隔的多个名）、字符串列表/元组/集合。
+    空串/None/空集合 → None（表示不按进程过滤，退回纯标题匹配，与旧行为一致）。"""
+    if name is None:
+        return None
+    if isinstance(name, (list, tuple, set)):
+        items = [str(x) for x in name]
+    else:
+        items = _SPLIT_RE.split(str(name))
+    out = {x.strip().lower() for x in items if x.strip()}
+    return out or None
 
 
 def set_game_process(name):
-    """配置「只认这个 exe 进程的窗口」。来自 config.window_process。
+    """配置「只认这些 exe 进程的窗口」（支持多个，见 _parse_process_names）。来自 config.window_process。
     传空/None=不按进程过滤（退回纯标题匹配，与旧行为一致）。进程名比对大小写不敏感。"""
-    global _GAME_PROCESS
-    _GAME_PROCESS = (name or "").strip() or None
+    global _GAME_PROCESSES
+    _GAME_PROCESSES = _parse_process_names(name)
 
 
 def _proc_basename(hwnd):
@@ -75,7 +128,7 @@ def _proc_basename(hwnd):
 
 
 def _match_basic(w, title_substr):
-    """游戏窗口基本判定：标题含关键字 + 尺寸够大 +（若配置了 _GAME_PROCESS）所属进程匹配。
+    """游戏窗口基本判定：标题含关键字 + 尺寸够大 +（若配置了 _GAME_PROCESSES）所属进程在白名单内。
     不在此查「最小化」——locate() 允许最小化窗口当候选并排后面，locate_all() 自行另外排除。"""
     try:
         if title_substr not in (w.title or ""):
@@ -85,7 +138,7 @@ def _match_basic(w, title_substr):
         hwnd = w._hWnd
     except Exception:
         return False
-    if _GAME_PROCESS and _proc_basename(hwnd) != _GAME_PROCESS.lower():
+    if _GAME_PROCESSES and _proc_basename(hwnd) not in _GAME_PROCESSES:
         return False
     return True
 
@@ -130,6 +183,15 @@ def _force_foreground(hwnd, tries=3):
         time.sleep(0.12)
     try:
         return int(_user32.GetForegroundWindow() or 0) == hwnd
+    except Exception:
+        return False
+
+
+def is_admin():
+    """本进程是否有管理员权限。新客户端（requireAdministrator 外壳）高 IL 运行，
+    非管理员脚本对其窗口的 SetWindowPos/拖拽缩放/SendInput 都会被 UIPI 静默拒绝。"""
+    try:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
     except Exception:
         return False
 
@@ -221,30 +283,121 @@ class GameWindow:
         time.sleep(0.15 if ok else 0.05)
         return ok
 
-    def resize_to(self, w, h, move_to=None):
-        """把窗口尺寸还原到 [w, h]（可选 move_to=(left,top) 一并复位位置）。
-        成功(尺寸误差≤4px)返回 True；否则返回 False（游戏锁分辨率档位时 resize 会被忽略）。
-        窗口失效/异常也返回 False。"""
+    # 新标签外壳（MyTabCtrl_x64r.exe）把缩放热区画在客户区【内侧】：实测右下角
+    # (right-14..right-2, bottom-14..bottom-2) 命中 HTBOTTOMRIGHT，边中点内侧 0~6px 命中
+    # HTLEFT/HTTOP 等。取 -8 稳在双向热区里。
+    _GRIP_INSET = 8
+
+    def _drag_resize(self, w, h):
+        """用「真人拖拽右下角缩放热区」把窗口调到 [w,h]，闭环按实测尺寸纠偏。
+
+        背景：2026-09 更新后的标签外壳对 SetWindowPos 改尺寸【表面成功实则忽略】（elevated 同 IL
+        也一样），只认交互拖拽；缩放热区藏在客户区内缘（NCHITTEST 实测右下 right/bottom 内
+        2~14px 命中 HTBOTTOMRIGHT）；且外壳【锁死纵横比】（单拖一条边也会按比例联动另一维，
+        实测比例约 1.23）——只允许沿比例线整体缩放。
+        故纠偏必须沿比例线【同向】推进：每轮按几何平均缩放比 s=sqrt((w/cw)*(h/ch)) 把热区拖到
+        对应位置（不能宽、高各自独立纠偏，否则两维来回拔河，在锁比例的窗口上永远收敛不了）。
+        基准尺寸若在新外壳上标定（本就在比例线上）可精确命中；旧客户端留下的离线基准只会收敛到
+        最近可达尺寸并返回 False（调用方据此提示重新标定）。
+        前提：本进程与游戏同完整性级别（start.py 已自动 UAC 提权），否则输入会被 UIPI 丢弃。
+        成功(两维误差≤4px)返回 True；窗口失效/达不到（离线基准、超出屏幕）返回 False。"""
         if not self._win:
             return False
+        if self.rect() is None:
+            return False
+        # 缩放拖拽必须在前台窗口上进行（非前台首击可能只激活不进拖拽）
+        if not self.activate():
+            return False
+        try:
+            vx = _user32.GetSystemMetrics(76)          # SM_XVIRTUALSCREEN
+            vy = _user32.GetSystemMetrics(77)
+            vw = _user32.GetSystemMetrics(78)          # SM_CXVIRTUALSCREEN
+            vh = _user32.GetSystemMetrics(79)
+            inset = self._GRIP_INSET
+
+            def place_cursor(x, y):
+                x = min(max(int(x), vx + 1), vx + vw - 2)
+                y = min(max(int(y), vy + 1), vy + vh - 2)
+                _user32.SetCursorPos(x, y)
+
+            rr = self.rect()
+            place_cursor(rr[0] + rr[2] - inset, rr[1] + rr[3] - inset)
+            time.sleep(0.15)
+            _mouse_button(True)
+            time.sleep(0.12)
+            last_s = None
+            stuck = 0
+            try:
+                for _ in range(40):
+                    rr = self.rect()
+                    if rr is None:
+                        return False
+                    cw, ch = rr[2], rr[3]
+                    if abs(cw - w) <= 4 and abs(ch - h) <= 4:
+                        return True
+                    # 几何平均缩放比：沿锁死的比例线同向推进，避免两维拔河
+                    s = ((w / cw) * (h / ch)) ** 0.5
+                    s = min(max(s, 0.90), 1.10)         # 单步最多 ±10%，拟人且防过冲
+                    if last_s is not None and abs(s - last_s) < 0.002:
+                        stuck += 1
+                        if stuck >= 3:                 # 收敛到比例线上最近点仍不达标=基准离线
+                            return False
+                    else:
+                        stuck = 0
+                    last_s = s
+                    place_cursor(rr[0] + cw * s - inset, rr[1] + ch * s - inset)
+                    time.sleep(0.05)
+            finally:
+                _mouse_button(False)
+            time.sleep(0.2)
+            rr = self.rect()
+            return rr is not None and abs(rr[2] - w) <= 4 and abs(rr[3] - h) <= 4
+        except Exception:
+            try:
+                _mouse_button(False)
+            except Exception:
+                pass
+            return False
+
+    def resize_to(self, w, h, move_to=None):
+        """把窗口尺寸还原到 [w, h]（可选 move_to=(left,top) 一并复位位置）。
+        成功(尺寸误差≤4px)返回 True；否则返回 False（窗口失效/不支持自由缩放/档位吸附不到）。
+
+        两条路径：先试程序化 SetWindowPos（旧客户端/普通窗口直接生效，最便宜）；
+        实测无效（新标签外壳会假装成功并忽略）再退回真人式拖边缩放 _drag_resize。"""
+        if not self._win:
+            return False
+        w, h = int(w), int(h)
         try:
             if self._win.isMinimized:
                 self._win.restore()
-            self._win.resizeTo(int(w), int(h))
-            if move_to is not None:
-                self._win.moveTo(int(move_to[0]), int(move_to[1]))
-            time.sleep(0.12)
-            r = self.rect()
-            if r is None:
-                return False
-            if abs(r[2] - int(w)) > 4 or abs(r[3] - int(h)) > 4:
-                # 差太多再试一次（个别窗口首帧未跟上）
-                self._win.resizeTo(int(w), int(h))
-                time.sleep(0.12)
-                r = self.rect()
-                if r is None:
-                    return False
-            return abs(r[2] - int(w)) <= 4 and abs(r[3] - int(h)) <= 4
+                time.sleep(0.15)
+
+            def reached():
+                rr = self.rect()
+                return rr is not None and abs(rr[2] - w) <= 4 and abs(rr[3] - h) <= 4
+
+            # 路径一：程序化缩放（最多试两次，间隔读真实矩形，忽略「假成功」）
+            try:
+                for _ in range(2):
+                    self._win.resizeTo(w, h)
+                    if move_to is not None:
+                        self._win.moveTo(int(move_to[0]), int(move_to[1]))
+                    time.sleep(0.15)
+                    if reached():
+                        return True
+            except Exception:
+                pass
+
+            # 路径二：新标签外壳——拖缩放热区（闭环纠偏）
+            if self._drag_resize(w, h):
+                if move_to is not None:
+                    try:
+                        self._win.moveTo(int(move_to[0]), int(move_to[1]))
+                    except Exception:
+                        pass
+                return True
+            return False
         except Exception:
             return False
 

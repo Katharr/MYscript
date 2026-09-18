@@ -2123,15 +2123,26 @@ class GeneralPage(ctk.CTkFrame):
             self.refresh()
             return
         ok = 0
+        got = []
         for w in todo:
             w.activate()
             if w.resize_to(bw, bh):
                 ok += 1
+            r = w.rect()
+            if r:
+                got.append((r[2], r[3]))
         self.app._game_connected = None    # 尺寸变了，强制下次 tick 刷新药丸
-        if ok < len(todo):
-            self.app.toast(f"已还原 {ok}/{len(todo)} 个号到 {bw}×{bh}；部分窗口可能锁了分辨率档位")
-        else:
+        if ok == len(todo):
             self.app.toast(f"已把 {ok} 个号还原到基准尺寸 {bw}×{bh}")
+        elif got and max(s[0] for s in got) - min(s[0] for s in got) <= 4 \
+                and max(s[1] for s in got) - min(s[1] for s in got) <= 4:
+            # 新外壳锁定纵横比：各号已被统一到同一可达尺寸（多开同尺寸的真正目标已达成，
+            # 允许 ±4px 吸附误差），但与旧基准不符——基准是旧客户端留下的、落在比例线外，提示重设。
+            self.app.toast(f"已把 {len(todo)} 个号统一到 {got[0][0]}×{got[0][1]}；"
+                           f"新版客户端锁定窗口比例，基准 {bw}×{bh} 不可达，建议重新「设为基准」")
+        else:
+            hint = "" if win_mod.is_admin() else "（请用管理员身份运行，启动时 UAC 点「是」）"
+            self.app.toast(f"已还原 {ok}/{len(todo)} 个号到 {bw}×{bh}，部分窗口调整失败{hint}")
         self.refresh()
 
     def _refresh_body(self):
@@ -3141,7 +3152,7 @@ class App(ctk.CTk):
         super().__init__()
         self.cfg = cfg_mod.load_config()
         # 全局窗口识别按进程名过滤（避免把终端/编辑器等同名标题窗口当游戏号）；GUI 各窗口操作据此生效。
-        win_mod.set_game_process(self.cfg.get("window_process", "MyGame_x64r.exe"))
+        win_mod.set_game_process(self.cfg.get("window_process") or win_mod.DEFAULT_GAME_PROCESS_SPEC)
         mode = self.cfg.get("appearance", "dark")
         ctk.set_appearance_mode(mode if mode in ("dark", "light") else "dark")
         self.title("梦幻 · 时空 助手")
@@ -3520,11 +3531,19 @@ class App(ctk.CTk):
             self.toast(f"没找到/没选中目标窗口（标题含「{title}」），请先「选择窗口」")
             return
         w, h = int(base[0]), int(base[1])
+        valid = [tuple(s) for s in actual if s]
         if ok == total:
             self.toast(f"已还原 {ok}/{total} 个号到 {w}×{h}")
+        elif len(valid) == total and max(s[0] for s in valid) - min(s[0] for s in valid) <= 4 \
+                and max(s[1] for s in valid) - min(s[1] for s in valid) <= 4:
+            # 新外壳锁定纵横比：各号已统一到同一可达尺寸（±4px 吸附误差），但旧基准落在比例线外
+            # → 提示重设基准。
+            self.toast(f"已把 {total} 个号统一到 {valid[0][0]}×{valid[0][1]}；"
+                       f"新版客户端锁定窗口比例，基准 {w}×{h} 不可达，建议重新「设为基准」")
         else:
-            # 有号没还原成功——多半是游戏锁了分辨率档位，resize 被忽略
-            self.toast(f"还原 {ok}/{total} 个号；部分窗口可能不支持自由缩放")
+            # 有号没还原成功——未提权（UIPI 拒绝）或窗口不支持调整
+            hint = "" if win_mod.is_admin() else "；请用管理员身份运行（启动时 UAC 点「是」）"
+            self.toast(f"还原 {ok}/{total} 个号；部分窗口调整失败{hint}")
         self._game_connected = None   # 尺寸变了，强制下次 tick 刷新药丸
         if callable(after):
             try:
