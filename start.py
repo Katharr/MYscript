@@ -151,6 +151,31 @@ def _make_splash():
     return {"root": splash, "status": status, "pb": pb}
 
 
+def _report_fatal(stage):
+    """把启动期未捕获异常写进 startup_error.log 并弹窗提示。
+
+    pythonw.exe **没有控制台**：启动过程中任何异常都会让进程静默消失（用户只看到
+    「闪一下就没了、毫无反应」），根本拿不到 traceback，排障只能靠猜。所以启动阶段
+    必须自己把异常落盘 + 弹窗，否则这类问题无法定位。
+    """
+    import traceback
+    tb = traceback.format_exc()
+    try:
+        with open(os.path.join(BASE, "startup_error.log"), "w", encoding="utf-8") as f:
+            f.write("阶段：{}\n\n{}".format(stage, tb))
+    except Exception:
+        pass
+    try:
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(
+            None,
+            "启动失败（阶段：{}）。\n\n详细错误已写入程序目录下的 startup_error.log：\n{}\n\n{}".format(
+                stage, os.path.join(BASE, "startup_error.log"), tb[-700:]),
+            "梦幻 · 时空 助手 — 启动失败", 0x10)
+    except Exception:
+        pass
+
+
 def _launch_gui():
     """设 DPI → 启动页全程盖住「导入重库 + 建主窗口 + 预建全部页面」→ 一次性亮出就绪窗口。
     任一步异常都回退到无启动页的直接启动，保证一定能起来。"""
@@ -188,6 +213,12 @@ def _launch_gui():
         splash["root"].mainloop()           # 转动进度条直到重库就绪
         # 关键：创建主窗口（另一个 ctk Tk 根）之前，必须先销毁启动页这个根——
         # 两个 Tk 根并存会让 customtkinter 直接崩（之前「正在准备界面」后闪退就是这个）。
+        # 试过「先建主窗口、再销启动页」来消除这两步之间的空隙，结果引入更难查的问题
+        # （默认根归属、CTk 的首次显示逻辑），已回退。保持这个顺序。
+        try:
+            splash["pb"].stop()             # 先停进度条动画：其 after 定时器在根销毁后会报错
+        except Exception:
+            pass
         try:
             splash["root"].destroy()
         except Exception:
@@ -198,22 +229,43 @@ def _launch_gui():
         except Exception:
             pass
 
-    # —— 阶段二：建主窗口；用主窗口自带的同根遮罩盖住「建全部页面」的过程，建完再撤遮罩 ——
+    # —— 阶段二：建主窗口；用主窗口自带的同根不透明遮罩盖住「建全部页面」的过程 ——
     from mhxy.gui.app import App
-    app = App()
-    if splash is not None:
-        # 有过启动页时，亮界面前把其余页面也建好（同根遮罩盖住），杜绝「窗口出现后再逐页卡」。
+    app = None
+    try:
+        app = App()
+    except Exception:
+        _report_fatal("创建主窗口 App()")
+        return
+
+    # ⚠ 必须放在 if splash 之外：App 的唯一显示入口就在这里，嵌进去的话
+    #   「启动页没建成（splash 为 None）」时窗口就永远不显示了。踩过。
+    # 建页期只跑 update_idletasks（不重绘），建完撤遮罩，全程只有一次整窗重绘。
+    try:
+        app.reveal_with_overlay()
+    except Exception:
+        _report_fatal("建全部页面 / 亮出主窗口 reveal_with_overlay()")
         try:
-            app.reveal_with_overlay()
+            app.deiconify()
         except Exception:
             pass
-    # 无启动页（回退）时：不预建，让窗口尽快出现，其余页面交给空闲预建在后台补。
+    # 再兜一次：无论上面走哪条路，窗口都必须可见。
+    try:
+        app.deiconify()
+    except Exception:
+        pass
+
+    # 兜底：窗口可见后切前台（App 内部也有 after_idle 兜底显示，覆盖无启动页的回退路径）。
     try:
         app.lift()
         app.focus_force()
     except Exception:
         pass
-    app.mainloop()
+    # mainloop 期间的异常（Tk 回调里抛出）同样会静默杀死窗口，一并落盘。
+    try:
+        app.mainloop()
+    except Exception:
+        _report_fatal("主循环 mainloop()")
 
 
 def main():

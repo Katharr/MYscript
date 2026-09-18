@@ -3159,6 +3159,14 @@ class App(ctk.CTk):
         self.geometry("1360x720")
         self.minsize(1180, 640)
         self.configure(fg_color=T.BG)
+        # ⚠ 绝对不要在这里 self.withdraw()。customtkinter 的 CTk 有
+        # `_withdraw_called_before_window_exists` 标志：只要在窗口首次显示（第一次
+        # update()/mainloop()）之前调过 withdraw()，它内部的「首次显示时自动 deiconify」
+        # 就永久失效；随后 _windows_set_titlebar_color() 复位状态时又会
+        # `state(self._state_before_windows_set_titlebar_color)`（该值此时是 "normal"），
+        # 把窗口按 withdrawn 的映射状态还原回去 —— 结果就是窗口永远不显示，
+        # 现象为「启动页跑完一闪就没了 / 什么都不出来」。踩过，别再试。
+        # 想遮住建界面过程，用 reveal_with_overlay() 的同根不透明遮罩，而不是隐藏窗口。
 
         self.fonts = T.build_fonts()
         self.game_win = win_mod.GameWindow(self.cfg.get("window_title", "梦幻西游"))
@@ -3180,6 +3188,9 @@ class App(ctk.CTk):
         self.after(60, self._poll_hotkey)
         # 界面显示后趁空闲把其余页面逐个预建好，首次切过去即秒开（每个间隔开，单帧不卡）。
         self.after(800, self._prebuild_idle)
+        # 兜底显示：外层正常会调 reveal_with_overlay()（它建完页就亮窗口并置 _revealed）。
+        # 真走到这里说明没人调（直接跑本文件 / 启动回退路径），窗口不能一直藏着。
+        self.after_idle(self._ensure_revealed)
 
     def _build_sidebar(self):
         bar = ctk.CTkFrame(self, fg_color=T.SIDEBAR, corner_radius=0, width=210)
@@ -3336,46 +3347,99 @@ class App(ctk.CTk):
             self.pages[cur].tkraise()
 
     def _safe_update(self):
+        """跑掉 Tk 待处理事件（含重绘）并回一次事件循环。只在窗口需要立刻可见时用，
+        不是给建页循环用的——每次都是一次同步整窗重绘，代价高。"""
         try:
             self.update()
         except Exception:
             pass
 
-    def reveal_with_overlay(self):
-        """在本窗口上盖一层全屏「正在准备界面…」遮罩，遮罩后把其余页面全部建好，再撤遮罩。
-        全程只用本窗口这一个 Tk 根（不再开第二个根），既避免双根崩溃，又盖住建页面的卡顿。
+    def _safe_update_idletasks(self):
+        """只跑空闲任务（几何计算 / 进度条重绘），**不**处理重绘事件、不进事件循环。
+        建页期间用它推进度条：开销远小于 update()，且不会把半成品界面刷到屏幕上。"""
+        try:
+            self.update_idletasks()
+        except Exception:
+            pass
 
-        遮罩是 App 的直接子组件、最后创建，叠在 container（含所有页面）与侧栏之上；各页面建在
-        container 里，层级在遮罩之下，故新建页面不会盖穿遮罩。建页期间用 update() 让进度条转动。"""
+    def _ensure_revealed(self):
+        """确保窗口已经显示（幂等）。正常由 reveal_with_overlay() 调用；
+        直接跑本文件（没人调 reveal）时由 __init__ 排的 after_idle 兜底。"""
+        if getattr(self, "_revealed", False):
+            return
+        self._revealed = True
+        try:
+            self.deiconify()
+        except Exception:
+            pass
+
+    def reveal_with_overlay(self):
+        """在本窗口上盖一层同根、不透明的「正在准备界面…」遮罩，然后在其后把全部页面建好。
+
+        为什么是「亮窗口 + 盖遮罩」而不是「先把窗口藏起来建完再显示」：
+        customtkinter 的 CTk 明确不支持「窗口首次显示前 withdraw()」（见 __init__ 里的说明），
+        那样做窗口会永远不显示。所以窗口从一开始就是可见的，靠这层遮罩挡住未完成的界面——
+        它和窗口同一个 Tk 根、直接 place 铺满，因此不存在「露出黑底」的窗口期。
+
+        黑屏/闪屏的真正来源是【重绘次数】，不是窗口可见性：老实现每建一页都 self.update()，
+        每次都同步重绘整窗（1360x720 上几百个 CTk 控件）。现在建页期只跑
+        update_idletasks()（算几何、不重绘），建完撤遮罩再重绘一次，全程只有一次整窗重绘。"""
         import tkinter as tk
         from tkinter import ttk
 
         bg, fg, dim, acc, trough = (T.resolve(T.BG), T.resolve(T.TEXT), T.resolve(T.TEXT_DIM),
                                     T.resolve(T.ACCENT), T.resolve(T.SURFACE_2))
+        total = len(self.PAGE_CLASSES)
         ov = tk.Frame(self, bg=bg)
         ov.place(x=0, y=0, relwidth=1, relheight=1)
         tk.Label(ov, text="梦幻 · 时空 助手", bg=bg, fg=fg,
                  font=("Microsoft YaHei UI", 16, "bold")).place(relx=0.5, rely=0.43, anchor="center")
         tk.Label(ov, text="正在准备界面…", bg=bg, fg=dim,
                  font=("Microsoft YaHei UI", 11)).place(relx=0.5, rely=0.51, anchor="center")
+        pb = None
         try:
             style = ttk.Style(self)
             style.theme_use("default")
             style.configure("Ovl.Horizontal.TProgressbar", troughcolor=trough,
                             background=acc, bordercolor=bg, lightcolor=acc, darkcolor=acc)
-            pb = ttk.Progressbar(ov, mode="indeterminate", length=240,
-                                 style="Ovl.Horizontal.TProgressbar")
+            # determinate 模式：进度由「已建页数」驱动，比 indeterminate 更实在。
+            # maximum 取 total+1：determinate 进度条到 maximum 会【回绕到 0】（实测），
+            # 若用 total，建完最后一页进度条会瞬间清零。多留一格，末页之后再补最后一步。
+            pb = ttk.Progressbar(ov, mode="determinate", maximum=max(2, total + 1), value=0,
+                                 length=240, style="Ovl.Horizontal.TProgressbar")
             pb.place(relx=0.5, rely=0.59, anchor="center")
-            pb.start(12)
         except Exception:
-            pass
-        self._safe_update()                 # 先把遮罩画出来（盖住未完成的界面）
-        self.build_all_pages(on_step=self._safe_update)
-        try:
-            ov.destroy()                    # 撤遮罩，露出已就绪的界面
-        except Exception:
-            pass
+            pb = None
+
+        # 先把窗口显示出来（CTk 的首次显示），再把遮罩这一帧画上去，用户看不到中间态。
+        self._ensure_revealed()
         self._safe_update()
+
+        def _on_step():
+            # 只推进度条 + 跑空闲任务：建页期不再整窗重绘，黑屏/闪屏的主要来源就此消失。
+            if pb is not None:
+                try:
+                    pb.step(1)
+                except Exception:
+                    pass
+            self._safe_update_idletasks()
+
+        try:
+            self.build_all_pages(on_step=_on_step)
+        finally:
+            # 无论建页成功与否都要撤遮罩，避免异常把界面永久挡在遮罩后面。
+            if pb is not None:
+                try:
+                    pb.step(1)              # 补最后一步：进度条走到满格（见上面 maximum 的说明）
+                except Exception:
+                    pass
+            self._safe_update_idletasks()
+            try:
+                ov.destroy()
+            except Exception:
+                pass
+            self._ensure_revealed()
+            self._safe_update()
 
     def _prebuild_idle(self):
         """启动后趁空闲逐个把尚未创建的页面建好；每次只建一个并重排一次调度，避免单帧卡顿。"""

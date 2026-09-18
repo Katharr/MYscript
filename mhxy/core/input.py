@@ -15,6 +15,7 @@ import time
 import math
 import random
 import ctypes
+import ctypes.wintypes
 
 user32 = ctypes.windll.user32
 
@@ -82,12 +83,17 @@ class _INPUT(ctypes.Structure):
     _fields_ = [("type", ctypes.c_ulong), ("u", _INPUTUNION)]
 
 
-class _POINT(ctypes.Structure):
-    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
-
-
 def get_cursor():
-    p = _POINT()
+    """取当前光标屏幕坐标。
+
+    ⚠ 必须用官方的 ctypes.wintypes.POINT（而不是本模块自造的等效结构）：
+    ctypes.windll.user32 是【进程级单例】，任何模块给 GetCursorPos 设了 argtypes
+    （core/window.py 就设了 `[POINTER(wintypes.POINT)]`），此后所有调用都按该类型校验。
+    自造结构虽然字段一致，但类型不同，会被拒收：
+        ArgumentError: argument 1: TypeError: expected LP_POINT instance instead of pointer to _POINT
+    （曾导致运镖等任务一开跑就「任务异常」）。
+    """
+    p = ctypes.wintypes.POINT()
     user32.GetCursorPos(ctypes.byref(p))
     return (p.x, p.y)
 
