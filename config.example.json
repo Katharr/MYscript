@@ -17,6 +17,10 @@
     "switch_delay_sec": 0.15,
     "base_size": null
   },
+  "calib_profiles": {
+    "items": [],
+    "active": null
+  },
   "humanize": {
     "speed": 2.0,
     "snipe_speed": 5.0,
