@@ -44,6 +44,12 @@ DEFAULT_CONFIG = {
                                          #   top_right/top_left/bottom_right/bottom_left/off(关闭)。设置里可改。
     "appearance": "dark",                # 界面外观：dark(夜间) / light(白天)，侧栏可切换
 
+    # ---- 悬浮日志窗（通用页「收起为悬浮日志窗」；纯界面偏好，跨任务共享）----
+    "float_log": {
+        "geometry": "",                  # 上次收起时的窗口位置+尺寸 "宽x高+x+y"；空/非法=默认落屏幕右上角
+        "topmost": True                  # true=固定在前台（游戏窗口切到前台也不会被盖住，默认开）
+    },
+
     # ---- 目标窗口选择（基础特性，跨任务共享）----
     #   所有任务都基于它确定「操作哪个号」：单开=选 1 个窗口，多开=选多个号轮流操作。
     #   窗口身份用「屏幕位置序号」(左→右，见 window.locate_all 排序)——三个号标题相同、HWND 重启会变，

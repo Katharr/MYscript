@@ -6,7 +6,6 @@
 
 import os
 import ctypes
-import datetime
 import threading
 
 import customtkinter as ctk
@@ -2061,6 +2060,8 @@ class GeneralPage(ctk.CTkFrame):
         self._win_count = 0         # 已选多开窗口数（resolve_targets），供状态行显示
         self.btn_team = None
         self.btn_disband = None     # 「一键解散」按钮（_refresh_body 每次重建）
+        self.btn_wake = None        # 「唤出所有游戏窗口」按钮（_refresh_body 每次重建）
+        self.btn_float = None       # 「收起为悬浮日志窗」按钮（_refresh_body 每次重建）
         self.btn_leader = None      # 行内队长ID按钮（_refresh_body 每次重建）
         self._leader_thumbs = []    # 行内队长ID缩略图防 GC
         self.lbl_team_status = None
@@ -2075,7 +2076,7 @@ class GeneralPage(ctk.CTkFrame):
         head = ctk.CTkFrame(self, fg_color="transparent")
         head.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         ctk.CTkLabel(head, text="通用 / 工具", font=self.fonts["title"], text_color=T.TEXT).pack(anchor="w")
-        sub = ctk.CTkLabel(head, text="跨任务的通用功能：组队标定 + 一键组队 / 一键解散 / 还原窗口尺寸。各任务专属的标定与「选择窗口」仍在对应任务页。",
+        sub = ctk.CTkLabel(head, text="跨任务的通用功能：唤出 / 收起窗口、悬浮日志窗、组队标定 + 一键组队 / 一键解散 / 还原窗口尺寸。各任务专属的标定与「选择窗口」仍在对应任务页。",
                            font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left", anchor="w")
         sub.pack(fill="x", anchor="w", pady=(4, 0))
         bind_wraplength(sub)
@@ -2090,6 +2091,87 @@ class GeneralPage(ctk.CTkFrame):
         c = Card(self.body)
         c.pack(fill="x", pady=(0, T.SP_3), padx=2)
         return c
+
+    # ------------------------------------------------------------------
+    # 窗口 / 界面工具：① 唤出所有游戏窗口 ② 收起为悬浮日志窗
+    #   —— 都是「盯脚本跑」这个场景的工具：多开窗口被压住时唤一次；随后把界面收成细长悬浮窗，
+    #      摆到游戏窗口边角上边跑边看日志。
+    # ------------------------------------------------------------------
+    def _build_window_tools_card(self):
+        c = self._card()
+        head = ctk.CTkFrame(c, fg_color="transparent")
+        head.pack(fill="x", padx=16, pady=(14, 4))
+        ctk.CTkLabel(head, text="窗口 / 悬浮日志", font=self.fonts["h2"], text_color=T.TEXT).pack(anchor="w")
+        sub = ctk.CTkLabel(head, text="「唤出所有游戏窗口」：把检测到的各号（含已经最小化的）一起还原、"
+                                      "依次切到前台，号1 最后留在前台；窗口被别的程序压住时点一下即可。\n"
+                                      "「收起为悬浮日志窗」：把本助手收成一条细长的悬浮窗，显示运行日志，"
+                                      "可拖动/缩放、可固定在前台，摆在游戏窗口边角上看脚本跑得怎么样"
+                                      "（点悬浮窗上的「展开主界面」随时还原）。",
+                           font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
+        sub.pack(fill="x", pady=(4, 0))
+        bind_wraplength(sub)
+
+        act = ctk.CTkFrame(c, fg_color="transparent")
+        act.pack(fill="x", padx=16, pady=(10, 14))
+        self.btn_wake = ctk.CTkButton(act, text="🪟  唤出所有游戏窗口", font=self.fonts["btn"],
+                                      height=40, width=180, corner_radius=T.RADIUS_SM,
+                                      fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER, text_color=T.ON_ACCENT,
+                                      command=self._bring_windows_front)
+        self.btn_wake.pack(side="left")
+        self.btn_float = ctk.CTkButton(act, text="📋  收起为悬浮日志窗", font=self.fonts["btn"],
+                                       height=40, width=180, corner_radius=T.RADIUS_SM,
+                                       fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
+                                       border_width=1, border_color=T.BORDER,
+                                       command=self._collapse_to_float)
+        self.btn_float.pack(side="left", padx=(8, 0))
+
+    def _bring_windows_front(self):
+        """把所有游戏窗口（含最小化的）还原并切到前台。
+
+        枚举窗口（getAllWindows）+ 逐个抢前台（带重试校验）都不便宜，放后台线程跑，避免卡住界面；
+        完成后回主线程弹提示/写日志。"""
+        cfg = self.cfg = cfg_mod.load_config()
+        self.app.cfg = cfg
+        title = cfg.get("window_title", "梦幻西游")
+        offset = cfg.get("window_offset", [0, 0])
+        btn = getattr(self, "btn_wake", None)
+        if btn is not None:
+            try:
+                btn.configure(state="disabled", text="⏳  正在唤出…")
+            except Exception:
+                pass
+
+        def work():
+            try:
+                total, ok = win_mod.wake_all_to_front(title, offset)
+            except Exception:
+                total, ok = 0, 0
+
+            def apply():
+                if btn is not None:
+                    try:
+                        btn.configure(state="normal", text="🪟  唤出所有游戏窗口")
+                    except Exception:
+                        pass
+                if not total:
+                    self.app.toast(f"没检测到游戏窗口（标题含「{title}」），请先打开游戏")
+                    self._log_line("唤出窗口：一个都没检测到（游戏没开？）", "warn")
+                    return
+                lvl = "info" if ok else "warn"
+                self._log_line(f"唤出游戏窗口：检测到 {total} 个，{ok} 个成功切到前台。", lvl)
+                self.app.toast(f"已唤出 {total} 个游戏窗口（{ok} 个切到前台）")
+                self.app._game_connected = None   # 窗口状态变了，强制下一轮 tick 刷新药丸
+
+            try:
+                self.app.after(0, apply)
+            except Exception:
+                pass
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _collapse_to_float(self):
+        """把主界面收成细长悬浮日志窗（幂等：已经收起就把悬浮窗抬到最前）。"""
+        self.app.collapse_to_float()
 
     # 切到本页或操作后都会调
     def refresh(self):
@@ -2161,6 +2243,9 @@ class GeneralPage(ctk.CTkFrame):
         for w in self.body.winfo_children():
             w.destroy()
         cfg = self.cfg
+
+        # ── 窗口 / 界面工具（与具体任务无关：唤出多开窗口、把界面收成悬浮日志窗）──
+        self._build_window_tools_card()
 
         # ── 组队（跨任务共享：任何用到组队的任务都自动读这份标定）──
         c_team = self._card()
@@ -3489,6 +3574,7 @@ class App(ctk.CTk):
         self._tick_count = 0
         self._game_connected = None   # 缓存连接状态，只在变化时刷新药丸
         self._locating = False        # 防止多个后台定位线程叠加
+        self.float_log = None         # 「收起为悬浮日志窗」的窗实例（None=没收起，主界面正常显示）
 
         self.grid_columnconfigure(1, weight=1)   # 中间内容区随窗口拉伸
         self.grid_columnconfigure(2, weight=0)   # 右侧全局日志列固定宽
@@ -3569,30 +3655,66 @@ class App(ctk.CTk):
 
     def log_line(self, msg, level="info", source=None):
         """统一日志出口（所有页面/任务都调它）。source 非空时在行首加暗色来源标签，如「秒装备 ›」。
-        超过约 2000 行就裁掉最旧的，避免长时间运行把内存吃满。"""
+
+        两个去处、同一份内容：主界面右侧的全局面板 + （若已收起的）悬浮日志窗。
+        插行/裁行的实现见 theme.append_log（两边共用，保证逐字一致）。"""
         log = getattr(self, "log", None)
         if log is None:
             return
-        ts = datetime.datetime.now().strftime("%H:%M:%S")
-        log.configure(state="normal")
-        try:
-            tb = log._textbox
-            tb.insert("end", f"[{ts}] ")
-            if source:
-                tb.insert("end", f"{source} › ", "src")
-            tb.insert("end", f"{msg}\n", level)
-            # 行数封顶：删掉最旧的若干行（int(index) 是行号，含末尾空行）
+        T.append_log(log, msg, level, source)
+        fl = getattr(self, "float_log", None)
+        if fl is not None:
+            fl.append(msg, level, source)
+
+    # ---------------- 收起为悬浮日志窗（细长条，可摆到游戏窗口边上） ----------------
+    def collapse_to_float(self):
+        """把主界面收起成一条悬浮日志窗。已经收起了就把悬浮窗抬到最前（幂等，重复点不叠窗）。"""
+        if self.float_log is not None:
             try:
-                nlines = int(tb.index("end-1c").split(".")[0])
-                if nlines > 2000:
-                    tb.delete("1.0", f"{nlines - 1800}.0")
+                self.float_log.lift()
+                self.float_log.focus_force()
             except Exception:
                 pass
+            return
+        try:
+            from .float_log import FloatLogWindow
+            self.float_log = FloatLogWindow(self)
+        except Exception as e:
+            self.float_log = None
+            self.toast(f"打开悬浮日志窗失败：{e}")
+            return
+        # 先建好悬浮窗再把主界面藏起来：主界面没了也不至于桌面上什么都不剩（撤不回来）。
+        try:
+            self.withdraw()
         except Exception:
-            prefix = f"{source} › " if source else ""
-            log.insert("end", f"[{ts}] {prefix}{msg}\n")
-        log.see("end")
-        log.configure(state="disabled")
+            pass
+        self.log_line("主界面已收起为悬浮日志窗；点悬浮窗上的「展开主界面」可还原。", "info")
+
+    def close_float_log(self, save=True):
+        """收起悬浮窗、还原主界面（悬浮窗的标题栏 X 与「展开主界面」都走这里）。
+        save=True 时把悬浮窗的位置/尺寸/置顶偏好记进 config，下次收起按原样摆回。"""
+        fl = self.float_log
+        self.float_log = None
+        if fl is not None:
+            if save:
+                try:
+                    fl._save_cfg(topmost=bool(fl.var_top.get()), geometry=fl._current_geometry())
+                except Exception:
+                    pass
+            try:
+                fl.destroy()
+            except Exception:
+                pass
+        try:
+            self.deiconify()
+            self.lift()
+        except Exception:
+            pass
+        # 主界面重建后可能被别的窗口压着，抢一次前台（失败也无所谓，大不了用户自己点一下）
+        try:
+            self.after(60, self.focus_force)
+        except Exception:
+            pass
 
     def clear_log(self):
         log = getattr(self, "log", None)
@@ -3808,9 +3930,17 @@ class App(ctk.CTk):
                 T.apply_log_tags(log._textbox)
             except Exception:
                 pass
+        fl = getattr(self, "float_log", None)
+        if fl is not None:
+            fl.apply_theme()
 
     def toast(self, msg):
-        """简单的右下角浮层提示。"""
+        """简单的浮层提示。收起为悬浮窗时改由悬浮窗代显（主界面被 withdraw 了，贴在它身上的浮层
+        会跟着一起看不见，急停/任务结束这类提示就白弹了）。"""
+        fl = getattr(self, "float_log", None)
+        if fl is not None:
+            fl.toast(msg)
+            return
         lbl = ctk.CTkLabel(self, text=msg, font=self.fonts["body"], fg_color=T.ACCENT,
                            text_color=T.ON_ACCENT, corner_radius=T.RADIUS_SM, padx=16, pady=8)
         lbl.place(relx=0.99, rely=0.97, anchor="se")

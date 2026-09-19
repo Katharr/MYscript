@@ -86,6 +86,8 @@ mhxy/
     theme.py            配色/字体/圆角令牌（改这里整体换肤）+ bind_wraplength 换行助手（见约束 8）
     app.py              主窗口：侧边导航 + 通用页(置顶,默认)/各任务Page/SettingsPage/AboutPage
     roi_overlay.py      全屏框选组件（纯 tk，冻结截图上拖框，返回屏幕绝对 ROI）
+    float_log.py        悬浮运行日志窗（通用页「收起为悬浮日志窗」）：细长条、可拖动缩放、可选置顶，
+                        与右侧全局面板同一份日志（App.log_line 双写，插行见 theme.append_log）
     calibrate_dialog.py GUI 内标定对话框（区域 + 模板缩略图画廊 + 加装备），按任务 CALIBRATION spec 驱动
     leader_gallery.py   队长ID 库画廊（见下「队长ID 库」约束）
     inventory_items_dialog.py 整理背包「物品清单」管理弹窗（缩略图+名字+动作下拉+框选添加，写 tasks.organize_bag.items）

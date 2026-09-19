@@ -9,6 +9,10 @@
   "hotkey_stop": "ctrl+alt+F12",
   "failsafe_corner": "top_right",
   "appearance": "dark",
+  "float_log": {
+    "geometry": "",
+    "topmost": true
+  },
   "targets": {
     "multi": false,
     "single_index": 0,

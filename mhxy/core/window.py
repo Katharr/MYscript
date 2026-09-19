@@ -130,14 +130,19 @@ def _proc_basename(hwnd):
         return ""
 
 
-def _match_basic(w, title_substr):
+def _match_basic(w, title_substr, allow_minimized=False):
     """游戏窗口基本判定：标题含关键字 + 尺寸够大 +（若配置了 _GAME_PROCESSES）所属进程在白名单内。
-    不在此查「最小化」——locate() 允许最小化窗口当候选并排后面，locate_all() 自行另外排除。"""
+    不在此查「最小化」——locate() 允许最小化窗口当候选并排后面，locate_all() 自行另外排除。
+
+    allow_minimized=True 时对【最小化的窗口】跳过尺寸门槛：实测最小化后系统只报一个很小的矩形
+    （本机 Tk 窗口实测 237×39），尺寸门槛会把真正要「唤出」的号滤掉。标题+进程两条仍照卡，
+    故不会把别的程序误认成游戏窗口。"""
     try:
         if title_substr not in (w.title or ""):
             return False
-        if w.width <= 100 or w.height <= 100:
-            return False
+        if not (allow_minimized and w.isMinimized):
+            if w.width <= 100 or w.height <= 100:
+                return False
         hwnd = w._hWnd
     except Exception:
         return False
@@ -421,24 +426,52 @@ class GameWindow:
 
 
 # ---- 多窗口枚举与目标选择（多开/选择窗口基础特性）----
-def locate_all(title_substr, offset=(0, 0), max_n=0):
-    """枚举所有标题含 title_substr、非最小化的窗口，按屏幕位置排序后各包一个 GameWindow 返回。
+def locate_all(title_substr, offset=(0, 0), max_n=0, include_minimized=False):
+    """枚举所有标题含 title_substr 的窗口，按屏幕位置排序后各包一个 GameWindow 返回。
 
     用于「选择窗口/多开」：用户把多个号并排摆在桌面上，这里把它们稳定地认成 号1/号2/号3…
     排序规则：先按上边缘分行（每 120px 一带），同一行内按左边缘左→右——和肉眼「从左到右数」一致。
     max_n>0 时最多取前 max_n 个。找不到返回空列表。
+
+    include_minimized=False（默认）：滤掉最小化的窗口——「选择窗口/标定/跑任务」都只认看得见的号，
+      最小化的窗口既不能操作也没有可信矩形。
+    include_minimized=True：连最小化的一起返回（供「唤出所有游戏窗口」用，它正是要把最小化的唤醒）；
+      此时最小化窗口的尺寸门槛也一并放宽（见 _match_basic）。
     """
     found = []
     for w in gw.getAllWindows():
         try:
-            if _match_basic(w, title_substr) and not w.isMinimized:
-                found.append(w)
+            if not _match_basic(w, title_substr, allow_minimized=include_minimized):
+                continue
+            if w.isMinimized and not include_minimized:
+                continue
+            found.append(w)
         except Exception:
             continue
     found.sort(key=lambda x: (int(x.top) // 120, int(x.left)))
     if max_n and max_n > 0:
         found = found[:max_n]
     return [GameWindow(title_substr, offset).bind(w) for w in found]
+
+
+def wake_all_to_front(title_substr, offset=(0, 0), max_n=0):
+    """把所有游戏窗口（含最小化的）唤到前台：还原最小化 + 强制前置并校验。
+
+    返回 (total, woken)：total=检测到的窗口数，woken=确实切到前台（GetForegroundWindow 校验通过）的窗口数。
+    为什么逆序（号N→号1）处理：一次只能有一个前台窗口，最后一个被激活的才留在前台；逆序可让
+    「号1」（最左那个）笑到最后，与脚本默认操作的号一致。
+    最小化窗口也能被唤醒（locate_all 默认会滤掉最小化窗口，故这里显式 include_minimized=True；
+    真正 restore 由 GameWindow.activate 负责）。前台抢占锁由 _force_foreground 绕过。
+    """
+    wins = locate_all(title_substr, offset, max_n=max_n, include_minimized=True)
+    ok = 0
+    for w in reversed(wins):
+        try:
+            if w.activate():
+                ok += 1
+        except Exception:
+            pass
+    return (len(wins), ok)
 
 
 def resolve_targets(title_substr, offset, targets):

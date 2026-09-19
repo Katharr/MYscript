@@ -161,6 +161,55 @@ def tune_scroll_speed(scrollable, pixels_per_notch=60):
         pass
 
 
+def insert_log_line(textbox, msg, level="info", source=None, max_lines=2000, keep_lines=1800):
+    """往底层 tk.Text 追加一行日志（统一格式：[时间] [来源 ›] 正文，正文按级别着色）。
+
+    行数封顶：超过 max_lines 就裁掉最旧的若干行，避免长时间运行把内存吃满。
+    插入失败（Text 已被销毁等）退回「无标签纯文本」，绝不抛异常打断调用方。
+    """
+    import datetime
+    ts = datetime.datetime.now().strftime("%H:%M:%S")
+    try:
+        textbox.insert("end", f"[{ts}] ")
+        if source:
+            textbox.insert("end", f"{source} › ", "src")
+        textbox.insert("end", f"{msg}\n", level)
+        # 行数封顶：删掉最旧的若干行（int(index) 是行号，含末尾空行）
+        nlines = int(textbox.index("end-1c").split(".")[0])
+        if nlines > max_lines:
+            textbox.delete("1.0", f"{nlines - keep_lines}.0")
+    except Exception:
+        prefix = f"{source} › " if source else ""
+        try:
+            textbox.insert("end", f"[{ts}] {prefix}{msg}\n")
+        except Exception:
+            pass
+
+
+def append_log(textbox, msg, level="info", source=None, max_lines=2000):
+    """向日志控件（CTkTextbox，或已是底层 tk.Text）追加一行并滚到底。
+
+    主界面右侧全局面板（App.log_line）与悬浮日志窗（gui/float_log.py）共用这一份实现，
+    保证「收起成悬浮窗」前后两边逐字一致。调用方只管传控件与本行内容。
+    """
+    if textbox is None:
+        return
+    tb = getattr(textbox, "_textbox", textbox)   # CTkTextbox -> 内部 tk.Text
+    try:
+        textbox.configure(state="normal")
+    except Exception:
+        pass
+    insert_log_line(tb, msg, level, source, max_lines=max_lines)
+    try:
+        textbox.see("end")
+    except Exception:
+        pass
+    try:
+        textbox.configure(state="disabled")
+    except Exception:
+        pass
+
+
 # 日志级别 -> 颜色令牌（语义固定；配色时用 resolve() 取当前端单值）
 LEVEL_COLOR = {
     "info": TEXT,
