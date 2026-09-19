@@ -6,6 +6,7 @@
 
 import os
 import re
+import math
 import time
 import ctypes
 import ctypes.wintypes
@@ -15,6 +16,8 @@ import numpy as np
 import cv2
 import mss
 import pygetwindow as gw
+
+from . import vision
 
 
 # 句柄相关的 user32 函数：必须显式声明 restype/argtypes 为 HWND(=void*)，
@@ -537,3 +540,122 @@ def grab(rect):
                            "width": int(w), "height": int(h)})
     img = np.array(raw)  # BGRA
     return cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+
+
+# ----------------------------------------------------------------------
+# 跨分辨率识别（方案二）：截图在内存里预缩放回「标定基准尺度」+ 坐标反算
+# ----------------------------------------------------------------------
+# 为什么在这层做：识别前把画面缩回标定时的尺度，模板就能照原样匹配（详见 vision.scaled_threshold 的
+# 实测依据）。用户拍板的铁律是【绝不动游戏窗口本身】（也绝不改窗口尺寸来迁就识别），
+# 所以这里只在内存里的 numpy 数组上缩放，一个游戏像素都不动。
+#
+# ⚠ 最容易出 bug 的点（识别对了却点歪）：缩放后的命中坐标是【缩放后画面】的坐标系，
+#   必须乘 1/scale 换回当前屏幕坐标。约定：一律走 ScaledScene.to_screen()/
+#   ScaledScene.match_local()，别在任务里自己乘。
+SIZE_TOL = 4          # 与标定尺寸相差 ≤4px 视为同尺寸（窗口外壳会吸附到档位），不缩放
+
+
+def _resize(img, w, h):
+    """按目标宽高缩放（缩小时 INTER_AREA、放大时 INTER_LINEAR，与 list_row._scaled 一致）。"""
+    interp = cv2.INTER_AREA if (w * h) < (img.shape[1] * img.shape[0]) else cv2.INTER_LINEAR
+    return cv2.resize(img, (max(6, int(w)), max(6, int(h))), interpolation=interp)
+
+
+class ScaledScene:
+    """一次截图的「可归一化」包装：懒缩放 + 屏幕坐标反算。任务侧只需：
+
+        sc = win_mod.grab_scene(rect, calib_size)     # calib_size 见 core/calib_profiles.active_size
+        m = sc.match_local(tpl, threshold)            # 在【缩放后画面】里匹配（返回缩放后坐标）
+        if m: mouse.click(*sc.to_screen(m[0], m[1]))  # 一键换回当前屏幕坐标
+
+    约定（务必遵守，否则会点歪）：
+    - match_local 返回的坐标属于【缩放后画面】，只允许经 to_screen() 使用；
+    - sc.img / sc.local_rect 也是缩放后坐标系（配 sc.scale）；
+    - calib_size=None 或与窗口尺寸一致（±4px）时 scale=1.0、img 就是原图、坐标原样，
+      与「直接 grab() + vision.match()」逐字节等价（零回归）。
+    """
+
+    __slots__ = ("_rect", "_calib", "_img", "_norm", "_scale")
+
+    def __init__(self, rect, calib_size=None, img=None):
+        self._rect = [int(rect[0]), int(rect[1]), int(rect[2]), int(rect[3])]
+        self._calib = [int(calib_size[0]), int(calib_size[1])] if calib_size and len(calib_size) >= 2 else None
+        self._img = img
+        self._norm = None          # 缩放后的缓存图（懒算一次，别每次访问重采样）
+        self._scale = self._compute_scale()
+
+    # ---- 基本属性 ----
+    @property
+    def screen_rect(self):
+        """截图时用的屏幕矩形 [left,top,w,h]（当前尺寸，未缩放）。"""
+        return list(self._rect)
+
+    @property
+    def scale(self):
+        """「标定基准尺寸 ÷ 当前窗口尺寸」的缩放比（几何平均，抗单维误差）。
+        =1.0 表示不需要归一化（尺寸一致或没标定过）。"""
+        return self._scale
+
+    @property
+    def normalized(self):
+        """是否真的做了预缩放（scale 明显偏离 1）。"""
+        return abs(self._scale - 1.0) >= 0.02
+
+    # ---- 图像（懒加载：第一次访问才截图/缩放，只用坐标不算的场景不付截图代价）----
+    def _compute_scale(self):
+        if not self._calib:
+            return 1.0
+        w, h, bw, bh = self._rect[2], self._rect[3], self._calib[0], self._calib[1]
+        if w <= 0 or h <= 0 or bw <= 0 or bh <= 0:
+            return 1.0
+        if abs(w - bw) <= SIZE_TOL and abs(h - bh) <= SIZE_TOL:
+            return 1.0
+        return max(0.5, min(2.0, math.sqrt((bw / w) * (bh / h))))
+
+    @property
+    def img(self):
+        """要拿去匹配的画面：需要归一化时是【预缩放回基准尺度】的图，否则就是原始截图。
+        缩放结果缓存一次（同一张场景常被多个模板反复匹配，别每次访问都重采样）。"""
+        if self._img is None:
+            self._img = grab(self._rect)
+        if not self.normalized:
+            return self._img
+        if self._norm is None:
+            self._norm = _resize(self._img, self._rect[2] * self._scale, self._rect[3] * self._scale)
+        return self._norm
+
+    @property
+    def local_rect(self):
+        """缩放后画面在原屏幕矩形内的比例矩形：[x, y, w, h]（x/y 恒为 0，尺寸按 scale）。
+        仅供绘制/调试；坐标换算一律用 to_screen()。"""
+        if not self.normalized:
+            return [0, 0, self._rect[2], self._rect[3]]
+        return [0, 0, int(round(self._rect[2] * self._scale)), int(round(self._rect[3] * self._scale))]
+
+    # ---- 坐标换算（唯一出口）----
+    def to_screen(self, x, y):
+        """把【缩放后画面】里的点换回当前屏幕绝对坐标。"""
+        if x is None or y is None:
+            return None
+        s = self._scale or 1.0
+        return (self._rect[0] + int(round(x / s)), self._rect[1] + int(round(y / s)))
+
+    def to_screen_box(self, box):
+        """把缩放后坐标系里的 [x,y,w,h] 换回屏幕绝对 [left,top,w,h]。"""
+        if not box:
+            return None
+        s = self._scale or 1.0
+        return [self._rect[0] + int(round(box[0] / s)), self._rect[1] + int(round(box[1] / s)),
+                int(round(box[2] / s)), int(round(box[3] / s))]
+
+    # ---- 匹配（阈值按 scale 动态放宽，见 vision.scaled_threshold）----
+    def match(self, template_bgr, threshold):
+        """在【缩放后画面】里匹配模板；命中返回缩放后坐标 (cx, cy, score)，否则 None。
+        ⚠ 拿去点击前必须 to_screen()。"""
+        return vision.match_scaled(self.img, template_bgr, threshold, self._scale)
+
+
+def grab_scene(rect, calib_size=None):
+    """截取屏幕矩形，返回可归一化坐标的 ScaledScene（识别 + 点击坐标一次搞定，见 ScaledScene 约定）。
+    calib_size 传「激活尺寸组的尺寸」（core/calib_profiles.active_size）；None=不归一化（同旧行为）。"""
+    return ScaledScene(rect, calib_size)

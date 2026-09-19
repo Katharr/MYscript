@@ -17,6 +17,7 @@ import customtkinter as ctk
 from . import theme as T
 from .roi_overlay import select_roi_on_screen
 from ..core import config as cfg_mod
+from ..core import calib_profiles as calib
 from ..core import window as win_mod
 from ..core import vision
 from ..core.teaming import TEAM_CALIBRATION
@@ -32,9 +33,39 @@ _VIRTUAL_SPECS = {"teaming": ("组队（全局共享）", TEAM_CALIBRATION)}
 # 当前屏幕框选，不再开 CalibrateDialog 窗口。逻辑与 CalibrateDialog._grab_roi 同源
 # （藏起界面→当前屏幕框选→按落点反查参照窗口算相对坐标），抽成模块级函数共享。
 # ----------------------------------------------------------------------
+# ----------------------------------------------------------------------
+# 尺寸组满员时的统一处理
+# ----------------------------------------------------------------------
+def resolve_profile(cfg, size, app=None):
+    """按窗口尺寸取/建尺寸组，返回组号；【组已满 3 个】时先问用户替换掉哪一个（app 提供弹窗），
+    再重试一次。用户取消返回 None（调用方放弃本次标定，不写任何字段）。
+
+    为什么要有这个引导：胶囊只留 3 个位置（用户拍板），标到一个新尺寸时若已满，
+    旧版只能报「请先删一组」把用户丢在半路。这里就地让用户选一个旧组替换掉，
+    然后自动继续标定——删组只删记录、模板图不删（见 core/calib_profiles 铁律 3）。
+    """
+    try:
+        return calib.get_or_create(cfg, [size[0], size[1]])
+    except ValueError:
+        pass
+    ask = getattr(app, "on_profile_full", None) if app is not None else None
+    if not callable(ask):
+        return None
+    pid = ask([int(size[0]), int(size[1])])
+    if pid is None:
+        return None
+    calib.delete(cfg, pid)
+    try:
+        return calib.get_or_create(cfg, [int(size[0]), int(size[1])])
+    except ValueError:
+        return None
+
+
 def grab_roi_on_app(app, cfg, prompt, with_crop=False, toast=None, alpha_windows=None):
-    """在【当前屏幕】框选一块区域，返回 (rel_roi, crop)；失败/取消返回 (None, None)。
+    """在【当前屏幕】框选一块区域，返回 (rel_roi, crop, pid)；失败/取消返回 (None, None, None)。
     不激活/不切前台：你把哪个号摆在前面就标到哪个，框完按落点反查参照窗口算相对坐标。
+    pid = 本次标定所属的「尺寸组」号（按参照窗口尺寸 resolve_profile：同尺寸复用、
+    否则新建并设为激活组；已满 3 组时引导用户替换一个旧组）。
     toast: 可选回调 toast(msg, color)；alpha_windows: 框选期间临时隐身的窗口（默认仅 app）。"""
     title = cfg.get("window_title", "梦幻西游")
     offset = cfg.get("window_offset", [0, 0])
@@ -51,7 +82,7 @@ def grab_roi_on_app(app, cfg, prompt, with_crop=False, toast=None, alpha_windows
     if not hint_wins:
         if toast:
             toast(f"没找到游戏窗口（标题含「{title}」），请先打开游戏。", T.WARN)
-        return None, None
+        return None, None, None
     hr = hint_wins[0].rect()
     center = (hr[0] + hr[2] // 2, hr[1] + hr[3] // 2) if hr else None
 
@@ -77,7 +108,7 @@ def grab_roi_on_app(app, cfg, prompt, with_crop=False, toast=None, alpha_windows
     else:
         roi_abs, crop = result, None
     if roi_abs is None:
-        return None, None
+        return None, None, None
 
     cx = roi_abs[0] + roi_abs[2] // 2
     cy = roi_abs[1] + roi_abs[3] // 2
@@ -86,19 +117,26 @@ def grab_roi_on_app(app, cfg, prompt, with_crop=False, toast=None, alpha_windows
     if wr is None:
         if toast:
             toast("框选区域不在任何游戏窗口内：请把要标的窗口移到前面，框在它的画面里。", T.WARN)
-        return None, None
-    cfg.setdefault("targets", {})["base_size"] = [wr[2], wr[3]]
+        return None, None, None
+    # 记下「这一套标定图是在多大的窗口下标定的」：同尺寸复用已有组、否则新建并设为激活组，
+    # 同时同步 targets.base_size 镜像（唯一写入口，见 core/calib_profiles.py 模块头）。
+    pid = resolve_profile(cfg, [wr[2], wr[3]], app=app)
+    if pid is None:
+        if toast:
+            toast("尺寸组已满且未选择要替换的旧组，本次标定未保存。可在「通用/工具」页点"
+                  "「管理/删除」先删一个旧组。", T.WARN)
+        return None, None, None
     cfg_mod.save_config(cfg)
     rel = [roi_abs[0] - wr[0], roi_abs[1] - wr[1], roi_abs[2], roi_abs[3]]
-    return rel, crop
+    return rel, crop, pid
 
 
 def calibrate_template_direct(app, task_name, key, name, toast=None):
     """无弹窗直接框选并裁图存成模板，写入 cfg.tasks.<task_name>.templates[key]。返回 True=已保存。
     供「标定队长ID」按钮直接调用（task_name="teaming", key="leader_id"）。"""
     cfg = cfg_mod.load_config()
-    rel, crop = grab_roi_on_app(app, cfg, f"框选「{name}」（会裁下来存成模板图）",
-                                with_crop=True, toast=toast)
+    rel, crop, pid = grab_roi_on_app(app, cfg, f"框选「{name}」（会裁下来存成模板图）",
+                                     with_crop=True, toast=toast)
     if rel is None:
         return False
     if crop is None or crop.size == 0:
@@ -113,6 +151,8 @@ def calibrate_template_direct(app, task_name, key, name, toast=None):
     tc = cfg_mod.task_config(cfg, task_name)
     tc.setdefault("templates", {})[key] = rel_path
     cfg_mod.set_task_config(cfg, task_name, tc)
+    calib.set_task_profile(cfg, task_name, pid)
+    calib.set_template_profile(cfg, task_name, key, pid)
     cfg_mod.save_config(cfg)
     return True
 
@@ -343,17 +383,18 @@ class CalibrateDialog(ctk.CTkToplevel):
 
     # ---- 区域标定 ----
     def _calibrate_region(self, key, name):
-        rel, _crop = self._grab_roi(f"框选「{name}」")
+        rel, _crop, pid = self._grab_roi(f"框选「{name}」")
         if rel is None:
             return
         self.tc.setdefault("regions", {})[key] = rel
+        calib.set_task_profile(self.cfg, self.task_name, pid)
         self._save()
         self._refresh()
-        self._toast(f"已记录 {name}：{rel}", T.SUCCESS)
+        self._toast(f"已记录 {name}：{rel}（尺寸组 {calib.label_for(pid)}）", T.SUCCESS)
 
     # ---- 标志模板标定（裁图存盘）----
     def _calibrate_template(self, key, name):
-        rel, crop = self._grab_roi(f"框选「{name}」（会裁下来存成模板图）", with_crop=True)
+        rel, crop, pid = self._grab_roi(f"框选「{name}」（会裁下来存成模板图）", with_crop=True)
         if rel is None:
             return
         if crop is None or crop.size == 0:
@@ -364,13 +405,15 @@ class CalibrateDialog(ctk.CTkToplevel):
             self._toast("保存模板图失败。", T.DANGER)
             return
         self.tc.setdefault("templates", {})[key] = rel_path
+        calib.set_task_profile(self.cfg, self.task_name, pid)
+        calib.set_template_profile(self.cfg, self.task_name, key, pid)
         self._save()
         self._refresh()
-        self._toast(f"已记录模板 {name}", T.SUCCESS)
+        self._toast(f"已记录模板 {name}（尺寸组 {calib.label_for(pid)}）", T.SUCCESS)
 
     # ---- 添加装备（watchlist）----
     def _add_item(self):
-        rel, crop = self._grab_roi("框选要抢的装备（图标+名字）", with_crop=True)
+        rel, crop, pid = self._grab_roi("框选要抢的装备（图标+名字）", with_crop=True)
         if rel is None:
             return
         if crop is None or crop.size == 0:
@@ -385,6 +428,8 @@ class CalibrateDialog(ctk.CTkToplevel):
             return
         self.tc.setdefault("watchlist", []).append(
             {"name": name, "template": rel_path, "max_price": None})
+        calib.set_task_profile(self.cfg, self.task_name, pid)
+        calib.set_template_profile(self.cfg, self.task_name, name, pid)
         self._save()
         self._refresh()
         self._toast(f"已添加装备：{name}", T.SUCCESS)
@@ -434,14 +479,33 @@ class CalibrateDialog(ctk.CTkToplevel):
         for w in self.template_grid.winfo_children():
             w.destroy()
         saved = self.tc.get("templates", {})
+        aid = calib.active_id(self.cfg)
         for i, (key, name, desc) in enumerate(self.spec.get("templates", [])):
             r, col = divmod(i, self.n_cols)
             rel = saved.get(key)
             thumb = load_thumb(rel, self._thumbs, max_h=46) if rel else None
+            pid = calib.template_profile(self.cfg, self.task_name, key)
             self._thumb_card(self.template_grid, r, col, name=name,
                              thumb=thumb, has_path=bool(rel), rel=rel,
+                             badge=self._badge_style(pid, aid),
                              btn_text=("重新标定" if thumb is not None else "去标定"),
                              btn_cmd=lambda k=key, n=name: self._calibrate_template(k, n))
+
+    def _badge_style(self, pid, aid):
+        """模板卡片右上角「尺寸组」角标的显示信息：返回 (文字, 底色, 文字色)。这是用户的核心诉求之一
+        ——一眼看出「哪些图是当前尺寸标的、哪些是旧的」。
+
+        - 当前组（pid == 激活组）：「① ✓」+ 该组配色高亮
+        - 旧组（pid ≠ 激活组）  ：「① 1521×1198」+ 该组配色（编号 + 尺寸都是线索）
+        - 未记录（pid 为 None） ：「○ 旧图」+ 灰（本次改版前标的老图，一律当旧图处理）
+        """
+        if pid is None:
+            fg, txt = T.PROFILE_NEUTRAL
+            return ("○ 旧图", fg, txt)
+        fg, txt = T.PROFILE_COLORS[calib.color_index(pid)]
+        if aid is not None and pid == aid:
+            return (f"{calib.label_for(pid)} ✓", fg, txt)
+        return (f"{calib.label_for(pid)} {calib.size_text(calib.get(self.cfg, pid))}", fg, txt)
 
     # ---- 装备缩略图画廊（watchlist）----
     def _render_watchlist(self):
@@ -461,14 +525,16 @@ class CalibrateDialog(ctk.CTkToplevel):
             r, col = divmod(i, self.n_cols)
             rel = it.get("template")
             thumb = load_thumb(rel, self._thumbs, max_h=46) if rel else None
+            pid = calib.template_profile(self.cfg, self.task_name, it.get("name", ""))
             self._thumb_card(self.item_list, r, col, name=it.get("name", "?"),
                              thumb=thumb, has_path=bool(rel), rel=rel,
+                             badge=self._badge_style(pid, calib.active_id(self.cfg)),
                              btn_text="删除", danger_btn=True,
                              btn_cmd=lambda idx=i: self._delete_item(idx))
 
     # ---- 单张缩略图卡片（模板/装备共用）：名字+状态徽标 / 缩略图(占位) / 操作按钮，三态等高 ----
     def _thumb_card(self, parent, r, col, name, thumb, has_path, rel,
-                    btn_text, btn_cmd, danger_btn=False):
+                    btn_text, btn_cmd, danger_btn=False, badge=None):
         ok = thumb is not None
         card = ctk.CTkFrame(parent, fg_color=T.SURFACE_2, corner_radius=T.RADIUS_SM,
                             border_width=2, border_color=(T.SUCCESS if ok else T.BORDER))
@@ -484,6 +550,13 @@ class CalibrateDialog(ctk.CTkToplevel):
         T.bind_wraplength(nm)
         ctk.CTkLabel(head, text=("● 已裁图" if ok else "○ 未标定"), font=self.fonts["small"],
                      text_color=(T.SUCCESS if ok else T.TEXT_DIM)).grid(row=0, column=1, sticky="e", padx=(6, 0))
+        if badge:
+            # 右上角「尺寸组」角标（胶囊形）：一眼看出这张图是哪一组尺寸标的、是不是当前组。
+            # 关掉 grid_propagate 让它保持胶囊高度，不与名字行互相撑高。
+            btxt, bfg, btc = badge
+            pill = ctk.CTkLabel(head, text=btxt, font=self.fonts["small"], fg_color=bfg,
+                                text_color=btc, corner_radius=T.RADIUS_PILL, padx=8, height=20)
+            pill.grid(row=1, column=0, columnspan=2, sticky="e", pady=(4, 0))
 
         # 缩略图 / 占位框：固定高度让有图/无图卡片等高，网格不参差
         holder = ctk.CTkFrame(card, fg_color=T.SURFACE, corner_radius=T.RADIUS_SM,

@@ -54,6 +54,49 @@ def match(scene_bgr, template_bgr, threshold):
     return None
 
 
+# ----------------------------------------------------------------------
+# 跨分辨率匹配（方案二：把画面预缩放回标定基准尺度）
+# ----------------------------------------------------------------------
+# 实测依据（项目真实模板 12 张，合成不同尺度场景，阈值 0.85）：不补偿时只有 1.0x 认得出；
+# 预缩放回基准后「位置正确率 100%」，但重采样平滑边缘让小字按钮（如 30×15 的「参加」）掉分，
+# 故需按缩放比动态放宽阈值。⚠ 别用灰度/CLAHE：实测非基准命中率 0.0%（连 1.0x 都从 1.000 掉到
+# 0.959）——TM_CCOEFF_NORMED 已做均值减法归一化，CLAHE 只会放大噪点并丢掉颜色这个真实判别信息。
+_SCALE_RELAX = ((0.75, 0.75), (0.90, 0.80))   # (缩放比上限, 该段用的阈值)；再往上是原阈值
+SCALE_MIN = 0.70                              # 低于此缩放无解（笔画信息已丢失），只能重新标定
+SCALE_MAX = 1.50
+
+
+def scaled_threshold(threshold, scale):
+    """按缩放比把阈值动态放宽（见上面实测依据）。scale≈1 时【原样返回 threshold】，零回归。
+
+    分段（与实测表格一致）：0.9~1.5x 保持原阈值；0.75~0.9x 用 0.80；0.6~0.75x 用 0.75。
+    下限不低于 0.75——再低会引入误认；真正的防线是「位置靠几何绑定推、分数只排序」（见 core/list_row）。
+    """
+    if scale is None:
+        return threshold
+    try:
+        s = abs(float(scale))
+    except (TypeError, ValueError):
+        return threshold
+    if abs(s - 1.0) < 0.02:
+        return threshold
+    for hi, relaxed in _SCALE_RELAX:
+        if s < hi:
+            return min(float(threshold), relaxed)
+    return threshold
+
+
+def match_scaled(scene_bgr, template_bgr, threshold, scale):
+    """match() 的跨分辨率版：scene 已被预缩放回标定基准尺度时，用 scale 动态放宽阈值后再匹配。
+
+    scale = 「当前窗口尺寸 ÷ 标定基准尺寸」的缩放比（见 window.ScaledScene.scale）。
+    ⚠ 返回的 cx/cy 是【缩放后画面】里的坐标，调用方必须用 window.ScaledScene.to_screen() 或
+    自己乘 1/scale 换算回当前屏幕坐标，否则会点歪（见 core/window.ScaledScene 的约定）。
+    scale=None/≈1 时行为与 match() 逐字节一致（零回归）。
+    """
+    return match(scene_bgr, template_bgr, scaled_threshold(threshold, scale))
+
+
 def frame_diff(a, b):
     """两帧平均像素绝对差。形状不一致返回大值（视为仍在变化/不静止）。
     用于「画面是否静止」和「列表滚不动了=到顶/到底」判定。"""

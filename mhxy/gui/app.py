@@ -12,6 +12,7 @@ import threading
 import customtkinter as ctk
 
 from . import theme as T
+from ..core import calib_profiles as calib
 from ..core import config as cfg_mod
 from ..core import window as win_mod
 from ..core.runner import TaskRunner
@@ -2063,6 +2064,9 @@ class GeneralPage(ctk.CTkFrame):
         self.btn_leader = None      # 行内队长ID按钮（_refresh_body 每次重建）
         self._leader_thumbs = []    # 行内队长ID缩略图防 GC
         self.lbl_team_status = None
+        # 标定时「尺寸组已满 3 个」的引导回调：标定入口会调它让用户挑一个旧组替换
+        # （见 calibrate_dialog.resolve_profile）。挂个小函数，免得标定模块反向依赖本页。
+        self.app.on_profile_full = self._ask_replace_profile
         self._build()
 
     def _build(self):
@@ -2094,16 +2098,27 @@ class GeneralPage(ctk.CTkFrame):
         self._refresh_body()
 
     def _normalize_now(self):
-        """点「还原尺寸」时触发：把所有尺寸≠基准的游戏窗口拉回基准尺寸。
-        基准未设置时提示；没有窗口时提示。只对尺寸不符的窗口动手（已是基准的不碰）。"""
+        """点「还原尺寸」时触发：把所有尺寸≠激活尺寸组的窗口拉回该组尺寸。
+        没有尺寸组时提示（标定一次即自动建组）；没有窗口时提示。只对尺寸不符的窗口动手。"""
         cfg = cfg_mod.load_config()
         self.cfg = cfg
         self.app.cfg = cfg
-        base = (cfg.get("targets") or {}).get("base_size")
-        if not base or len(base) < 2:
-            self.app.toast("请先设置基准尺寸（填上面两个框或在窗口列表点「设为基准」）")
+        size = calib.active_size(cfg)
+        if not size:
+            self.app.toast("还没有尺寸组：先在「标定 / 加装备」里标定任意一项（会自动记住窗口尺寸）")
             return
-        bw, bh = int(base[0]), int(base[1])
+        self._restore_size(size)
+
+    def _restore_size(self, size):
+        """把所有尺寸≠size 的游戏窗口拉回 size（[w,h]）。
+        不动游戏画面里的任何东西，只改窗口大小；已是目标尺寸的窗口不碰。"""
+        cfg = self.cfg = cfg_mod.load_config()
+        self.app.cfg = cfg
+        try:
+            bw, bh = int(size[0]), int(size[1])
+        except (TypeError, ValueError, IndexError):
+            self.app.toast("该尺寸组的分辨率无效")
+            return
         title = cfg.get("window_title", "梦幻西游")
         offset = cfg.get("window_offset", [0, 0])
         try:
@@ -2113,13 +2128,10 @@ class GeneralPage(ctk.CTkFrame):
         if not wins:
             self.app.toast(f"没检测到游戏窗口（标题含「{title}」），请先打开游戏")
             return
-        todo = []
-        for w in wins:
-            r = w.rect()
-            if r and (abs(r[2] - bw) > 4 or abs(r[3] - bh) > 4):
-                todo.append(w)
+        todo = [w for w in wins
+                if (w.rect() and (abs(w.rect()[2] - bw) > 4 or abs(w.rect()[3] - bh) > 4))]
         if not todo:
-            self.app.toast(f"所有窗口已是基准尺寸 {bw}×{bh}，无需还原")
+            self.app.toast(f"所有窗口已是 {bw}×{bh}，无需还原")
             self.refresh()
             return
         ok = 0
@@ -2133,13 +2145,13 @@ class GeneralPage(ctk.CTkFrame):
                 got.append((r[2], r[3]))
         self.app._game_connected = None    # 尺寸变了，强制下次 tick 刷新药丸
         if ok == len(todo):
-            self.app.toast(f"已把 {ok} 个号还原到基准尺寸 {bw}×{bh}")
+            self.app.toast(f"已把 {ok} 个号还原到 {bw}×{bh}")
         elif got and max(s[0] for s in got) - min(s[0] for s in got) <= 4 \
                 and max(s[1] for s in got) - min(s[1] for s in got) <= 4:
             # 新外壳锁定纵横比：各号已被统一到同一可达尺寸（多开同尺寸的真正目标已达成，
-            # 允许 ±4px 吸附误差），但与旧基准不符——基准是旧客户端留下的、落在比例线外，提示重设。
+            # 允许 ±4px 吸附误差），但与目标尺寸不符——该尺寸落在比例线外，提示重新标定。
             self.app.toast(f"已把 {len(todo)} 个号统一到 {got[0][0]}×{got[0][1]}；"
-                           f"新版客户端锁定窗口比例，基准 {bw}×{bh} 不可达，建议重新「设为基准」")
+                           f"新版客户端锁定窗口比例，{bw}×{bh} 不可达，建议重新标定一次")
         else:
             hint = "" if win_mod.is_admin() else "（请用管理员身份运行，启动时 UAC 点「是」）"
             self.app.toast(f"已还原 {ok}/{len(todo)} 个号到 {bw}×{bh}，部分窗口调整失败{hint}")
@@ -2149,8 +2161,6 @@ class GeneralPage(ctk.CTkFrame):
         for w in self.body.winfo_children():
             w.destroy()
         cfg = self.cfg
-        targets = cfg.get("targets", {})
-        base = targets.get("base_size")
 
         # ── 组队（跨任务共享：任何用到组队的任务都自动读这份标定）──
         c_team = self._card()
@@ -2228,19 +2238,24 @@ class GeneralPage(ctk.CTkFrame):
         # ── 整理背包（跨任务共享：任何任务流程都可穿插调用，这里可单独一键运行）──
         self._build_organize_card()
 
-        # ── 窗口尺寸归一化 ──
+        # ── 窗口尺寸归一化（胶囊组：每个尺寸组 = 一套标定图是在哪个窗口尺寸下标定的）──
         c2 = self._card()
         head2 = ctk.CTkFrame(c2, fg_color="transparent")
         head2.pack(fill="x", padx=16, pady=(14, 4))
         head2.grid_columnconfigure(0, weight=1)
         txt2 = ctk.CTkFrame(head2, fg_color="transparent")
         txt2.grid(row=0, column=0, sticky="ew")
-        ctk.CTkLabel(txt2, text="窗口尺寸归一化", font=self.fonts["h2"], text_color=T.TEXT).pack(anchor="w")
-        base_txt = f"{int(base[0])}×{int(base[1])}" if base and len(base) >= 2 else "未设置"
-        ctk.CTkLabel(txt2, text=f"当前基准尺寸：{base_txt}", font=self.fonts["body"],
-                     text_color=T.TEXT if base else T.WARN).pack(anchor="w", pady=(4, 0))
-        sub2 = ctk.CTkLabel(txt2, text="点「还原尺寸」把所有窗口拉回基准尺寸（脚本点位按此尺寸标定）。"
-                                       "在下面窗口列表点「设为基准」来设定基准尺寸。",
+        ctk.CTkLabel(txt2, text="窗口尺寸归一化（标定尺寸组）", font=self.fonts["h2"],
+                     text_color=T.TEXT).pack(anchor="w")
+        aid = calib.active_id(cfg)
+        prof = calib.get(cfg, aid)
+        cur_txt = (f"当前尺寸组：{calib.label_for(aid)} {calib.size_text(prof)}"
+                   if prof else "尚未标定任何尺寸组")
+        ctk.CTkLabel(txt2, text=cur_txt, font=self.fonts["body"],
+                     text_color=T.TEXT if prof else T.WARN).pack(anchor="w", pady=(4, 0))
+        sub2 = ctk.CTkLabel(txt2, text="标定时会自动记住当时的窗口尺寸，形成一个尺寸组；最多 3 组。"
+                                       "全局共用同一套模板图，改分辨率后识别会自动按缩放比补偿。"
+                                       "点胶囊可切到该组，再点「还原尺寸」把窗口拉回它标定时的尺寸。",
                             font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
         sub2.pack(fill="x", pady=(2, 0))
         bind_wraplength(sub2)
@@ -2254,13 +2269,45 @@ class GeneralPage(ctk.CTkFrame):
                       border_width=1, border_color=T.BORDER,
                       command=self.refresh).pack()
 
-        if not (base and len(base) >= 2):
-            ctk.CTkLabel(c2, text="基准尺寸尚未设置：在下方窗口列表点「设为基准」即可。",
-                         font=self.fonts["small"], text_color=T.WARN, justify="left").pack(
-                             anchor="w", padx=16, pady=(2, 0))
+        # 尺寸组胶囊：编号 + 分辨率（+ ✓ 表示当前组）。点整体＝切到该组，行内「还原」＝把窗口拉回该组尺寸。
+        pills = ctk.CTkFrame(c2, fg_color="transparent")
+        pills.pack(fill="x", padx=16, pady=(10, 2))
+        for it in calib.items(cfg):
+            self._profile_pill(pills, it, active=(it["id"] == aid))
+        if calib.items(cfg):
+            ctk.CTkButton(pills, text="管理/删除", font=self.fonts["small"], height=30, width=84,
+                          corner_radius=T.RADIUS_PILL, fg_color="transparent", hover_color=T.BORDER,
+                          text_color=T.TEXT_DIM, border_width=1, border_color=T.BORDER,
+                          command=self._open_profile_admin).pack(side="left", padx=(6, 0))
+        if not prof:
+            hint0 = ctk.CTkLabel(c2, text="还没有尺寸组：「标定 / 加装备」里框选任何一项就会按当前窗口尺寸"
+                                          "自动新建一组（组是自动记的，不必手动设基准）。",
+                                 font=self.fonts["small"], text_color=T.WARN, justify="left")
+            hint0.pack(fill="x", padx=16, pady=(2, 0))
+            bind_wraplength(hint0)
 
-        # 窗口列表（信息 + 快捷把某个窗口尺寸设为基准）
-        ctk.CTkLabel(c2, text="检测到的窗口（点「设为基准」用该窗口的当前尺寸作为基准）：",
+        # 旧尺寸模板一键重标（找不到就整块不显示，免得给用户添噪音）
+        stale = self._stale_tasks()
+        if stale:
+            ctk.CTkFrame(c2, fg_color=T.BORDER, height=1).pack(fill="x", padx=16, pady=(10, 0))
+            srow = ctk.CTkFrame(c2, fg_color="transparent")
+            srow.pack(fill="x", padx=16, pady=(10, 0))
+            stxt = ctk.CTkFrame(srow, fg_color="transparent")
+            stxt.pack(side="left", fill="x", expand=True)
+            ctk.CTkLabel(stxt, text=f"有 {sum(n for _t, _l, n in stale)} 个模板是旧尺寸标的",
+                         font=self.fonts["body_b"], text_color=T.WARN).pack(anchor="w")
+            shint = ctk.CTkLabel(stxt, text="它们（或它们所在的任务）在当前窗口尺寸下可能认不出，"
+                                            "点右边按钮逐个重标一遍即可。",
+                                 font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
+            shint.pack(fill="x")
+            bind_wraplength(shint)
+            ctk.CTkButton(srow, text="重标旧尺寸的模板", font=self.fonts["body"], height=36, width=150,
+                          corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
+                          border_width=1, border_color=T.BORDER,
+                          command=self._open_stale_dialog).pack(side="right", padx=(12, 0))
+
+        # 窗口列表（信息 + 显示各号当前对应哪个尺寸组）
+        ctk.CTkLabel(c2, text="检测到的窗口（显示它属于哪个尺寸组；点「还原」把该号拉回激活组的尺寸）：",
                      font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left").pack(
                          anchor="w", padx=16, pady=(8, 2))
         # 窗口枚举（getAllWindows）很慢、绝不能卡主线程：先放占位、后台线程枚举完再回主线程填。
@@ -2268,9 +2315,263 @@ class GeneralPage(ctk.CTkFrame):
         rows_holder.pack(fill="x")
         ctk.CTkLabel(rows_holder, text="正在检测窗口…", font=self.fonts["body"],
                      text_color=T.TEXT_DIM).pack(anchor="w", padx=16, pady=(2, 14))
-        self._kick_enum_windows(rows_holder, base)
+        self._kick_enum_windows(rows_holder, list(prof["size"]) if prof else None)
 
-    def _kick_enum_windows(self, holder, base):
+    def _profile_pill(self, parent, it, active):
+        """一个尺寸组胶囊：`① 1521×1198 ✓`（胶囊形状 + 该组配色）。整体可点＝切到该组。
+        行内「还原」把窗口拉回该组尺寸（用户诉求：以后随意改尺寸也能随时回到标定时的尺寸）。
+        未激活组用中性灰（PROFILE_NEUTRAL）——编号才是主键，颜色只是辅助识别。"""
+        if active:
+            fg, txt = T.PROFILE_COLORS[calib.color_index(it["id"])]
+        else:
+            fg, txt = T.PROFILE_NEUTRAL
+        box = ctk.CTkFrame(parent, fg_color="transparent")
+        box.pack(side="left", padx=(0, 8), pady=2)
+        label = f"{it['label']} {it['size'][0]}×{it['size'][1]}" + ("  ✓" if active else "")
+        ctk.CTkButton(box, text=label, font=self.fonts["small"], height=30,
+                      corner_radius=T.RADIUS_PILL, fg_color=fg, hover_color=fg, text_color=txt,
+                      border_width=(2 if active else 1), border_color=txt,
+                      command=lambda pid=it["id"]: self._activate_profile(pid)).pack(side="left")
+        ctk.CTkButton(box, text="还原", font=self.fonts["small"], height=30, width=52,
+                      corner_radius=T.RADIUS_PILL, fg_color="transparent", hover_color=T.BORDER,
+                      text_color=T.TEXT_DIM, border_width=1, border_color=T.BORDER,
+                      command=lambda sz=list(it["size"]): self._restore_size(sz)).pack(side="left", padx=(4, 0))
+
+    def _activate_profile(self, pid):
+        cfg = cfg_mod.load_config()
+        if not calib.set_active(cfg, pid):
+            self.app.toast("该尺寸组不存在，请点「刷新」")
+            return
+        cfg_mod.save_config(cfg)
+        self.app.cfg = cfg
+        self.app._game_connected = None
+        prof = calib.get(cfg, pid)
+        self.app.toast(f"已切到尺寸组 {calib.label_for(pid)}（{calib.size_text(prof)}）")
+        self.refresh()
+
+    # ---- 尺寸组的删除/替换（胶囊满 3 组后要腾位子时的唯一入口）----
+    def _delete_profile(self, pid):
+        cfg = cfg_mod.load_config()
+        prof = calib.get(cfg, pid)
+        if prof is None:
+            self.app.toast("该尺寸组已不存在，请点「刷新」")
+            return
+        left = calib.delete(cfg, pid)
+        cfg_mod.save_config(cfg)
+        self.app.cfg = cfg
+        self.app._game_connected = None
+        tip = (f"已删除尺寸组 {calib.label_for(pid)}（{calib.size_text(prof)}）"
+               f"；模板图一个都没删，只是归属改回「未记录」，可随时重标。")
+        if left is not None:
+            tip += f" 当前组改为 {calib.label_for(left)}。"
+        self.app.toast(tip)
+        self.refresh()
+
+    def _open_profile_admin(self):
+        """「管理/删除」：列出所有尺寸组，逐个可删（胶囊满 3 组时必须先删一个才能标新尺寸）。
+        删组只删记录、绝不删模板图，故做成无二次确认的轻操作。"""
+        cfg = self.cfg = cfg_mod.load_config()
+        its = calib.items(cfg)
+        if not its:
+            self.app.toast("还没有尺寸组可管理")
+            return
+        aid = calib.active_id(cfg)
+        dlg = ctk.CTkToplevel(self.app)
+        dlg.title("尺寸组管理")
+        dlg.geometry("520x400")
+        dlg.configure(fg_color=T.BG)
+        dlg.transient(self.app)
+        ctk.CTkLabel(dlg, text="标定尺寸组", font=self.fonts["title"], text_color=T.TEXT).pack(
+            anchor="w", padx=20, pady=(18, 0))
+        hint = ctk.CTkLabel(dlg, text="最多 3 组。要在一个新尺寸下标定、但组已满时，先在这里删掉一个旧组。"
+                                      "删除只删记录，模板图不会删。",
+                            font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
+        hint.pack(fill="x", padx=20, pady=(4, 10))
+        bind_wraplength(hint, padding=40)
+
+        body = ctk.CTkScrollableFrame(dlg, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        body.grid_columnconfigure(0, weight=1)
+        T.tune_scroll_speed(body)
+
+        def _row(i, it, is_act):
+            fg, txt = (T.PROFILE_COLORS[calib.color_index(it["id"])] if is_act else T.PROFILE_NEUTRAL)
+            row = ctk.CTkFrame(body, fg_color=T.SURFACE, corner_radius=T.RADIUS,
+                               border_width=1, border_color=T.BORDER)
+            row.grid(row=i, column=0, sticky="ew", padx=4, pady=6)
+            row.grid_columnconfigure(0, weight=1)
+            ctk.CTkLabel(row, text=f"{it['label']}  {it['size'][0]}×{it['size'][1]}"
+                                   + ("   ✓ 当前组" if is_act else ""),
+                         font=self.fonts["body_b"], fg_color=fg, text_color=txt,
+                         corner_radius=T.RADIUS_PILL, padx=10, height=26).grid(
+                             row=0, column=0, sticky="w", padx=14, pady=(10, 0))
+            ctk.CTkLabel(row, text=f"标定于 {it.get('at') or '（未知时间）'}", font=self.fonts["small"],
+                         text_color=T.TEXT_DIM).grid(row=1, column=0, sticky="w", padx=14, pady=(2, 10))
+
+            def _del(pid=it["id"], d=dlg):
+                self._delete_profile(pid)
+                try:
+                    d.destroy()
+                except Exception:
+                    pass
+                self._open_profile_admin()
+
+            ctk.CTkButton(row, text="删除", font=self.fonts["body"], height=32, width=80,
+                          corner_radius=T.RADIUS_SM, fg_color="transparent", hover_color=T.DANGER,
+                          text_color=T.DANGER, border_width=1, border_color=T.BORDER,
+                          command=_del).grid(row=0, column=1, rowspan=2, padx=14)
+
+        for i, it in enumerate(its):
+            _row(i, it, it["id"] == aid)
+
+    def _ask_replace_profile(self, size):
+        """标定遇到「组已满」时的引导：让用户挑一个旧组替换掉，随后由调用方重试同一项标定。
+        返回被替换掉的组号（用户取消返回 None）。这样用户不会卡在「必须先自己找地方删组」上。"""
+        cfg = cfg_mod.load_config()
+        its = calib.items(cfg)
+        if not its:
+            return None
+        picked = {"pid": None}
+        dlg = ctk.CTkToplevel(self.app)
+        dlg.title("尺寸组已满")
+        dlg.geometry("560x360")
+        dlg.configure(fg_color=T.BG)
+        dlg.transient(self.app)
+        ctk.CTkLabel(dlg, text=f"已有 3 个尺寸组，放不下 {int(size[0])}×{int(size[1])}",
+                     font=self.fonts["title"], text_color=T.TEXT).pack(anchor="w", padx=20, pady=(18, 0))
+        hint = ctk.CTkLabel(dlg, text="选一个旧组替换掉（只删它的记录，模板图不会删；属于它的模板会变成"
+                                      "「旧图」，可用「重标旧尺寸的模板」一键重标）。选好后会自动继续标定。",
+                            font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
+        hint.pack(fill="x", padx=20, pady=(4, 10))
+        bind_wraplength(hint, padding=40)
+
+        body = ctk.CTkScrollableFrame(dlg, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        body.grid_columnconfigure(0, weight=1)
+        T.tune_scroll_speed(body)
+        for i, it in enumerate(its):
+            row = ctk.CTkFrame(body, fg_color=T.SURFACE, corner_radius=T.RADIUS,
+                               border_width=1, border_color=T.BORDER)
+            row.grid(row=i, column=0, sticky="ew", padx=4, pady=6)
+            row.grid_columnconfigure(0, weight=1)
+            ctk.CTkLabel(row, text=f"{it['label']}  {it['size'][0]}×{it['size'][1]}", font=self.fonts["body_b"],
+                         text_color=T.TEXT).grid(row=0, column=0, sticky="w", padx=14, pady=(10, 0))
+            ctk.CTkLabel(row, text=f"标定于 {it.get('at') or '（未知时间）'}", font=self.fonts["small"],
+                         text_color=T.TEXT_DIM).grid(row=1, column=0, sticky="w", padx=14, pady=(0, 10))
+
+            def _pick(pid=it["id"]):
+                picked["pid"] = pid
+                dlg.destroy()
+
+            ctk.CTkButton(row, text="替换掉它", font=self.fonts["body"], height=32, width=100,
+                          corner_radius=T.RADIUS_SM, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
+                          text_color=T.ON_ACCENT, command=_pick).grid(row=0, column=1, rowspan=2, padx=14)
+        try:
+            self.app.wait_window(dlg)
+        except Exception:
+            pass
+        return picked["pid"]
+
+    # ---- 旧尺寸模板一键重标 ----
+    def _stale_tasks(self):
+        """扫出「有旧尺寸模板」的可标定命名空间：[(task_name, 显示名, 旧模板数), ...]。
+
+        只列【已标定过】的模板里「组指针 ≠ 激活组」的（含本次改版前标的老图，其指针为空），
+        没标过的项本来就要标，列进来只会让按钮长出一堆空项。标定按任务命名空间分批，
+        故这里返回的是「哪些任务需要重标」，一个任务一个入口。
+        """
+        cfg = self.cfg
+        out = []
+        seen = set()
+        for key, page in getattr(self.app, "pages", {}).items():
+            name = getattr(page, "TASK_NAME", None) or getattr(page, "_selected", None)
+            if not name or name in seen:
+                continue
+            n = len(calib.stale_templates(cfg, name))
+            if n:
+                seen.add(name)
+                out.append((name, self._ns_title(name), n))
+        # 共享命名空间（组队 / 整理背包）不挂在任何任务页上，单独补一次
+        for name in ("teaming", "organize_bag"):
+            if name in seen:
+                continue
+            n = len(calib.stale_templates(cfg, name))
+            if n:
+                seen.add(name)
+                out.append((name, self._ns_title(name), n))
+        return out
+
+    @staticmethod
+    def _ns_title(name):
+        task_cls = get_task(name)
+        if task_cls is not None and getattr(task_cls, "title", None):
+            return task_cls.title
+        return {"teaming": "组队（共享）", "organize_bag": "整理背包"}.get(name, name)
+
+    def _open_stale_dialog(self):
+        """「重标旧尺寸的模板」：列出有哪些任务的模板是旧尺寸标的，逐个一键重标。"""
+        stale = self._stale_tasks()
+        if not stale:
+            self.app.toast("没有旧尺寸的模板，全部都是当前尺寸组标的")
+            self.refresh()
+            return
+
+        dlg = ctk.CTkToplevel(self.app)
+        dlg.title("重标旧尺寸的模板")
+        dlg.geometry("560x420")
+        dlg.configure(fg_color=T.BG)
+        dlg.transient(self.app)
+        ctk.CTkLabel(dlg, text="这些模板不是当前尺寸组标的", font=self.fonts["title"],
+                     text_color=T.TEXT).pack(anchor="w", padx=20, pady=(18, 0))
+        hint = ctk.CTkLabel(dlg, text="在当前窗口尺寸下重新框选它们，标完就归入当前尺寸组。"
+                                      "（游戏窗口调到你要用的尺寸后再标，标定时会自动记住该尺寸。）",
+                            font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
+        hint.pack(fill="x", padx=20, pady=(4, 10))
+        bind_wraplength(hint, padding=40)
+
+        body = ctk.CTkScrollableFrame(dlg, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        body.grid_columnconfigure(0, weight=1)
+        T.tune_scroll_speed(body)
+        for i, (name, title, n) in enumerate(stale):
+            row = ctk.CTkFrame(body, fg_color=T.SURFACE, corner_radius=T.RADIUS,
+                               border_width=1, border_color=T.BORDER)
+            row.grid(row=i, column=0, sticky="ew", padx=4, pady=6)
+            row.grid_columnconfigure(0, weight=1)
+            ctk.CTkLabel(row, text=f"{title}", font=self.fonts["body_b"], text_color=T.TEXT).grid(
+                row=0, column=0, sticky="w", padx=14, pady=(10, 0))
+            ctk.CTkLabel(row, text=f"有 {n} 个模板是旧尺寸标的", font=self.fonts["small"],
+                         text_color=T.WARN).grid(row=1, column=0, sticky="w", padx=14, pady=(0, 10))
+            ctk.CTkButton(row, text="重新标定", font=self.fonts["body"], height=34, width=110,
+                          corner_radius=T.RADIUS_SM, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
+                          text_color=T.ON_ACCENT,
+                          command=lambda ns=name, d=dlg: self._restale_one(ns, d)).grid(
+                              row=0, column=1, rowspan=2, padx=14)
+
+    def _restale_one(self, task_name, dialog=None, only=None):
+        """给某个命名空间重标旧尺寸模板：只渲染这些 key（only 白名单），标完自动从列表消失。"""
+        if only is None:
+            cfg = self.cfg = cfg_mod.load_config()
+            only = calib.stale_templates(cfg, task_name)
+        if not only:
+            return
+        from .calibrate_dialog import CalibrateDialog
+
+        def _after():
+            self.refresh()
+            if dialog is not None:
+                try:
+                    dialog.destroy()
+                except Exception:
+                    pass
+            self._open_stale_dialog()
+
+        try:
+            CalibrateDialog(self.app, task_name=task_name, only=only, on_done=_after)
+        except Exception as e:
+            self.app.toast(f"打开重标窗口失败：{e}")
+
+    def _kick_enum_windows(self, holder, active_size):
         """后台枚举窗口，完成后回主线程把列表填进 holder。用 token 丢弃过期结果（连续切页/刷新时）。"""
         cfg = self.cfg
         title = cfg.get("window_title", "梦幻西游")
@@ -2285,14 +2586,15 @@ class GeneralPage(ctk.CTkFrame):
             except Exception:
                 data = []
             try:
-                self.app.after(0, lambda: self._fill_win_rows(holder, data, base, token))
+                self.app.after(0, lambda: self._fill_win_rows(holder, data, active_size, token))
             except Exception:
                 pass
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _fill_win_rows(self, holder, data, base, token):
-        """在主线程把枚举结果渲染进 holder。过期结果/控件已销毁则丢弃。"""
+    def _fill_win_rows(self, holder, data, active_size, token):
+        """在主线程把枚举结果渲染进 holder。过期结果/控件已销毁则丢弃。
+        每行显示该号当前尺寸，并标注它「属于哪个尺寸组」（与激活组尺寸吻合 = ±4px）。"""
         if token is not getattr(self, "_enum_token", None):
             return
         try:
@@ -2311,27 +2613,41 @@ class GeneralPage(ctk.CTkFrame):
             row.pack(fill="x", padx=12, pady=4)
             row.grid_columnconfigure(0, weight=1)
             meta = f"号{i + 1}    {r[2]}×{r[3]}    @({r[0]},{r[1]})" if r else f"号{i + 1}    （窗口已失效）"
-            is_base = bool(base and r and int(base[0]) == r[2] and int(base[1]) == r[3])
-            ctk.CTkLabel(row, text=meta + ("   ✓ 当前基准" if is_base else ""),
-                         font=self.fonts["body"],
-                         text_color=T.SUCCESS if is_base else T.TEXT).grid(
+            is_act = bool(active_size and r
+                          and abs(int(active_size[0]) - r[2]) <= 4
+                          and abs(int(active_size[1]) - r[3]) <= 4)
+            tag = ""
+            if r:
+                pid = calib.find_by_size(self.cfg, [r[2], r[3]])
+                if pid is not None:
+                    tag = f"   {calib.label_for(pid)} 尺寸组" + ("（当前）" if is_act else "")
+                else:
+                    tag = "   未标定尺寸"
+            ctk.CTkLabel(row, text=meta + tag, font=self.fonts["body"],
+                         text_color=T.SUCCESS if is_act else T.TEXT).grid(
                              row=0, column=0, sticky="w", padx=12, pady=8)
-            ctk.CTkButton(row, text="设为基准", font=self.fonts["small"], width=84, height=30,
+            ctk.CTkButton(row, text="还原", font=self.fonts["small"], width=72, height=30,
                           corner_radius=T.RADIUS_SM, fg_color="transparent", hover_color=T.BORDER, text_color=T.TEXT,
                           border_width=1, border_color=T.BORDER,
-                          command=lambda w=w: self._set_base_from(w)).grid(row=0, column=1, padx=10)
+                          command=lambda win=w: self._restore_one(win)).grid(row=0, column=1, padx=10)
         ctk.CTkFrame(holder, fg_color="transparent", height=6).pack()
 
-    def _set_base_from(self, w):
+    def _restore_one(self, w):
+        """把某一个号拉回激活尺寸组的尺寸。没有尺寸组时提示（标定一次即自动建组）。"""
+        size = calib.active_size(self.cfg)
+        if not size:
+            self.app.toast("还没有尺寸组：先标定任意一项（标定时会自动记住窗口尺寸）")
+            return
         r = w.rect()
         if not r:
             self.app.toast("该窗口已失效，请点「刷新」")
             return
-        cfg = cfg_mod.load_config()
-        cfg.setdefault("targets", {})["base_size"] = [r[2], r[3]]
-        cfg_mod.save_config(cfg)
-        self.app.cfg = cfg
-        self.app.toast(f"已设基准尺寸 {r[2]}×{r[3]}（点「还原尺寸」时其它号会归一化到这个大小）")
+        w.activate()
+        ok = w.resize_to(int(size[0]), int(size[1]))
+        self.app._game_connected = None
+        self.app.toast(f"已还原到 {int(size[0])}×{int(size[1])}" if ok
+                       else f"还原失败（目标 {int(size[0])}×{int(size[1])}）：新版客户端锁定比例，"
+                            f"该尺寸可能不可达，建议在目标尺寸下重新标定")
         self.refresh()
 
     def _calib_singleton(self, attr, only, fail_msg, exclude=None):
@@ -3582,11 +3898,11 @@ class App(ctk.CTk):
             pass
 
     def restore_window_size(self, after=None):
-        """把选中的号窗口还原到标定时记录的基准尺寸（被手操拉大后一键复位）。"""
+        """把选中的号窗口还原到「激活尺寸组」标定时记录的分辨率（被手操拉大后一键复位）。"""
         targets = self.cfg.get("targets", {})
-        base = targets.get("base_size")
+        base = calib.active_size(self.cfg)      # 真源是尺寸组；targets.base_size 只是它的镜像
         if not base or len(base) < 2:
-            self.toast("请先标定一次，标定时会自动记录基准尺寸")
+            self.toast("请先标定一次，标定时会自动记住窗口尺寸（形成尺寸组）")
             return
         title = self.cfg.get("window_title", "梦幻西游")
         offset = self.cfg.get("window_offset", [0, 0])
@@ -3600,10 +3916,10 @@ class App(ctk.CTk):
             self.toast(f"已还原 {ok}/{total} 个号到 {w}×{h}")
         elif len(valid) == total and max(s[0] for s in valid) - min(s[0] for s in valid) <= 4 \
                 and max(s[1] for s in valid) - min(s[1] for s in valid) <= 4:
-            # 新外壳锁定纵横比：各号已统一到同一可达尺寸（±4px 吸附误差），但旧基准落在比例线外
-            # → 提示重设基准。
+            # 新外壳锁定纵横比：各号已统一到同一可达尺寸（±4px 吸附误差），但目标尺寸落在比例线外
+            # → 提示在目标尺寸下重新标定一次。
             self.toast(f"已把 {total} 个号统一到 {valid[0][0]}×{valid[0][1]}；"
-                       f"新版客户端锁定窗口比例，基准 {w}×{h} 不可达，建议重新「设为基准」")
+                       f"新版客户端锁定窗口比例，{w}×{h} 不可达，建议在该尺寸下重新标定一次")
         else:
             # 有号没还原成功——未提权（UIPI 拒绝）或窗口不支持调整
             hint = "" if win_mod.is_admin() else "；请用管理员身份运行（启动时 UAC 点「是」）"

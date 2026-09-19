@@ -18,6 +18,7 @@ import time
 import customtkinter as ctk
 
 from . import theme as T
+from ..core import calib_profiles as calib
 from ..core import config as cfg_mod
 from ..core import vision
 # 动作内部值/显示名/下拉顺序单一来源在 core.inventory（_ACTION_SPECS），避免两处不一致。
@@ -158,8 +159,8 @@ class InventoryItemsDialog(ctk.CTkToplevel):
 
     def _add_item(self):
         from .calibrate_dialog import grab_roi_on_app   # 延迟导入避免循环依赖
-        rel, crop = grab_roi_on_app(self.app, self.cfg, "框选要整理的物品（图标+名字）",
-                                    with_crop=True, toast=self._toast)
+        rel, crop, pid = grab_roi_on_app(self.app, self.cfg, "框选要整理的物品（图标+名字）",
+                                         with_crop=True, toast=self._toast)
         if rel is None:
             return
         if crop is None or crop.size == 0:
@@ -174,6 +175,8 @@ class InventoryItemsDialog(ctk.CTkToplevel):
             return
         self.tc.setdefault("items", []).append(
             {"name": name, "template": rel_path, "action": "use"})
+        calib.set_task_profile(self.cfg, "organize_bag", pid)
+        calib.set_template_profile(self.cfg, "organize_bag", name, pid)
         self._save()
         self._refresh()
         self._toast(f"已添加物品：{name}（默认动作：使用）", T.SUCCESS)

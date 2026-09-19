@@ -54,7 +54,18 @@ DEFAULT_CONFIG = {
         "multi_indices": [],       # 多开：选中的序号列表；空=检测到的全部
         "max_windows": 3,          # 多开最多同时操作几个号(0=不限)
         "switch_delay_sec": 0.15,  # 号与号之间切换的停顿(秒,带抖动)，别太机械
-        "base_size": None          # 标定时记录的窗口尺寸[w,h]；「还原尺寸」按钮把被拉大的号拉回它。None=尚未标定
+        "base_size": None          # 【派生镜像字段】激活标定组的尺寸[w,h]，由 core/calib_profiles 统一同步写入
+                                   #   （别手改；4 个任务跑的时候读它估窗口缩放，故字段与读取点一律不动）。
+                                   #   None=尚未标定。真正的源是下面顶层的 calib_profiles。
+    },
+
+    # ---- 标定尺寸组（「胶囊组」）----
+    #   一个「尺寸组」= 某一套标定图是在哪个游戏窗口尺寸下标定的。全局共用同一套模板图，
+    #   只在各任务里用【指针】记录「这张图属于哪一组」（tasks.<task>.calib / templates_calib）。
+    #   ⚠ 字段语义、读写入口、为什么 targets.base_size 只是镜像，见 core/calib_profiles.py 模块头（务必先读）。
+    "calib_profiles": {
+        "items": [],               # [{"id":1,"size":[w,h],"label":"①","at":"07-14 21:30"}]，最多 3 组
+        "active": None             # 当前激活组 id；标定/切组都由 calib_profiles 维护
     },
 
     "humanize": {

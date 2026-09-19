@@ -20,9 +20,14 @@
   - 几何绑定：参加按钮与它那张卡的条目【同一行】、在条目中心的右侧。于是搜索带由【条目命中点】
     直接推出（不再猜卡片右缘）：纵向以条目中心为中线开一条带，横向从条目中心往右取
     「条目模板宽 × join_reach_ratio」（默认 12，够到按钮、又在邻卡按钮之前收住），再收到识别区右缘。
-  - 尺寸兼容：带的高宽全按【模板尺寸】比例算，窗口/标定尺寸变了自动跟着缩放；匹配时再按
-    「当前窗口尺寸 ÷ 标定基准尺寸」估一个尺度，围绕 1.0 多尺度匹配（模板被缩放了也认得出）。
-    尺寸没变时只试 1.0，零额外开销。
+  - 尺寸兼容（两级，互不冲突）：
+    ① 【方案二·首选】识别前把【内存里的截图】预缩放回标定基准尺度（cv2.resize，绝不动游戏窗口），
+       于是模板能照原样匹配；命中坐标再乘 1/scale 换回当前屏幕坐标。缩放的实现与坐标反算封装在
+       core/window.ScaledScene（单一出口，别在任务里自己乘）；阈值按缩放比动态放宽
+       （core/vision.scaled_threshold，实测依据见其 docstring）。本模块自己做这一层，
+       故【无论调用方传的是 grab() 的原始图还是 ScaledScene.img，都只需要传 calib_size】。
+    ② 多尺度兜底：拿不到标定尺寸、或预缩放后仍差一点时，围绕 1.0 上下试几个模板尺度。
+       尺寸没变时只试 1.0，零额外开销。
   - 分数只排序：几何带内取最高分，接受下限 = join_min_score（默认 0.6；不配则取阈值的 85%）。
     日志打印「实得分 / 用的下限 / 模板尺度」，一眼看出是模板问题还是阈值问题。
   - 互相印证选卡片：条目模板可能多个位置都过阈值（撞脸），故把过阈值的条目候选都取出来，
@@ -31,12 +36,14 @@
   - 调用方先截一张图，条目和按钮都用它（消除两次截图之间的位移）。
 
 调用方（任务）只需一段：
-    scene = win_mod.grab(list_rect)
+    calib_sz = calib_profiles.active_size(ctx.cfg)      # 当前激活尺寸组的尺寸；没标定过是 None
+    scene = win_mod.grab(list_rect)                     # 或 win_mod.grab_scene(list_rect, calib_sz).img
     got = list_row.locate_card(scene, list_rect, anchor_tpl, join_tpl, threshold,
-                               ctx.cfg["targets"].get("base_size"), loop, log=ctx.log,
+                               calib_sz, loop, log=ctx.log,
                                window_rect=ctx.window.rect())
     if got: ctx.mouse.click(got.join_x, got.join_y)
-返回坐标一律是【屏幕绝对坐标】。`cfg` 传任务 loop 字典即可（读 join_* 项）。
+返回坐标一律是【屏幕绝对坐标】（方案二的缩放反算已在模块内部做完，调用方不必管）。
+`cfg` 传任务 loop 字典即可（读 join_* 项）。
 """
 
 import math
@@ -138,13 +145,17 @@ def _accept_floor(match_threshold, cfg):
     return max(_DEF_MIN_SCORE, float(raw))
 
 
-def _anchor_peaks(scene, tpl, threshold, scales):
+def _anchor_peaks(scene, tpl, threshold, scales, norm=1.0):
     """列出条目模板在 scene 里所有 ≥ 阈值、且互不重叠（各向至少隔开半个模板）的候选命中点。
     返回 [(x, y, score)]，按分数降序。返回空 = 没认出条目。
 
-    为什么要多尺度：窗口被拉大/缩小后没重新标定时，模板和画面尺度不一致，条目会【第一个认不出】，
-    后面的按钮定位根本没机会跑。故这里按 estimate_scale 估的尺度一并试（尺度 1.0 是标定态、
-    照用户阈值卡；其它尺度是兜底，阈值放宽 10% 防误认）。
+    norm = 画面已被预缩放的比例（1.0=没缩放）。缩放过的画面边缘被重采样平滑、分数会掉，
+    故按 vision.scaled_threshold 动态放宽阈值（与单模板匹配同一套依据，别在这里另写一份）。
+    ⚠ 调用点上 norm 与 scales 互斥（预缩放过就只试 1.0、没预缩放才试模板缩放），故两处放宽不会叠加。
+
+    为什么要多尺度：拿不到标定尺寸（或预缩放后仍差一点）时，模板和画面尺度不一致，
+    条目会【第一个认不出】，后面的按钮定位根本没机会跑。故这里按 estimate_scale 估的尺度一并试
+    （尺度 1.0 是标定态、照用户阈值卡；其它尺度是兜底，阈值再放宽 10% 防误认）。
 
     为什么不止取最高分：小图标模板会「撞脸」（实测运镖图标对蹈海去图标也给 0.877），
     只认最高分可能认错卡片；多个候选交给上层用「右侧有没有真参加按钮」互相印证。"""
@@ -156,7 +167,12 @@ def _anchor_peaks(scene, tpl, threshold, scales):
         th_, tw_ = t.shape[:2]
         if sh < th_ or sw < tw_:
             continue
+        # 阈值：非 1.0 的模板尺度再放宽 10%（兜底档位是粗步长，模板缩放本身就有近似误差）。
+        # 注意调用点上 scales 与 norm 互斥：画面已预缩放时 scales=[1.0]、这个 0.9 分支不会走；
+        # 只有「没做预缩放、靠模板缩放兜底」时才生效，两者不会叠加放宽。
         need = threshold if abs(sc - 1.0) < 0.02 else max(0.5, threshold * 0.9)
+        if norm and abs(norm - 1.0) >= 0.02:
+            need = vision.scaled_threshold(need, norm)
         res = cv2.matchTemplate(scene, t, cv2.TM_CCOEFF_NORMED)
         flat = res.ravel()
         for idx in flat.argsort()[::-1][:64]:
@@ -193,7 +209,7 @@ def locate_card(scene, area_rect, anchor_tpl, join_tpl,
       anchor_tpl      条目（卡片）模板；join_tpl=参加按钮模板
       match_threshold 用户设的匹配阈值：条目候选照它卡；参加按几何带内的最高分接受，
                       下限见 _accept_floor（默认 0.6）。
-      calib_size      标定时的窗口尺寸 [w,h]（config.targets.base_size）。要和 window_rect 成对传。
+      calib_size      标定时记录的窗口尺寸 [w,h]（传 core/calib_profiles.active_size()）。要和 window_rect 成对传。
       cfg             任务 loop 配置（join_reach_ratio / join_band_ratio / join_min_score）
       log             可选日志回调 log(msg, level=...)
       window_rect     当前窗口矩形（估缩放用；缺省退回 area_rect，只在列表区≈整窗时才准）
@@ -205,8 +221,22 @@ def locate_card(scene, area_rect, anchor_tpl, join_tpl,
     cfg = cfg or {}
     if scene is None or area_rect is None or anchor_tpl is None or join_tpl is None:
         return None
-    scales = _scales(estimate_scale(window_rect or area_rect, calib_size))
-    peaks = _anchor_peaks(scene, anchor_tpl, match_threshold, scales)
+    est = estimate_scale(window_rect or area_rect, calib_size)   # 当前窗口 ÷ 标定基准
+    # ① 方案二：把画面预缩放回标定基准尺度（只在内存里缩，绝不动游戏窗口），再照原样匹配模板。
+    #    缩放比取 est 的【倒数】（est=画面相对基准的尺度；要缩回基准就得乘 1/est）。
+    #    命中坐标属于缩放后的画面，末尾统一用 1/norm 换回屏幕绝对坐标。
+    norm = 1.0
+    if est is not None and abs(est - 1.0) >= 0.02:
+        try:
+            scene, norm = _normalize(scene, 1.0 / est)
+        except Exception:
+            scene, norm = scene, 1.0
+        if log and abs(norm - 1.0) >= 0.02:
+            log(f"窗口尺寸与标定基准不同：画面预缩放 {norm:.3f}× 回基准尺度后匹配"
+                f"（阈值按 vision.scaled_threshold 动态放宽）", level="debug")
+    # ② 多尺度兜底：预缩放没做成（拿不到尺寸/异常）时，仍按估的尺度试几档模板缩放。
+    scales = [1.0] if abs(norm - 1.0) >= 0.02 else _scales(est)
+    peaks = _anchor_peaks(scene, anchor_tpl, match_threshold, scales, norm=norm)
     if not peaks:
         return None
     floor = _accept_floor(match_threshold, cfg)
@@ -214,8 +244,7 @@ def locate_card(scene, area_rect, anchor_tpl, join_tpl,
     # 取「条目分 + 0.5×参加分」最高的一对——认错卡片时右侧通常没有真按钮，自然落选。
     best_res = None          # (pair_score, anchor, join_attempt)
     for px, py, pscore in peaks:
-        attempt = _locate_join(scene, area_rect, anchor_tpl, join_tpl, (px, py),
-                               cfg, scales)
+        attempt = _locate_join(scene, anchor_tpl, join_tpl, (px, py), cfg, scales)
         pair = pscore + 0.5 * (attempt[2] if attempt else 0.0)
         if best_res is None or pair > best_res[0]:
             best_res = (pair, (px, py, pscore), attempt)
@@ -225,7 +254,7 @@ def locate_card(scene, area_rect, anchor_tpl, join_tpl,
         log(f"条目模板命中 {len(peaks)} 处（最高 {peaks[0][2]:.3f}@{peaks[0][0]},{peaks[0][1]}），"
             f"按「右侧有没有参加按钮」定为 @{ax},{ay}（{ascore:.3f}）", level="debug")
     if attempt is None:
-        return CardHit(area_rect[0] + ax, area_rect[1] + ay, ascore, None, None, None, None)
+        return CardHit(*_to_screen(area_rect, ax, ay, norm), ascore, None, None, None, None)
     jx, jy, jscore, jscale = attempt
     if jscore < floor:
         if log:
@@ -234,21 +263,44 @@ def locate_card(scene, area_rect, anchor_tpl, join_tpl,
             log(f"条目「{_tpl_shape(anchor_tpl)}」@{ax},{ay}（{ascore:.3f}）右侧没找到「参加」："
                 f"最佳候选 {jscore:.3f} < 下限 {floor:.2f}（参加模板 {jw}x{jh}，模板尺度 {jscale:.2f}，"
                 f"行带高 {_band_h(ah0, jh, cfg)}）", level="warn")
-        return CardHit(area_rect[0] + ax, area_rect[1] + ay, ascore, None, None, None, None)
-    return CardHit(area_rect[0] + ax, area_rect[1] + ay, ascore,
-                   jx, jy, jscore, jscale)
+        return CardHit(*_to_screen(area_rect, ax, ay, norm), ascore, None, None, None, None)
+    rx, ry = _to_screen(area_rect, ax, ay, norm)
+    sjx, sjy = _to_screen(area_rect, jx, jy, norm)
+    return CardHit(rx, ry, ascore, sjx, sjy, jscore, jscale)
 
 
-def _locate_join(scene, area_rect, anchor_tpl, join_tpl, anchor_local, cfg, scales):
-    """在条目所在行的右侧找参加按钮。返回屏幕绝对 (x, y, score, scale)；
+def _normalize(scene, norm):
+    """把画面按 norm 缩放（缩小时 INTER_AREA / 放大时 INTER_LINEAR）。返回 (新图, 实际缩放比)。
+    实际比例从缩放前后宽高反算，保证坐标反算与真实重采样一致（不是拿估算值硬套）。"""
+    h, w = scene.shape[:2]
+    nw, nh = max(6, int(round(w * norm))), max(6, int(round(h * norm)))
+    if nw == w and nh == h:
+        return scene, 1.0
+    interp = cv2.INTER_AREA if norm < 1.0 else cv2.INTER_LINEAR
+    out = cv2.resize(scene, (nw, nh), interpolation=interp)
+    return out, (nw / float(w))
+
+
+def _to_screen(area_rect, x, y, norm):
+    """把（可能被预缩放的）画面坐标换回屏幕绝对坐标。norm≈1 时就是单纯的加偏移，与旧行为一致。"""
+    if x is None or y is None:
+        return (None, None)
+    s = norm or 1.0
+    if abs(s - 1.0) < 0.001:
+        return (area_rect[0] + int(x), area_rect[1] + int(y))
+    return (area_rect[0] + int(round(x / s)), area_rect[1] + int(round(y / s)))
+
+
+def _locate_join(scene, anchor_tpl, join_tpl, anchor_local, cfg, scales):
+    """在条目所在行的右侧找参加按钮。返回【缩放后画面】坐标 (x, y, score, scale)；
     该行右侧根本放不下模板/取不到区域返回 None（注意：分数是否达标由上层按 floor 判，
-    这样「差一点点」也留得下诊断日志）。"""
+    这样「差一点点」也留得下诊断日志）。坐标由上层统一 _to_screen() 换回屏幕绝对坐标。"""
     sh, sw = scene.shape[:2]
     ah, aw = anchor_tpl.shape[:2]
     jh, jw = join_tpl.shape[:2]
     ax, ay = anchor_local
-
-    # 纵向：以条目中心为中线的行条带（按模板比例算，换尺寸自动跟着缩放）
+    # 几何带按【模板尺寸】比例算。画面已预缩放回基准尺度时，模板像素与画面像素同尺度，
+    # 比例天然成立；没缩放时由 _scales 里的模板缩放兜底。
     band = _band_h(ah, jh, cfg)
     y0 = max(0, ay - band // 2)
     y1 = min(sh, ay + band // 2)
@@ -273,5 +325,4 @@ def _locate_join(scene, area_rect, anchor_tpl, join_tpl, anchor_local, cfg, scal
             best = (x0 + loc[0] + tw // 2, y0 + loc[1] + th // 2, float(mx), sc)
     if best is None:
         return None
-    bx, by, bscore, bscale = best
-    return (area_rect[0] + bx, area_rect[1] + by, bscore, bscale)
+    return best

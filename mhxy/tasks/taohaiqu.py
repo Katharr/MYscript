@@ -28,6 +28,7 @@
 import time
 
 from ..core import scan
+from ..core import calib_profiles as calib
 from ..core import vision
 from ..core import window as win_mod
 from ..core import list_row
@@ -466,9 +467,11 @@ class TaohaiquTask(Task):
         return (rect[0] + x0 + cx, rect[1] + y0 + cy, score)
 
     def _calib_size(self, ctx):
-        """标定时记录的窗口尺寸（config.targets.base_size），用于估窗口缩放、做多尺度匹配。
-        没标过/取不到返回 None（则只按 1.0 尺度匹配，与旧行为一致）。"""
+        """当前【激活尺寸组】的窗口尺寸 [w,h]，用于估窗口缩放、把画面预缩放回标定尺度（方案二）。
+        真源是 config 顶层 calib_profiles；老配置没有组时 core/calib_profiles.active_size 内部
+        自动退回 targets.base_size 镜像，故行为与旧版一致。没标过/取不到返回 None
+        （则只按 1.0 尺度匹配，与旧行为一致）。"""
         try:
-            return (ctx.cfg.get("targets") or {}).get("base_size")
+            return calib.active_size(ctx.cfg)
         except Exception:
             return None
