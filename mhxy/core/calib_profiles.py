@@ -4,7 +4,7 @@
 
 为什么要有这个模块（用户痛点）：
   标定图只在标定时那个窗口尺寸下认得出，改分辨率就认不出；用户希望「软件记住尺寸，
-  我以后随意修改基准也能随时回到标定时的尺寸」，并且一眼看出「哪些模板是当前尺寸标的、哪些是旧的」。
+  我以后随意修改基准也能随时回到标定时的尺寸」，并且一眼看出当前用的是哪一组尺寸。
 
 三条铁律（改前务必读懂，否则极易破坏识别/回归面）：
 1. 【全局共用一套模板，只存指针】模板文件永远只有一份（templates/tm_<key>.png）。
@@ -16,7 +16,7 @@
    但它只允许由本模块的 set_active()/get_or_create() 写入（唯一写入口），保证镜像不漂。
    真源是 config 顶层的 calib_profiles.items / active。
 3. 【删组绝不删模板文件】delete() 只删组记录，模板图与模板路径串保持原样；
-   指向被删组的模板指针会被清掉（降级为「未记录」），于是显示成灰色胶囊 + 可一键重标。
+   指向被删组的模板指针会被清掉（降级为「未记录」），显示成灰色胶囊。
 
 config 结构（顶层，和 targets 平级；放 targets 里会把「运行语义」和「溯源/UI 数据」混在一起）:
     "calib_profiles": {
@@ -143,26 +143,8 @@ def find_by_size(cfg, size):
 
 
 # ----------------------------------------------------------------------
-# 显示用（照 theme.PROFILE_COLORS / PROFILE_NUMERALS；编号才是主键，颜色只是辅助）
+# 显示用（照 theme.PROFILE_NUMERALS；编号才是主键）
 # ----------------------------------------------------------------------
-def color_index(pid):
-    """组号 -> PROFILE_COLORS 下标（按色板长度取模循环）。非法组号返回 0。
-
-    延迟 import gui.theme：本模块刻意保持「零 GUI 依赖」（见模块头），故只在真正要画颜色时才取；
-    取不到（还没建 Tk / 打包裁剪）退回 3 色板长度，不影响任何逻辑。
-    """
-    try:
-        from ..gui import theme as _t
-        n = len(_t.PROFILE_COLORS)
-    except Exception:
-        n = 3
-    try:
-        pid = int(pid)
-    except (TypeError, ValueError):
-        return 0
-    return (max(1, pid) - 1) % max(1, n)
-
-
 def label_for(pid):
     """组号 -> 圈码「①」。超出圈码表则退回阿拉伯数字（最多 3 组，留作兜底）。"""
     try:
@@ -230,8 +212,8 @@ def delete(cfg, pid):
     """删掉一个组记录（绝不删模板文件）。返回删除后的激活组号（没了返回 None）。
 
     级联清理：指向该组的「任务标定组指针」与「模板组指针」一并清掉（降级为「未记录」，
-    于是界面上显示成灰胶囊 + 可被「重标旧尺寸的模板」筛出来）；激活组被删则改激活剩余第一组、
-    并同步镜像；删空则清空镜像（base_size=None，与从未标定一致）。
+    显示成灰色胶囊）；激活组被删则改激活剩余第一组、并同步镜像；删空则清空镜像
+    （base_size=None，与从未标定一致）。
     """
     prof = get(cfg, pid)
     if prof is None:
@@ -305,22 +287,3 @@ def template_profiles(cfg, task):
 def template_profile(cfg, task, key):
     """单个模板的组号；未记录返回 None。"""
     return template_profiles(cfg, task).get(key)
-
-
-def stale_templates(cfg, task):
-    """「组指针 ≠ 激活组」的模板 key 列表（含未记录的），供「重标旧尺寸的模板」一键筛出。
-
-    只统计【当前已标定过的模板】（tc["templates"][key] 非空）——没标过的项本来就要标，
-    列进来只会让「重标」按钮长出一堆空项。
-    """
-    tc = (cfg.get("tasks") or {}).get(task) or {}
-    saved = tc.get("templates") or {}
-    aid = active_id(cfg)
-    ptr = template_profiles(cfg, task)
-    out = []
-    for key, path in saved.items():
-        if not path:
-            continue
-        if ptr.get(key) != aid:
-            out.append(key)
-    return out

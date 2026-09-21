@@ -69,8 +69,7 @@ class InventoryItemsDialog(ctk.CTkToplevel):
         ttxt = ctk.CTkFrame(top, fg_color="transparent")
         ttxt.grid(row=0, column=0, sticky="ew")
         ctk.CTkLabel(ttxt, text="物品清单", font=self.fonts["title"], text_color=T.TEXT).pack(anchor="w")
-        sub = ctk.CTkLabel(ttxt, text="整理时会翻包裹找到这些物品，按各自动作逐个使用/丢弃/出售。"
-                                      "连「图标 + 名字」一起框，别框会变的数字。",
+        sub = ctk.CTkLabel(ttxt, text="逐行选用途；连图标 + 名字一起框。",
                            font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
         sub.pack(fill="x", pady=(4, 0))
         T.bind_wraplength(sub)
@@ -102,7 +101,7 @@ class InventoryItemsDialog(ctk.CTkToplevel):
             w.destroy()
         items = self.tc.get("items", []) or []
         if not items:
-            empty = ctk.CTkLabel(self.list_frame, text="还没有物品。点右上「＋ 框选添加物品」加入要整理的物品。",
+            empty = ctk.CTkLabel(self.list_frame, text="点右上「＋ 框选添加物品」加入。",
                                  font=self.fonts["body"], text_color=T.TEXT_DIM, justify="left")
             empty.grid(row=0, column=0, sticky="ew", padx=12, pady=20)
             T.bind_wraplength(empty)

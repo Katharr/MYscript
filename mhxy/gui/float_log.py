@@ -1,16 +1,20 @@
 # -*- coding: utf-8 -*-
 """
-悬浮运行日志窗（通用页「收起为悬浮日志窗」用）。
+悬浮运行日志窗（任意模块脚本开跑后自动收起成它；通用页也有手动「收起为悬浮日志窗」按钮）。
 
-把主界面收起来（withdraw），桌面上只留一条细长的悬浮窗显示运行日志，方便摆在游戏窗口的
-边边角角，随时瞄一眼脚本在干什么。要点：
+把主界面收起来（withdraw），桌面上只留一条细长的悬浮窗显示运行日志 + 开始/停止按钮，
+方便摆在游戏窗口的边边角角，随时瞄一眼脚本在干什么、随手停掉或再跑一次。要点：
 
   · 日志与主界面右侧的全局面板是【同一份】：App.log_line 同时喂两边，创建时把已有历史整段搬过来，
     故「收起」不会丢上下文；收起期间产生的日志也会照常漏进来。
+  · 「■ 停止 / ▶ 开始」是一个【状态按钮】，按 App.task_state() 自动变形（run 中就红底「停止」，
+    没有任务在跑就蓝底「开始」= 把上次那个模块原样重跑）。状态文字同理显示「运行中 · 秒装备」。
   · 可自由拖动/缩放（原生标题栏），窗口位置+尺寸记进 config 的 float_log.geometry，下次收起按原样
     摆回；没有记录时默认落在屏幕右上角（贴合「摆在游戏窗口边上」的习惯用法）。
   · 「固定在前台」开关 = -topmost（默认开）：游戏窗口切到前台时它也不会被盖住，才能一直看到日志。
   · 关掉本窗（标题栏 X / 「展开主界面」）＝回到主界面，绝不等于退出程序。
+  · ⚠ 自动收起（脚本启动后）时构造函数收到 focus=False：不抢焦点。任务刚启动眼看就要把游戏窗口
+    切前台（见 CLAUDE.md 约束 9），此处 focus_force 会把它顶掉。
 """
 
 import re
@@ -27,18 +31,24 @@ _GEOM_RE = re.compile(r"^(\d+)x(\d+)([+-]\d+)([+-]\d+)$")
 
 
 class FloatLogWindow(ctk.CTkToplevel):
-    """细长的悬浮日志窗。生命周期由 App.float_log 持有，App.close_float_log() 负责收尾。"""
+    """细长的悬浮日志窗。生命周期由 App.float_log 持有，App.close_float_log() 负责收尾。
 
-    def __init__(self, app):
+    focus=False（自动收起）时不抢焦点，只把自己抬起来（见模块 docstring 末条）。"""
+
+    def __init__(self, app, focus=True):
         super().__init__(app)
         self.app = app
         self.fonts = app.fonts
         self.cfg = cfg_mod.load_config()
         fl = self.cfg.get("float_log") or {}
+        self._focus = bool(focus)
+        self._closing = False
+        self._state_cache = None      # 上次刷过的运行态，重复就不动控件（省重绘）
+        self._title_cache = None
 
         self.title("运行日志 · 悬浮")
         self.configure(fg_color=T.BG)
-        self.minsize(190, 96)
+        self.minsize(210, 108)
         self._restore_geometry(fl.get("geometry"))
 
         # 固定前台的开关变量要先建（_build 里要绑它）
@@ -49,10 +59,12 @@ class FloatLogWindow(ctk.CTkToplevel):
         # 会既被实时喂一次、又被搬进来一次。
         self._seed_from_app()
         self._set_topmost(bool(fl.get("topmost", True)))
+        self.refresh_state()
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         # 首次显示后再滚到底/置前：窗口还没映射时 see("end") 定位不准。
         self.after(80, self._on_shown)
+        self.after(120, self._poll_state)
 
     # ------------------------------------------------------------------
     def _px(self, logical):
@@ -71,7 +83,7 @@ class FloatLogWindow(ctk.CTkToplevel):
         m = _GEOM_RE.match(str(geom or ""))
         if m:
             w, h, x, y = (int(g) for g in m.groups())
-            w, h = max(190, w), max(96, h)
+            w, h = max(210, w), max(108, h)
             x = min(max(x, 0), max(0, sw - self._px(w)))
             y = min(max(y, 0), max(0, sh - self._px(h)))
         else:
@@ -84,20 +96,30 @@ class FloatLogWindow(ctk.CTkToplevel):
 
     def _build(self):
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(2, weight=1)      # 日志框占满剩余高度（它在第 2 行）
+        self.grid_rowconfigure(3, weight=1)      # 日志框占满剩余高度（它在第 3 行）
 
+        # 第 0 行：开始/停止状态按钮（左，最显眼）+ 展开主界面（右）
         head = ctk.CTkFrame(self, fg_color="transparent")
-        head.grid(row=0, column=0, sticky="ew", padx=10, pady=(8, 4))
+        head.grid(row=0, column=0, sticky="ew", padx=10, pady=(8, 2))
         head.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(head, text="运行日志", font=self.fonts["body_b"], text_color=T.TEXT).grid(
-            row=0, column=0, sticky="w")
-        ctk.CTkButton(head, text="展开主界面", font=self.fonts["small"], height=26, width=88,
-                      corner_radius=T.RADIUS_SM, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
-                      text_color=T.ON_ACCENT,
+        self.btn_state = ctk.CTkButton(head, text="● 运行中", font=self.fonts["small"], height=28, width=96,
+                                       corner_radius=T.RADIUS_SM, fg_color=T.DANGER,
+                                       hover_color=T.DANGER_HOVER, text_color=T.ON_ACCENT,
+                                       command=self._on_state_btn)
+        self.btn_state.grid(row=0, column=0, sticky="w")
+        ctk.CTkButton(head, text="展开主界面", font=self.fonts["small"], height=28, width=88,
+                      corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER,
+                      text_color=T.TEXT, border_width=1, border_color=T.BORDER,
                       command=self.app.close_float_log).grid(row=0, column=1, sticky="e")
 
+        # 第 1 行：状态文字（跑的是哪个模块 / 上次跑的是什么）——占满整宽并按宽度换行
+        self.lbl_state = ctk.CTkLabel(self, text="○ 待机", font=self.fonts["small"],
+                                      text_color=T.TEXT_DIM, justify="left")
+        self.lbl_state.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 4))
+        T.bind_wraplength(self.lbl_state)
+
         row2 = ctk.CTkFrame(self, fg_color="transparent")
-        row2.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 6))
+        row2.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 6))
         row2.grid_columnconfigure(0, weight=1)
         ctk.CTkSwitch(row2, text="固定在前台", font=self.fonts["small"], variable=self.var_top,
                       command=self._on_top_toggle, switch_width=40, switch_height=18,
@@ -111,17 +133,99 @@ class FloatLogWindow(ctk.CTkToplevel):
 
         self.text = ctk.CTkTextbox(self, font=self.fonts["mono"], fg_color=T.SURFACE_2,
                                    text_color=T.TEXT, corner_radius=T.RADIUS_SM, wrap="word")
-        self.text.grid(row=2, column=0, sticky="nsew", padx=10, pady=(0, 10))
+        self.text.grid(row=3, column=0, sticky="nsew", padx=10, pady=(0, 10))
         T.apply_log_tags(self.text._textbox)
         self.text.configure(state="disabled")
 
+    # ---- 开始 / 停止 状态按钮 ----
+    def refresh_state(self):
+        """按 App 的运行态刷新状态按钮与状态文字（App.on_task_started 与自带轮询都调它）。
+
+        一个按钮两种形态：在跑 = 红底「■ 停止」（点它停掉全部）；没跑 = 蓝底「▶ 开始」
+        （点它把上次那个模块原样重跑，见 _on_state_btn）。内容没变就什么都不做，省重绘。"""
+        try:
+            running, labels = self.app.task_state()
+        except Exception:
+            running, labels = False, []
+        last = getattr(self.app, "_task_label", None)
+        if running:
+            name = "、".join(labels[:2]) + ("…" if len(labels) > 2 else "")
+            key = ("run", name)
+            txt = f"● 运行中 · {name}" if name else "● 运行中"
+            btn, fg, hov, tc = "■  停止", T.DANGER, T.DANGER_HOVER, T.ON_ACCENT
+            title = f"运行日志 · {name}" if name else "运行日志 · 运行中"
+        else:
+            key = ("idle", last)
+            txt = f"○ 待机 · 上次：{last}" if last else "○ 待机"
+            btn, fg, hov, tc = "▶  开始", T.ACCENT, T.ACCENT_HOVER, T.ON_ACCENT
+            title = "运行日志 · 悬浮"
+        if key == self._state_cache:
+            return
+        self._state_cache = key
+        try:
+            self.lbl_state.configure(text=txt, text_color=T.SUCCESS if running else T.TEXT_DIM)
+            self.btn_state.configure(text=btn, fg_color=fg, hover_color=hov, text_color=tc)
+        except Exception:
+            pass
+        if title != self._title_cache:
+            self._title_cache = title
+            try:
+                self.title(title)
+            except Exception:
+                pass
+
+    def _on_state_btn(self):
+        """状态按钮的动作：在跑就停掉全部任务；没跑就把上次那个模块原样重跑（没有则提示先展开）。"""
+        try:
+            running, _labels = self.app.task_state()
+        except Exception:
+            running = False
+        if running:
+            n = self.app.stop_all_tasks()
+            self.app.log_line(f"已请求停止 {n} 个任务（做完当前动作才停）", "warn")
+            self.refresh_state()
+            return
+        cb = getattr(self.app, "_task_restart", None)
+        if not callable(cb):
+            self.app.toast("还没跑过任何模块，请先展开主界面开始。")
+            return
+        try:
+            cb()
+        except Exception as e:
+            self.app.log_line(f"重新开始失败：{e}", "error")
+
+    def _poll_state(self):
+        """每 0.3s 刷一次状态按钮（任务是在后台线程跑的，只能在主线程定时问它还在不在跑）。"""
+        if self._closing:
+            return
+        try:
+            if not self.winfo_exists():
+                return
+        except Exception:
+            return
+        self.refresh_state()
+        try:
+            self.after(300, self._poll_state)
+        except Exception:
+            pass
+
     # ------------------------------------------------------------------
     def _on_shown(self):
-        """首次显示：滚到最新一行并置前（内容早在 __init__ 里就搬好了，见 _seed_from_app）。"""
+        """首次显示：滚到最新一行并置前（内容早在 __init__ 里就搬好了，见 _seed_from_app）。
+        自动收起（focus=False）时刻意不抢焦点，避免顶掉任务紧接着要切的游戏前台窗口。"""
         self._scroll_end()
         try:
             self.lift()
-            self.focus_force()
+            if self._focus:
+                self.focus_force()
+        except Exception:
+            pass
+
+    def destroy(self):
+        """置位 _closing 再销毁：让 _poll_state 的 after 回调不再往已死的窗口上刷（见 _poll_state）。"""
+        self._closing = True
+        try:
+            super().destroy()
         except Exception:
             pass
 

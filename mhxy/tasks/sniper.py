@@ -22,11 +22,11 @@ class SniperTask(Task):
     # 标定向导用：区域项即原 REGION_ITEMS；秒装备有「装备清单」卡片，无标志模板。
     CALIBRATION = {
         "regions": [
-            ("listing", "货架/列表区域", "留空=整个窗口当检测区(推荐)；想提速/避免误识可框小一点", True),
-            ("category_button", "商品类别按钮", "左侧侧边栏里的类别，如「奇珍异宝」——刷新第①步点它"),
-            ("product_entry", "商品条目", "右侧信息框里要进的那个商品——刷新第②步点它进货架"),
-            ("buy_button", "购买按钮", "选中摊位后出现的「购买」按钮"),
-            ("confirm_button", "确认购买按钮", "二次确认弹窗的按钮，没有可不标"),
+            ("listing", "货架/列表区域", "留空=整窗检测(推荐)", True),
+            ("category_button", "商品类别按钮", "左侧类别，如「奇珍异宝」"),
+            ("product_entry", "商品条目", "右侧要进的那个商品"),
+            ("buy_button", "购买按钮", "选中摊位后的「购买」"),
+            ("confirm_button", "确认购买按钮", "二次确认弹窗，没有可不标"),
         ],
         "templates": [],
         "watchlist": True,

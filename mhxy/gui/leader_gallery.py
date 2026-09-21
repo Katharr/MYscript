@@ -64,11 +64,6 @@ class LeaderIdGallery(ctk.CTkToplevel):
         top.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(top, text="队长ID 库", font=self.fonts["title"], text_color=T.TEXT).grid(
             row=0, column=0, sticky="w")
-        sub = ctk.CTkLabel(top, text="当前队长ID + 最近 3 个历史，可随时设为当前，免去重复标定。"
-                                     "标在最前面、带「● 当前」的就是组队时实际识别用的那张。",
-                           font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
-        sub.grid(row=1, column=0, sticky="ew", pady=(4, 0))
-        T.bind_wraplength(sub)
 
         bar = ctk.CTkFrame(self, fg_color="transparent")
         bar.grid(row=1, column=0, sticky="ew", padx=18, pady=(8, 4))
@@ -103,7 +98,7 @@ class LeaderIdGallery(ctk.CTkToplevel):
 
         if not history:
             empty = ctk.CTkLabel(self.grid_frame,
-                                 text="还没有标定过队长ID。\n点上方「＋ 重新标定」框选队长名字即可。",
+                                 text="点上方「＋ 重新标定」框选队长名字。",
                                  font=self.fonts["body"], text_color=T.TEXT_DIM, justify="left")
             empty.grid(row=0, column=0, columnspan=2, sticky="ew", padx=14, pady=24)
             T.bind_wraplength(empty)

@@ -116,15 +116,14 @@ def grab_roi_on_app(app, cfg, prompt, with_crop=False, toast=None, alpha_windows
     wr = ref.rect() if ref else None
     if wr is None:
         if toast:
-            toast("框选区域不在任何游戏窗口内：请把要标的窗口移到前面，框在它的画面里。", T.WARN)
+            toast("框选不在游戏窗口内，请把要标的窗口切到前面。", T.WARN)
         return None, None, None
     # 记下「这一套标定图是在多大的窗口下标定的」：同尺寸复用已有组、否则新建并设为激活组，
     # 同时同步 targets.base_size 镜像（唯一写入口，见 core/calib_profiles.py 模块头）。
     pid = resolve_profile(cfg, [wr[2], wr[3]], app=app)
     if pid is None:
         if toast:
-            toast("尺寸组已满且未选择要替换的旧组，本次标定未保存。可在「通用/工具」页点"
-                  "「管理/删除」先删一个旧组。", T.WARN)
+            toast("尺寸组已满，本次未保存；请先在「通用/工具」删一个旧组。", T.WARN)
         return None, None, None
     cfg_mod.save_config(cfg)
     rel = [roi_abs[0] - wr[0], roi_abs[1] - wr[1], roi_abs[2], roi_abs[3]]
@@ -261,10 +260,6 @@ class CalibrateDialog(ctk.CTkToplevel):
         top = ctk.CTkFrame(body, fg_color="transparent")
         top.grid(row=row, column=0, sticky="ew", padx=16, pady=(14, 8)); row += 1
         ctk.CTkLabel(top, text="标定向导", font=self.fonts["title"], text_color=T.TEXT).pack(anchor="w")
-        sub = ctk.CTkLabel(top, text="先把游戏切到对应界面，再按提示逐项框选。框选时本助手会临时隐身。",
-                     justify="left", font=self.fonts["small"], text_color=T.TEXT_DIM)
-        sub.pack(fill="x", pady=(4, 0))
-        T.bind_wraplength(sub)
 
         # ① 区域与按钮
         regions = self.spec.get("regions", [])
@@ -272,10 +267,6 @@ class CalibrateDialog(ctk.CTkToplevel):
             rcard = self._card(body, row); row += 1
             ctk.CTkLabel(rcard, text="① 区域与按钮", font=self.fonts["h2"], text_color=T.TEXT).grid(
                 row=0, column=0, columnspan=3, sticky="w", padx=16, pady=(14, 6))
-            rhint = ctk.CTkLabel(rcard, text="这些只是记录屏幕上一块位置（坐标），本身没有图片，标好显示「● 已框选」即可。",
-                         font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
-            rhint.grid(row=1, column=0, columnspan=3, sticky="ew", padx=16, pady=(0, 4))
-            T.bind_wraplength(rhint, padding=32)
             for i, item in enumerate(regions):
                 key, name, desc = item[0], item[1], item[2]
                 full_window = len(item) > 3 and bool(item[3])   # 第4元素=True 表示可整窗
@@ -292,7 +283,7 @@ class CalibrateDialog(ctk.CTkToplevel):
             tcard = self._card(body, row); row += 1
             ctk.CTkLabel(tcard, text="② 标志模板（框选裁图）", font=self.fonts["h2"], text_color=T.TEXT).grid(
                 row=0, column=0, sticky="w", padx=16, pady=(14, 6))
-            thint = ctk.CTkLabel(tcard, text="框小而独特的区域（按钮/文字/图标），别框会变的数字或背景。",
+            thint = ctk.CTkLabel(tcard, text="框小而独特的区域，别框会变的数字或背景。",
                          font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
             thint.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 6))
             T.bind_wraplength(thint, padding=32)
@@ -362,7 +353,7 @@ class CalibrateDialog(ctk.CTkToplevel):
         ctk.CTkButton(head, text="＋ 框选添加", font=self.fonts["body"], width=110, height=32,
                       corner_radius=T.RADIUS_SM, fg_color=T.SUCCESS, hover_color=T.SUCCESS_HOVER,
                       text_color=T.BG, command=self._add_item).grid(row=0, column=1, sticky="e")
-        ihint = ctk.CTkLabel(icard, text="提示：连「图标 + 名字」一起框，别框价格（价格会变，框了反而认不出）。",
+        ihint = ctk.CTkLabel(icard, text="连图标 + 名字一起框，别框价格。",
                      font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
         ihint.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 6))
         T.bind_wraplength(ihint, padding=32)
@@ -492,19 +483,20 @@ class CalibrateDialog(ctk.CTkToplevel):
                              btn_cmd=lambda k=key, n=name: self._calibrate_template(k, n))
 
     def _badge_style(self, pid, aid):
-        """模板卡片右上角「尺寸组」角标的显示信息：返回 (文字, 底色, 文字色)。这是用户的核心诉求之一
-        ——一眼看出「哪些图是当前尺寸标的、哪些是旧的」。
+        """模板卡片右上角「尺寸组」角标的显示信息：返回 (文字, 底色, 文字色)。
+        只有两种颜色（用户拍板）——当前组=绿、其余=灰：
 
-        - 当前组（pid == 激活组）：「① ✓」+ 该组配色高亮
-        - 旧组（pid ≠ 激活组）  ：「① 1521×1198」+ 该组配色（编号 + 尺寸都是线索）
-        - 未记录（pid 为 None） ：「○ 旧图」+ 灰（本次改版前标的老图，一律当旧图处理）
+        - 当前组（pid == 激活组）：「① ✓」+ 绿
+        - 其它已记录的组        ：「① 1521×1198」+ 灰（编号 + 尺寸都是不改分辨率的线索）
+        - 未记录（pid 为 None） ：「未记录」+ 灰
         """
         if pid is None:
             fg, txt = T.PROFILE_NEUTRAL
-            return ("○ 旧图", fg, txt)
-        fg, txt = T.PROFILE_COLORS[calib.color_index(pid)]
+            return ("未记录", fg, txt)
         if aid is not None and pid == aid:
+            fg, txt = T.PROFILE_ACTIVE
             return (f"{calib.label_for(pid)} ✓", fg, txt)
+        fg, txt = T.PROFILE_NEUTRAL
         return (f"{calib.label_for(pid)} {calib.size_text(calib.get(self.cfg, pid))}", fg, txt)
 
     # ---- 装备缩略图画廊（watchlist）----

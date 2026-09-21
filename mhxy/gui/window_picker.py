@@ -79,14 +79,6 @@ class WindowPickerDialog(ctk.CTkToplevel):
         top = ctk.CTkFrame(self, fg_color="transparent")
         top.grid(row=0, column=0, sticky="ew", padx=20, pady=(16, 6))
         ctk.CTkLabel(top, text="选择窗口", font=self.fonts["title"], text_color=T.TEXT).pack(anchor="w")
-        base_hint = ("单开选 1 个号，多开勾多个号轮流操作。号按屏幕从左到右编号。"
-                     "检测区可在「标定」里留空＝整窗，无需框大区域。")
-        if self.captain_ns:
-            base_hint += "  组队请用「多开」，并在要当队长的那个号上勾「队长」。"
-        sub = ctk.CTkLabel(top, text=base_hint,
-                     font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
-        sub.pack(fill="x", pady=(4, 0))
-        T.bind_wraplength(sub)
 
         # 模式切换
         modebar = ctk.CTkFrame(self, fg_color="transparent")
@@ -185,8 +177,8 @@ class WindowPickerDialog(ctk.CTkToplevel):
         self._multi_vars = {}
 
         if not self._wins:
-            empty = ctk.CTkLabel(self.body, text=f"没检测到标题含「{self.title_substr}」的窗口。\n"
-                                         "请先打开游戏（可多开），再点上方「刷新」。",
+            empty = ctk.CTkLabel(self.body, text=f"没检测到「{self.title_substr}」窗口，"
+                                         "请先打开游戏再点「刷新」。",
                          font=self.fonts["body"], text_color=T.TEXT_DIM, justify="left")
             empty.grid(row=0, column=0, sticky="ew", padx=12, pady=24)
             T.bind_wraplength(empty)
@@ -262,7 +254,7 @@ class WindowPickerDialog(ctk.CTkToplevel):
 
         # 尺寸一致性提示（多开共用一套标定要求同尺寸）
         sizes = {(r[2], r[3]) for _, r, _ in self._wins if r}
-        warn = "" if len(sizes) <= 1 else "  ⚠ 窗口尺寸不一致，多开共用标定可能点错，建议统一分辨率"
+        warn = "" if len(sizes) <= 1 else "  ⚠ 窗口尺寸不一致，多开可能点错"
         self.status_lbl.configure(text=f"检测到 {len(self._wins)} 个窗口" + warn,
                                   text_color=T.WARN if warn else T.TEXT_DIM)
 

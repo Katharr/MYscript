@@ -213,11 +213,6 @@ class SniperPage(ctk.CTkFrame):
         self.pill_mode = Pill(right, self.fonts)
         self.pill_mode.pack(side="left")
 
-        sub = ctk.CTkLabel(bar, text="盯市场列表，目标装备一出现立刻秒下单",
-                           font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left", anchor="w")
-        sub.grid(row=1, column=0, sticky="ew", pady=(2, 0))
-        bind_wraplength(sub)
-
     # ---- 控制区：三段式（运行按钮 + 横排工具 / 分隔线 / 模式开关），与其它任务页一致 ----
     def _build_control(self):
         card = Card(self)
@@ -252,16 +247,14 @@ class SniperPage(ctk.CTkFrame):
         ctk.CTkFrame(card, fg_color=T.BORDER, height=1).grid(
             row=1, column=0, sticky="ew", padx=16, pady=(0, 4))
 
-        # 第二行：模式开关 + 说明
+        # 第二行：模式开关
         opts = ctk.CTkFrame(card, fg_color="transparent")
         opts.grid(row=2, column=0, sticky="ew", padx=16, pady=(8, 16))
         box1 = ctk.CTkFrame(opts, fg_color="transparent")
         box1.pack(anchor="w")
-        self.switch_mode = ctk.CTkSwitch(box1, text="实战模式（命中会真买）", font=self.fonts["body"],
+        self.switch_mode = ctk.CTkSwitch(box1, text="实战模式", font=self.fonts["body"],
                                          progress_color=T.DANGER, command=self._toggle_mode)
         self.switch_mode.pack(anchor="w")
-        ctk.CTkLabel(box1, text="关 = 演练（只识别不下单，安全）",
-                     font=self.fonts["small"], text_color=T.TEXT_DIM).pack(anchor="w", pady=(5, 0))
 
     # ---- 主体：监控清单（铺满；日志已移到全局右栏）----
     def _build_body(self):
@@ -313,7 +306,7 @@ class SniperPage(ctk.CTkFrame):
         self.lbl_count.configure(text=f"{len(items)} 件")
 
         if not items:
-            empty = ctk.CTkLabel(self.list_frame, text="还没有要抢的装备。\n点上方「标定 / 加装备」添加。",
+            empty = ctk.CTkLabel(self.list_frame, text="点上方「标定 / 加装备」添加。",
                                  font=self.fonts["body"], text_color=T.TEXT_DIM, justify="left")
             empty.grid(row=0, column=0, sticky="ew", padx=12, pady=20)
             bind_wraplength(empty)
@@ -377,6 +370,7 @@ class SniperPage(ctk.CTkFrame):
             self.runner = None
             return
         self.btn_run.configure(text="■  停止", fg_color=T.DANGER, hover_color=T.DANGER_HOVER, state="normal")
+        self.app.on_task_started("秒装备", self._toggle_run, self.runner)
 
     def _on_runner_finished(self):
         self.btn_run.configure(text="▶  开始秒装备", fg_color=T.ACCENT,
@@ -390,9 +384,9 @@ class SniperPage(ctk.CTkFrame):
         cfg_mod.save_config(self.app.cfg)
         self._render_mode_pill(not live)
         if live:
-            self._log_line("⚠ 已切到实战模式：命中会真正花钱购买，请谨慎！", "warn")
+            self._log_line("⚠ 实战模式：命中会真买", "warn")
         else:
-            self._log_line("已切回演练模式（安全）。", "info")
+            self._log_line("演练模式（只识别不下单）", "info")
 
     def _render_mode_pill(self, dry):
         if dry:
@@ -486,10 +480,6 @@ class TreasureMapPage(ctk.CTkFrame):
         self.pill_game.pack(side="left", padx=(0, 8))
         self.pill_mode = Pill(right, self.fonts)
         self.pill_mode.pack(side="left")
-        sub = ctk.CTkLabel(bar, text="自动开活动→收藏宝图→挖宝→领奖，战斗交给游戏自动（支持多开逐号轮转）",
-                           font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left", anchor="w")
-        sub.grid(row=1, column=0, sticky="ew", pady=(2, 0))
-        bind_wraplength(sub)
 
     def _build_control(self):
         card = Card(self)
@@ -524,7 +514,7 @@ class TreasureMapPage(ctk.CTkFrame):
         ctk.CTkFrame(card, fg_color=T.BORDER, height=1).grid(
             row=1, column=0, sticky="ew", padx=16, pady=(0, 4))
 
-        # 第二行：两个开关左右分布，各带一行说明
+        # 第二行：两个开关左右分布
         opts = ctk.CTkFrame(card, fg_color="transparent")
         opts.grid(row=2, column=0, sticky="ew", padx=16, pady=(8, 16))
         opts.grid_columnconfigure(0, weight=1, uniform="o")
@@ -535,20 +525,12 @@ class TreasureMapPage(ctk.CTkFrame):
         self.switch_mode = ctk.CTkSwitch(box1, text="实战模式", font=self.fonts["body"],
                                          progress_color=T.DANGER, command=self._toggle_mode)
         self.switch_mode.pack(anchor="w")
-        desc_mode = ctk.CTkLabel(box1, text="关 = 演练（只识别自检，安全）　开 = 真开活动/用宝图/领奖",
-                                 font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
-        desc_mode.pack(fill="x", pady=(5, 0))
-        bind_wraplength(desc_mode)
 
         box2 = ctk.CTkFrame(opts, fg_color="transparent")
         box2.grid(row=0, column=1, sticky="ew", padx=(16, 0))
         self.switch_skip = ctk.CTkSwitch(box2, text="已有宝图", font=self.fonts["body"],
                                          progress_color=T.ACCENT, command=self._toggle_skip)
         self.switch_skip.pack(anchor="w")
-        desc_skip = ctk.CTkLabel(box2, text="跳过领取，复位后直接挖包裹里的藏宝图",
-                                 font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
-        desc_skip.pack(fill="x", pady=(5, 0))
-        bind_wraplength(desc_skip)
 
     def _build_body(self):
         body = ctk.CTkFrame(self, fg_color="transparent")
@@ -579,17 +561,9 @@ class TreasureMapPage(ctk.CTkFrame):
         ctk.CTkEntry(sd, textvariable=self.var_still, width=70, font=self.fonts["body"],
                      fg_color=T.SURFACE_2, border_color=T.BORDER).pack(side="left", padx=(8, 0))
 
-        hint = ctk.CTkLabel(left, text="主终止条件是背包藏宝图挖空；时间上限只是安全网。\n"
-                               "“静止判定阈值”太小会一直判不到收集完成→看日志里的实时“帧差”，"
-                               "把阈值设到“静止时帧差”之上、“走动时帧差”之下。\n"
-                               "鼠标甩到屏幕左上角可紧急停止。",
-                     font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
-        hint.grid(row=3, column=0, sticky="ew", padx=16, pady=(2, 8))
-        bind_wraplength(hint)
-
         self.lbl_calib = ctk.CTkLabel(left, text="", font=self.fonts["small"], text_color=T.TEXT_DIM,
                                       justify="left")
-        self.lbl_calib.grid(row=4, column=0, sticky="ew", padx=16, pady=(2, 14))
+        self.lbl_calib.grid(row=3, column=0, sticky="ew", padx=16, pady=(2, 14))
         bind_wraplength(self.lbl_calib)
 
         # 日志已统一到 App 右侧的全局日志面板，本页不再单独建日志框。
@@ -651,6 +625,7 @@ class TreasureMapPage(ctk.CTkFrame):
             self.runner = None
             return
         self.btn_run.configure(text="■  停止", fg_color=T.DANGER, hover_color=T.DANGER_HOVER, state="normal")
+        self.app.on_task_started(self.LOG_SOURCE, self._toggle_run, self.runner)
 
     def _apply_time_limit(self):
         """启动前把「运行参数」里可调项（时间上限 / 静止判定阈值）写回配置。"""
@@ -683,9 +658,9 @@ class TreasureMapPage(ctk.CTkFrame):
         self.app.cfg = cfg
         self._render_mode_pill(not live)
         if live:
-            self._log_line("⚠ 已切到实战：会真开活动、真用宝图、真领奖，请用小号！", "warn")
+            self._log_line("⚠ 实战模式：会真开活动、真用宝图、真领奖", "warn")
         else:
-            self._log_line("已切回演练（只识别自检，安全）。", "info")
+            self._log_line("演练模式（只识别自检）", "info")
 
     def _toggle_skip(self):
         skip = bool(self.switch_skip.get())
@@ -697,9 +672,9 @@ class TreasureMapPage(ctk.CTkFrame):
         self.app.cfg = cfg
         self.refresh()
         if skip:
-            self._log_line("已开启「已有宝图」：将跳过开活动领取，复位后直接开背包挖图。", "info")
+            self._log_line("已有宝图：跳过开活动领取，直接开包裹挖图", "info")
         else:
-            self._log_line("已关闭「已有宝图」：恢复完整流程（先开活动领宝图）。", "info")
+            self._log_line("完整流程：先开活动领宝图", "info")
 
     def _open_calibrate(self):
         if getattr(self, "_cal_dialog", None) is not None:
@@ -776,10 +751,6 @@ class EscortPage(ctk.CTkFrame):
         self.pill_game.pack(side="left", padx=(0, 8))
         self.pill_mode = Pill(right, self.fonts)
         self.pill_mode.pack(side="left")
-        sub = ctk.CTkLabel(bar, text="自动开活动→参加运镖→押送普通镖银→循环押满次数，战斗交给游戏自动",
-                           font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left", anchor="w")
-        sub.grid(row=1, column=0, sticky="ew", pady=(2, 0))
-        bind_wraplength(sub)
 
     def _build_control(self):
         card = Card(self)
@@ -819,10 +790,6 @@ class EscortPage(ctk.CTkFrame):
         self.switch_mode = ctk.CTkSwitch(box1, text="实战模式", font=self.fonts["body"],
                                          progress_color=T.DANGER, command=self._toggle_mode)
         self.switch_mode.pack(anchor="w")
-        desc_mode = ctk.CTkLabel(box1, text="关 = 演练（只识别自检，安全）　开 = 真开活动/真参加/真押镖",
-                                 font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
-        desc_mode.pack(fill="x", pady=(5, 0))
-        bind_wraplength(desc_mode)
 
     def _build_body(self):
         body = ctk.CTkFrame(self, fg_color="transparent")
@@ -853,16 +820,9 @@ class EscortPage(ctk.CTkFrame):
         ctk.CTkEntry(lim, textvariable=self.var_limit, width=70, font=self.fonts["body"],
                      fg_color=T.SURFACE_2, border_color=T.BORDER).pack(side="left", padx=(8, 0))
 
-        hint = ctk.CTkLabel(left, text="靠「运镖中」标志判断在不在运镖：只要它在 或 在战斗中就绝不停。\n"
-                               "主终止条件是押满设定趟数后「运镖中」标志消失且不再弹对话框；\n"
-                               "时间上限只是安全网。鼠标甩到屏幕左上角可紧急停止。",
-                     font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
-        hint.grid(row=3, column=0, sticky="ew", padx=16, pady=(2, 8))
-        bind_wraplength(hint)
-
         self.lbl_calib = ctk.CTkLabel(left, text="", font=self.fonts["small"], text_color=T.TEXT_DIM,
                                       justify="left")
-        self.lbl_calib.grid(row=4, column=0, sticky="ew", padx=16, pady=(2, 14))
+        self.lbl_calib.grid(row=3, column=0, sticky="ew", padx=16, pady=(2, 14))
         bind_wraplength(self.lbl_calib)
 
         # 日志已统一到 App 右侧的全局日志面板，本页不再单独建日志框。
@@ -918,6 +878,7 @@ class EscortPage(ctk.CTkFrame):
             self.runner = None
             return
         self.btn_run.configure(text="■  停止", fg_color=T.DANGER, hover_color=T.DANGER_HOVER, state="normal")
+        self.app.on_task_started(self.LOG_SOURCE, self._toggle_run, self.runner)
 
     def _apply_params(self):
         """启动前把「运行参数」里可调项（运镖次数 / 时间上限 / 静止判定阈值）写回配置。"""
@@ -950,9 +911,9 @@ class EscortPage(ctk.CTkFrame):
         self.app.cfg = cfg
         self._render_mode_pill(not live)
         if live:
-            self._log_line("⚠ 已切到实战：会真开活动、真参加、真押镖，请用小号！", "warn")
+            self._log_line("⚠ 实战模式：会真开活动、真参加、真押镖", "warn")
         else:
-            self._log_line("已切回演练（只识别自检，安全）。", "info")
+            self._log_line("演练模式（只识别自检）", "info")
 
     def _open_calibrate(self):
         if getattr(self, "_cal_dialog", None) is not None:
@@ -1056,12 +1017,6 @@ class DungeonPage(ctk.CTkFrame):
         self.pill_game.pack(side="left", padx=(0, 8))
         self.pill_mode = Pill(right, self.fonts)
         self.pill_mode.pack(side="left")
-        sub = ctk.CTkLabel(bar, text="选一个副本来跑：自动先组队、再由队长跑完该副本流程。"
-                                     "目前收录：蹈海去·50。需多开≥2 个号、同尺寸。"
-                                     "组队功能本身在「通用 / 工具」页（选队长→一键组队）。",
-                           font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left", anchor="w")
-        sub.grid(row=1, column=0, sticky="ew", pady=(2, 0))
-        bind_wraplength(sub)
 
     def _build_control(self):
         card = Card(self)
@@ -1101,10 +1056,6 @@ class DungeonPage(ctk.CTkFrame):
         self.switch_mode = ctk.CTkSwitch(box1, text="实战模式", font=self.fonts["body"],
                                          progress_color=T.DANGER, command=self._toggle_mode)
         self.switch_mode.pack(anchor="w")
-        desc_mode = ctk.CTkLabel(box1, text="关 = 演练（只识别自检，安全）　开 = 真组队 + 真跑副本（演练/实战是「每个副本各自」的设置）",
-                                 font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
-        desc_mode.pack(fill="x", pady=(5, 0))
-        bind_wraplength(desc_mode)
 
     def _build_body(self):
         body = ctk.CTkFrame(self, fg_color="transparent")
@@ -1159,17 +1110,9 @@ class DungeonPage(ctk.CTkFrame):
                                             progress_color=T.ACCENT, command=self._toggle_disband)
         self.switch_disband.pack(anchor="w", pady=(6, 0))
 
-        hint = ctk.CTkLabel(left, text="选要跑的副本，再从已选多开窗口里指定队长（按从左到右/上到下编号），其余号自动当队员。\n"
-                               "「已组队」勾上=已自行组好队，直接由队长开刷、不再组队（此时不需要组队标定）。\n"
-                               "组队的模板/区域在「通用」页统一标定（所有副本共享）；副本自身模板用本页「标定」按钮。\n"
-                               "鼠标甩到屏幕左上角可紧急停止。",
-                     font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
-        hint.grid(row=4, column=0, sticky="ew", padx=16, pady=(2, 8))
-        bind_wraplength(hint)
-
         self.lbl_calib = ctk.CTkLabel(left, text="", font=self.fonts["small"], text_color=T.TEXT_DIM,
                                       justify="left")
-        self.lbl_calib.grid(row=5, column=0, sticky="ew", padx=16, pady=(2, 14))
+        self.lbl_calib.grid(row=4, column=0, sticky="ew", padx=16, pady=(2, 14))
         bind_wraplength(self.lbl_calib)
 
         # 日志已统一到 App 右侧的全局日志面板，本页不再单独建日志框。
@@ -1313,9 +1256,9 @@ class DungeonPage(ctk.CTkFrame):
         self.app.cfg = cfg
         self._render_team_status()
         if skip:
-            self._log_line("已勾「已组队」：本次不再组队，直接由队长开刷（确保你已自行组好队、队长在副本入口）。", "info")
+            self._log_line("已组队：跳过组队，直接开刷", "info")
         else:
-            self._log_line("已取消「已组队」：恢复先组队再开刷。", "info")
+            self._log_line("先组队再开刷", "info")
 
     def _toggle_disband(self):
         """切「跑完解散队伍」：写进选中副本自己的命名空间。勾上=副本跑完后让所有号自动退队。
@@ -1330,9 +1273,9 @@ class DungeonPage(ctk.CTkFrame):
         cfg_mod.save_config(cfg)
         self.app.cfg = cfg
         if auto:
-            self._log_line("已勾「跑完解散队伍」：副本结束后所有号自动退队（需在「通用」页标定「退出队伍」按钮）。", "info")
+            self._log_line("跑完自动退队", "info")
         else:
-            self._log_line("已取消「跑完解散队伍」：副本跑完保留队伍。", "info")
+            self._log_line("跑完保留队伍", "info")
 
     def _open_leader_gallery(self):
         """打开「队长ID 库」：当前+最近3历史可切换（共享 teaming.leader_id，与通用页同步）。"""
@@ -1404,6 +1347,7 @@ class DungeonPage(ctk.CTkFrame):
             return
         self._log_line(f"开始跑副本：{self._selected_title()}", "hit")
         self.btn_run.configure(text="■  停止", fg_color=T.DANGER, hover_color=T.DANGER_HOVER, state="normal")
+        self.app.on_task_started(f"副本·{self._selected_title()}", self._toggle_run, self.runner)
 
     def _apply_params(self):
         """启动前把队长序号写回【选中副本】的配置（下拉框变更时已即时存，这里兜底再存一次）。"""
@@ -1437,9 +1381,9 @@ class DungeonPage(ctk.CTkFrame):
         self.app.cfg = cfg
         self._render_mode_pill(not live)
         if live:
-            self._log_line(f"⚠ 已切到实战（{self._selected_title()}）：会真组队、真跑副本，请用小号！", "warn")
+            self._log_line(f"⚠ 实战模式（{self._selected_title()}）：会真组队、真跑副本", "warn")
         else:
-            self._log_line(f"已切回演练（{self._selected_title()}，只识别自检，安全）。", "info")
+            self._log_line(f"演练模式（{self._selected_title()}，只识别自检）", "info")
 
     def _open_calibrate(self):
         """打开【当前选中副本】的标定向导（标定它自己的模板/区域；组队标定仍在「通用」页）。"""
@@ -1520,10 +1464,6 @@ class SecretRealmPage(ctk.CTkFrame):
         self.pill_game.pack(side="left", padx=(0, 8))
         self.pill_mode = Pill(right, self.fonts)
         self.pill_mode.pack(side="left")
-        sub = ctk.CTkLabel(bar, text="开活动→参加→秘境降妖→选副本/确定/继续挑战/挑战→盯进入战斗续战，失败超时自动离开（支持多开逐号轮转）",
-                           font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left", anchor="w")
-        sub.grid(row=1, column=0, sticky="ew", pady=(2, 0))
-        bind_wraplength(sub)
 
     def _build_control(self):
         card = Card(self)
@@ -1563,10 +1503,6 @@ class SecretRealmPage(ctk.CTkFrame):
         self.switch_mode = ctk.CTkSwitch(box1, text="实战模式", font=self.fonts["body"],
                                          progress_color=T.DANGER, command=self._toggle_mode)
         self.switch_mode.pack(anchor="w")
-        desc_mode = ctk.CTkLabel(box1, text="关 = 演练（只识别自检，安全）　开 = 真开活动/真参加/真挑战秘境",
-                                 font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
-        desc_mode.pack(fill="x", pady=(5, 0))
-        bind_wraplength(desc_mode)
 
     def _build_body(self):
         body = ctk.CTkFrame(self, fg_color="transparent")
@@ -1597,17 +1533,9 @@ class SecretRealmPage(ctk.CTkFrame):
         ctk.CTkEntry(lim, textvariable=self.var_limit, width=70, font=self.fonts["body"],
                      fg_color=T.SURFACE_2, border_color=T.BORDER).pack(side="left", padx=(8, 0))
 
-        hint = ctk.CTkLabel(left, text="进入秘境后游戏自动战斗；到难度关卡会停下，脚本实时盯「进入战斗」按钮一出现就点。\n"
-                               "每轮终止条件是出现 失败/超时/离开；时间上限只是安全网。\n"
-                               "几个副本的「进入」长得一样，只认左下角那个（比例框可在配置 dungeon_enter_box 调）。\n"
-                               "鼠标甩到屏幕左上角可紧急停止。",
-                     font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
-        hint.grid(row=3, column=0, sticky="ew", padx=16, pady=(2, 8))
-        bind_wraplength(hint)
-
         self.lbl_calib = ctk.CTkLabel(left, text="", font=self.fonts["small"], text_color=T.TEXT_DIM,
                                       justify="left")
-        self.lbl_calib.grid(row=4, column=0, sticky="ew", padx=16, pady=(2, 14))
+        self.lbl_calib.grid(row=3, column=0, sticky="ew", padx=16, pady=(2, 14))
         bind_wraplength(self.lbl_calib)
 
         # 日志已统一到 App 右侧的全局日志面板，本页不再单独建日志框。
@@ -1664,6 +1592,7 @@ class SecretRealmPage(ctk.CTkFrame):
             self.runner = None
             return
         self.btn_run.configure(text="■  停止", fg_color=T.DANGER, hover_color=T.DANGER_HOVER, state="normal")
+        self.app.on_task_started(self.LOG_SOURCE, self._toggle_run, self.runner)
 
     def _apply_params(self):
         """启动前把「运行参数」里可调项（连跑轮数 / 时间上限）写回配置。"""
@@ -1696,9 +1625,9 @@ class SecretRealmPage(ctk.CTkFrame):
         self.app.cfg = cfg
         self._render_mode_pill(not live)
         if live:
-            self._log_line("⚠ 已切到实战：会真开活动、真参加、真挑战秘境，请用小号！", "warn")
+            self._log_line("⚠ 实战模式：会真开活动、真参加、真挑战秘境", "warn")
         else:
-            self._log_line("已切回演练（只识别自检，安全）。", "info")
+            self._log_line("演练模式（只识别自检）", "info")
 
     def _open_calibrate(self):
         if getattr(self, "_cal_dialog", None) is not None:
@@ -1746,29 +1675,19 @@ class SecretRealmPage(ctk.CTkFrame):
 class SettingsPage(ctk.CTkFrame):
     """设置页：基础项 + 「速度与节奏（手速）」一组滑块，全部可在界面里调。"""
 
-    # 速度/节奏滑块定义：(存储位置, 键, 标签, 下限, 上限, 步数, 小数位, 说明)
+    # 速度/节奏滑块定义：(存储位置, 键, 标签, 下限, 上限, 步数, 小数位)
     #   loc: "humanize" 存到 cfg["humanize"]；"loop" 存到 tasks.sniper.loop
     SPEED_FIELDS = [
-        ("humanize", "speed", "整体速度倍率", 0.5, 3.0, 25, 2,
-         "总开关：越大鼠标移动/点击越快(按比例缩短拟人化延迟)。想抢得快先调它。1.0=原速。"),
-        ("humanize", "snipe_speed", "命中下单极速倍率", 1.0, 6.0, 25, 1,
-         "命中后「下单那一下」的额外提速：只在抢的瞬间生效，巡航不受影响。越大越抢得到、也越不像人。建议 3~5。"),
-        ("humanize", "px_per_step", "鼠标移动步长(px)", 6, 40, 34, 0,
-         "每步移动的像素。越大步数越少→移动越快，但轨迹越不平滑(略更像机器)。"),
-        ("loop", "shelf_load_wait_sec", "货架加载最长等待(秒)", 0.2, 3.0, 28, 2,
-         "等货架刷出的上限/超时。自适应：画面一静止就提前识别，不会傻等满。只有慢机/慢网才需调大。"),
-        ("loop", "shelf_load_min_sec", "货架加载最短等待(秒)", 0.0, 1.5, 30, 2,
-         "再快也至少等这么久给画面起步。太小可能没开始加载就截图、偶发漏识别，那就调大一点。"),
-        ("loop", "refresh_interval_sec", "两轮间隔(秒)", 0.0, 3.0, 30, 2,
-         "两轮重进货架之间的停顿(带抖动)。想最快就调到接近 0，但完全无间隔更像机器。"),
-        ("loop", "after_buy_cooldown_sec", "购买后冷却(秒)", 0.3, 5.0, 47, 2,
-         "命中下单后的等待。给购买弹窗收尾用，太小可能下一轮误点。"),
-        ("humanize", "idle_chance", "走神概率", 0.0, 0.10, 20, 3,
-         "每轮随机“发呆”的概率，越像真人但会拖慢节奏。专心抢货时设 0。"),
-        ("humanize", "click_radius", "落点随机半径(px)", 0, 12, 12, 0,
-         "点击落点在目标周围随机偏移的范围。0=每次点正中心(更准但更机械)。"),
-        ("humanize", "interval_jitter", "间隔抖动比例", 0.0, 0.8, 16, 2,
-         "各种等待时间的随机浮动幅度。越大越不规律(更像人)，越小越稳定。"),
+        ("humanize", "speed", "整体速度倍率", 0.5, 3.0, 25, 2),
+        ("humanize", "snipe_speed", "命中下单极速倍率", 1.0, 6.0, 25, 1),
+        ("humanize", "px_per_step", "鼠标移动步长(px)", 6, 40, 34, 0),
+        ("loop", "shelf_load_wait_sec", "货架加载最长等待(秒)", 0.2, 3.0, 28, 2),
+        ("loop", "shelf_load_min_sec", "货架加载最短等待(秒)", 0.0, 1.5, 30, 2),
+        ("loop", "refresh_interval_sec", "两轮间隔(秒)", 0.0, 3.0, 30, 2),
+        ("loop", "after_buy_cooldown_sec", "购买后冷却(秒)", 0.3, 5.0, 47, 2),
+        ("humanize", "idle_chance", "走神概率", 0.0, 0.10, 20, 3),
+        ("humanize", "click_radius", "落点随机半径(px)", 0, 12, 12, 0),
+        ("humanize", "interval_jitter", "间隔抖动比例", 0.0, 0.8, 16, 2),
     ]
 
     def __init__(self, master, app):
@@ -1841,11 +1760,6 @@ class SettingsPage(ctk.CTkFrame):
                           font=self.fonts["body"], fg_color=T.SURFACE_2,
                           button_color=T.BORDER, button_hover_color=T.ACCENT, text_color=T.TEXT,
                           dropdown_text_color=T.TEXT, width=120).pack(side="left")
-        hint = ctk.CTkLabel(box, text="全局急停：游戏在前台也能按，按一下立刻停止所有正在跑的任务（鼠标被脚本"
-                                      "拉着失控时随时叫停）。默认 Ctrl+Alt+F12；建议带修饰键，避免和游戏内按键误撞。改完记得保存。",
-                            font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
-        hint.pack(fill="x", pady=(4, 0))
-        bind_wraplength(hint)
         return box
 
     def _build_failsafe(self, parent):
@@ -1854,11 +1768,6 @@ class SettingsPage(ctk.CTkFrame):
                           font=self.fonts["body"], fg_color=T.SURFACE_2,
                           button_color=T.BORDER, button_hover_color=T.ACCENT, text_color=T.TEXT,
                           dropdown_text_color=T.TEXT, width=160).pack(anchor="w")
-        hint = ctk.CTkLabel(box, text="任务运行时，把鼠标猛甩到所选屏幕角（撞到角落）立刻急停。独立于鼠标后端、"
-                                      "始终生效。选「关闭」则只靠停止按钮 / 急停热键。改完记得保存。",
-                            font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
-        hint.pack(fill="x", pady=(4, 0))
-        bind_wraplength(hint)
         return box
 
     # ---- 速度与节奏卡片 ----
@@ -1871,20 +1780,20 @@ class SettingsPage(ctk.CTkFrame):
         head.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 2))
         ctk.CTkLabel(head, text="速度与节奏（手速）", font=self.fonts["h2"],
                      text_color=T.TEXT).pack(anchor="w")
-        warn = ctk.CTkLabel(head, text="抢不过别人就往「快」调；但越快越规律越像机器、封号风险越高。先在演练模式下试。",
+        warn = ctk.CTkLabel(head, text="越快越像机器，封号风险越高。",
                      font=self.fonts["small"], text_color=T.WARN, justify="left")
         warn.pack(fill="x", pady=(2, 0))
         bind_wraplength(warn)
 
-        for i, (loc, key, label, lo, hi, steps, dec, hint) in enumerate(self.SPEED_FIELDS):
-            self._slider_row(card, i + 1, loc, key, label, lo, hi, steps, dec, hint)
+        for i, (loc, key, label, lo, hi, steps, dec) in enumerate(self.SPEED_FIELDS):
+            self._slider_row(card, i + 1, loc, key, label, lo, hi, steps, dec)
 
-    def _slider_row(self, parent, row, loc, key, label, lo, hi, steps, dec, hint):
+    def _slider_row(self, parent, row, loc, key, label, lo, hi, steps, dec):
         box = ctk.CTkFrame(parent, fg_color="transparent")
         box.grid(row=row, column=0, sticky="ew", padx=16, pady=(10, 6))
         box.grid_columnconfigure(1, weight=1)
 
-        # 第一行：标签 + 滑块 + 数值
+        # 标签 + 滑块 + 数值
         ctk.CTkLabel(box, text=label, font=self.fonts["body_b"], text_color=T.TEXT,
                      width=150, anchor="w").grid(row=0, column=0, sticky="w")
 
@@ -1901,12 +1810,6 @@ class SettingsPage(ctk.CTkFrame):
                                progress_color=T.ACCENT, button_color=T.ACCENT,
                                button_hover_color=T.ACCENT_HOVER)
         slider.grid(row=0, column=1, sticky="ew", padx=10)
-
-        # 第二行：说明文字（整行单独占一行，不再和滑块重叠）
-        hint_lbl = ctk.CTkLabel(box, text=hint, font=self.fonts["small"], text_color=T.TEXT_DIM,
-                     justify="left")
-        hint_lbl.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(4, 0))
-        bind_wraplength(hint_lbl)
 
     def _on_slider(self, key, val):
         lbl, fmt = self._value_labels[key]
@@ -1951,10 +1854,6 @@ class SettingsPage(ctk.CTkFrame):
         self.thr_value = ctk.CTkLabel(top, text=f"{self.var_threshold.get():.2f}",
                                       font=self.fonts["body_b"], text_color=T.ACCENT, width=48)
         self.thr_value.pack(side="left", padx=(12, 0))
-        hint = ctk.CTkLabel(box, text="越高越严格：命中更准但可能漏；越低越宽松：易命中但可能误认。建议 0.85~0.92。",
-                     font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
-        hint.pack(fill="x", pady=(4, 0))
-        bind_wraplength(hint)
         return box
 
     def _on_threshold(self, val):
@@ -2077,10 +1976,6 @@ class GeneralPage(ctk.CTkFrame):
         head = ctk.CTkFrame(self, fg_color="transparent")
         head.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         ctk.CTkLabel(head, text="通用 / 工具", font=self.fonts["title"], text_color=T.TEXT).pack(anchor="w")
-        sub = ctk.CTkLabel(head, text="跨任务的通用功能：唤出 / 收起窗口、悬浮日志窗、组队标定 + 一键组队 / 一键解散 / 还原窗口尺寸。各任务专属的标定与「选择窗口」仍在对应任务页。",
-                           font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left", anchor="w")
-        sub.pack(fill="x", anchor="w", pady=(4, 0))
-        bind_wraplength(sub)
 
         self.body = ctk.CTkScrollableFrame(self, fg_color="transparent")
         self.body.grid(row=1, column=0, sticky="nsew")
@@ -2095,22 +1990,15 @@ class GeneralPage(ctk.CTkFrame):
 
     # ------------------------------------------------------------------
     # 窗口 / 界面工具：① 唤出所有游戏窗口 ② 收起为悬浮日志窗
-    #   —— 都是「盯脚本跑」这个场景的工具：多开窗口被压住时唤一次；随后把界面收成细长悬浮窗，
+    #   —— 都是「盯脚本跑」这个场景的工具：多开窗口被压住时唤一次；把界面收成细长悬浮窗，
     #      摆到游戏窗口边角上边跑边看日志。
+    #      「收起」现在【任意模块脚本一开始跑就自动发生】（App.on_task_started），本按钮是手动入口。
     # ------------------------------------------------------------------
     def _build_window_tools_card(self):
         c = self._card()
         head = ctk.CTkFrame(c, fg_color="transparent")
         head.pack(fill="x", padx=16, pady=(14, 4))
         ctk.CTkLabel(head, text="窗口 / 悬浮日志", font=self.fonts["h2"], text_color=T.TEXT).pack(anchor="w")
-        sub = ctk.CTkLabel(head, text="「唤出所有游戏窗口」：把检测到的各号（含已经最小化的）一起还原、"
-                                      "依次切到前台，号1 最后留在前台；窗口被别的程序压住时点一下即可。\n"
-                                      "「收起为悬浮日志窗」：把本助手收成一条细长的悬浮窗，显示运行日志，"
-                                      "可拖动/缩放、可固定在前台，摆在游戏窗口边角上看脚本跑得怎么样"
-                                      "（点悬浮窗上的「展开主界面」随时还原）。",
-                           font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
-        sub.pack(fill="x", pady=(4, 0))
-        bind_wraplength(sub)
 
         act = ctk.CTkFrame(c, fg_color="transparent")
         act.pack(fill="x", padx=16, pady=(10, 14))
@@ -2188,7 +2076,7 @@ class GeneralPage(ctk.CTkFrame):
         self.app.cfg = cfg
         size = calib.active_size(cfg)
         if not size:
-            self.app.toast("还没有尺寸组：先在「标定 / 加装备」里标定任意一项（会自动记住窗口尺寸）")
+            self.app.toast("还没有尺寸组：先标定任意一项")
             return
         self._restore_size(size)
 
@@ -2266,12 +2154,6 @@ class GeneralPage(ctk.CTkFrame):
                                  + ("　✓ 已就绪" if ready else "　（还需标定）"),
                      font=self.fonts["body"],
                      text_color=T.SUCCESS if ready else T.WARN).pack(anchor="w", pady=(4, 0))
-        sub_t = ctk.CTkLabel(txt_t, text="队长建队→队员申请→接受→关窗，是跨任务的共享能力。"
-                                        "刷副本等任何用到组队的任务都自动读这份标定"
-                                        "（队长ID、创建/申请/接受/申请入队、好友列表区/队伍面板区等）。",
-                             font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
-        sub_t.pack(fill="x", pady=(2, 0))
-        bind_wraplength(sub_t)
         btns_t = ctk.CTkFrame(head_t, fg_color="transparent")
         btns_t.grid(row=0, column=1, padx=(12, 0))
         ctk.CTkButton(btns_t, text="标定（组队）", font=self.fonts["body"], height=36, width=120,
@@ -2339,12 +2221,6 @@ class GeneralPage(ctk.CTkFrame):
                    if prof else "尚未标定任何尺寸组")
         ctk.CTkLabel(txt2, text=cur_txt, font=self.fonts["body"],
                      text_color=T.TEXT if prof else T.WARN).pack(anchor="w", pady=(4, 0))
-        sub2 = ctk.CTkLabel(txt2, text="标定时会自动记住当时的窗口尺寸，形成一个尺寸组；最多 3 组。"
-                                       "全局共用同一套模板图，改分辨率后识别会自动按缩放比补偿。"
-                                       "点胶囊可切到该组，再点「还原尺寸」把窗口拉回它标定时的尺寸。",
-                            font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
-        sub2.pack(fill="x", pady=(2, 0))
-        bind_wraplength(sub2)
         btns2 = ctk.CTkFrame(head2, fg_color="transparent")
         btns2.grid(row=0, column=1, padx=(12, 0))
         ctk.CTkButton(btns2, text="还原尺寸", font=self.fonts["body"], height=36, width=100,
@@ -2355,7 +2231,8 @@ class GeneralPage(ctk.CTkFrame):
                       border_width=1, border_color=T.BORDER,
                       command=self.refresh).pack()
 
-        # 尺寸组胶囊：编号 + 分辨率（+ ✓ 表示当前组）。点整体＝切到该组，行内「还原」＝把窗口拉回该组尺寸。
+        # 尺寸组胶囊：编号 + 分辨率（+ ✓ 表示当前组）。点整体＝切到该组；
+        # 胶囊旁不再放「还原」——选中哪一组，点上面的「还原尺寸」即可把所有窗口拉回该组尺寸。
         pills = ctk.CTkFrame(c2, fg_color="transparent")
         pills.pack(fill="x", padx=16, pady=(10, 2))
         for it in calib.items(cfg):
@@ -2366,34 +2243,13 @@ class GeneralPage(ctk.CTkFrame):
                           text_color=T.TEXT_DIM, border_width=1, border_color=T.BORDER,
                           command=self._open_profile_admin).pack(side="left", padx=(6, 0))
         if not prof:
-            hint0 = ctk.CTkLabel(c2, text="还没有尺寸组：「标定 / 加装备」里框选任何一项就会按当前窗口尺寸"
-                                          "自动新建一组（组是自动记的，不必手动设基准）。",
+            hint0 = ctk.CTkLabel(c2, text="还没有尺寸组：标定任意一项会自动新建一组。",
                                  font=self.fonts["small"], text_color=T.WARN, justify="left")
             hint0.pack(fill="x", padx=16, pady=(2, 0))
             bind_wraplength(hint0)
 
-        # 旧尺寸模板一键重标（找不到就整块不显示，免得给用户添噪音）
-        stale = self._stale_tasks()
-        if stale:
-            ctk.CTkFrame(c2, fg_color=T.BORDER, height=1).pack(fill="x", padx=16, pady=(10, 0))
-            srow = ctk.CTkFrame(c2, fg_color="transparent")
-            srow.pack(fill="x", padx=16, pady=(10, 0))
-            stxt = ctk.CTkFrame(srow, fg_color="transparent")
-            stxt.pack(side="left", fill="x", expand=True)
-            ctk.CTkLabel(stxt, text=f"有 {sum(n for _t, _l, n in stale)} 个模板是旧尺寸标的",
-                         font=self.fonts["body_b"], text_color=T.WARN).pack(anchor="w")
-            shint = ctk.CTkLabel(stxt, text="它们（或它们所在的任务）在当前窗口尺寸下可能认不出，"
-                                            "点右边按钮逐个重标一遍即可。",
-                                 font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
-            shint.pack(fill="x")
-            bind_wraplength(shint)
-            ctk.CTkButton(srow, text="重标旧尺寸的模板", font=self.fonts["body"], height=36, width=150,
-                          corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
-                          border_width=1, border_color=T.BORDER,
-                          command=self._open_stale_dialog).pack(side="right", padx=(12, 0))
-
         # 窗口列表（信息 + 显示各号当前对应哪个尺寸组）
-        ctk.CTkLabel(c2, text="检测到的窗口（显示它属于哪个尺寸组；点「还原」把该号拉回激活组的尺寸）：",
+        ctk.CTkLabel(c2, text="检测到的窗口：",
                      font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left").pack(
                          anchor="w", padx=16, pady=(8, 2))
         # 窗口枚举（getAllWindows）很慢、绝不能卡主线程：先放占位、后台线程枚举完再回主线程填。
@@ -2404,13 +2260,9 @@ class GeneralPage(ctk.CTkFrame):
         self._kick_enum_windows(rows_holder, list(prof["size"]) if prof else None)
 
     def _profile_pill(self, parent, it, active):
-        """一个尺寸组胶囊：`① 1521×1198 ✓`（胶囊形状 + 该组配色）。整体可点＝切到该组。
-        行内「还原」把窗口拉回该组尺寸（用户诉求：以后随意改尺寸也能随时回到标定时的尺寸）。
-        未激活组用中性灰（PROFILE_NEUTRAL）——编号才是主键，颜色只是辅助识别。"""
-        if active:
-            fg, txt = T.PROFILE_COLORS[calib.color_index(it["id"])]
-        else:
-            fg, txt = T.PROFILE_NEUTRAL
+        """一个尺寸组胶囊：`① 1521×1198 ✓`。整体可点＝切到该组（要拉回尺寸就点上面的「还原尺寸」）。
+        只有两种配色：当前组=绿（PROFILE_ACTIVE）、非当前组=灰（PROFILE_NEUTRAL）。"""
+        fg, txt = T.PROFILE_ACTIVE if active else T.PROFILE_NEUTRAL
         box = ctk.CTkFrame(parent, fg_color="transparent")
         box.pack(side="left", padx=(0, 8), pady=2)
         label = f"{it['label']} {it['size'][0]}×{it['size'][1]}" + ("  ✓" if active else "")
@@ -2418,10 +2270,6 @@ class GeneralPage(ctk.CTkFrame):
                       corner_radius=T.RADIUS_PILL, fg_color=fg, hover_color=fg, text_color=txt,
                       border_width=(2 if active else 1), border_color=txt,
                       command=lambda pid=it["id"]: self._activate_profile(pid)).pack(side="left")
-        ctk.CTkButton(box, text="还原", font=self.fonts["small"], height=30, width=52,
-                      corner_radius=T.RADIUS_PILL, fg_color="transparent", hover_color=T.BORDER,
-                      text_color=T.TEXT_DIM, border_width=1, border_color=T.BORDER,
-                      command=lambda sz=list(it["size"]): self._restore_size(sz)).pack(side="left", padx=(4, 0))
 
     def _activate_profile(self, pid):
         cfg = cfg_mod.load_config()
@@ -2469,8 +2317,7 @@ class GeneralPage(ctk.CTkFrame):
         dlg.transient(self.app)
         ctk.CTkLabel(dlg, text="标定尺寸组", font=self.fonts["title"], text_color=T.TEXT).pack(
             anchor="w", padx=20, pady=(18, 0))
-        hint = ctk.CTkLabel(dlg, text="最多 3 组。要在一个新尺寸下标定、但组已满时，先在这里删掉一个旧组。"
-                                      "删除只删记录，模板图不会删。",
+        hint = ctk.CTkLabel(dlg, text="最多 3 组。组满时先删一个旧组（只删记录，模板图不删）。",
                             font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
         hint.pack(fill="x", padx=20, pady=(4, 10))
         bind_wraplength(hint, padding=40)
@@ -2481,7 +2328,7 @@ class GeneralPage(ctk.CTkFrame):
         T.tune_scroll_speed(body)
 
         def _row(i, it, is_act):
-            fg, txt = (T.PROFILE_COLORS[calib.color_index(it["id"])] if is_act else T.PROFILE_NEUTRAL)
+            fg, txt = (T.PROFILE_ACTIVE if is_act else T.PROFILE_NEUTRAL)
             row = ctk.CTkFrame(body, fg_color=T.SURFACE, corner_radius=T.RADIUS,
                                border_width=1, border_color=T.BORDER)
             row.grid(row=i, column=0, sticky="ew", padx=4, pady=6)
@@ -2525,8 +2372,7 @@ class GeneralPage(ctk.CTkFrame):
         dlg.transient(self.app)
         ctk.CTkLabel(dlg, text=f"已有 3 个尺寸组，放不下 {int(size[0])}×{int(size[1])}",
                      font=self.fonts["title"], text_color=T.TEXT).pack(anchor="w", padx=20, pady=(18, 0))
-        hint = ctk.CTkLabel(dlg, text="选一个旧组替换掉（只删它的记录，模板图不会删；属于它的模板会变成"
-                                      "「旧图」，可用「重标旧尺寸的模板」一键重标）。选好后会自动继续标定。",
+        hint = ctk.CTkLabel(dlg, text="选一个旧组替换（只删记录，模板图不删）。",
                             font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
         hint.pack(fill="x", padx=20, pady=(4, 10))
         bind_wraplength(hint, padding=40)
@@ -2557,105 +2403,6 @@ class GeneralPage(ctk.CTkFrame):
         except Exception:
             pass
         return picked["pid"]
-
-    # ---- 旧尺寸模板一键重标 ----
-    def _stale_tasks(self):
-        """扫出「有旧尺寸模板」的可标定命名空间：[(task_name, 显示名, 旧模板数), ...]。
-
-        只列【已标定过】的模板里「组指针 ≠ 激活组」的（含本次改版前标的老图，其指针为空），
-        没标过的项本来就要标，列进来只会让按钮长出一堆空项。标定按任务命名空间分批，
-        故这里返回的是「哪些任务需要重标」，一个任务一个入口。
-        """
-        cfg = self.cfg
-        out = []
-        seen = set()
-        for key, page in getattr(self.app, "pages", {}).items():
-            name = getattr(page, "TASK_NAME", None) or getattr(page, "_selected", None)
-            if not name or name in seen:
-                continue
-            n = len(calib.stale_templates(cfg, name))
-            if n:
-                seen.add(name)
-                out.append((name, self._ns_title(name), n))
-        # 共享命名空间（组队 / 整理背包）不挂在任何任务页上，单独补一次
-        for name in ("teaming", "organize_bag"):
-            if name in seen:
-                continue
-            n = len(calib.stale_templates(cfg, name))
-            if n:
-                seen.add(name)
-                out.append((name, self._ns_title(name), n))
-        return out
-
-    @staticmethod
-    def _ns_title(name):
-        task_cls = get_task(name)
-        if task_cls is not None and getattr(task_cls, "title", None):
-            return task_cls.title
-        return {"teaming": "组队（共享）", "organize_bag": "整理背包"}.get(name, name)
-
-    def _open_stale_dialog(self):
-        """「重标旧尺寸的模板」：列出有哪些任务的模板是旧尺寸标的，逐个一键重标。"""
-        stale = self._stale_tasks()
-        if not stale:
-            self.app.toast("没有旧尺寸的模板，全部都是当前尺寸组标的")
-            self.refresh()
-            return
-
-        dlg = ctk.CTkToplevel(self.app)
-        dlg.title("重标旧尺寸的模板")
-        dlg.geometry("560x420")
-        dlg.configure(fg_color=T.BG)
-        dlg.transient(self.app)
-        ctk.CTkLabel(dlg, text="这些模板不是当前尺寸组标的", font=self.fonts["title"],
-                     text_color=T.TEXT).pack(anchor="w", padx=20, pady=(18, 0))
-        hint = ctk.CTkLabel(dlg, text="在当前窗口尺寸下重新框选它们，标完就归入当前尺寸组。"
-                                      "（游戏窗口调到你要用的尺寸后再标，标定时会自动记住该尺寸。）",
-                            font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
-        hint.pack(fill="x", padx=20, pady=(4, 10))
-        bind_wraplength(hint, padding=40)
-
-        body = ctk.CTkScrollableFrame(dlg, fg_color="transparent")
-        body.pack(fill="both", expand=True, padx=12, pady=(0, 12))
-        body.grid_columnconfigure(0, weight=1)
-        T.tune_scroll_speed(body)
-        for i, (name, title, n) in enumerate(stale):
-            row = ctk.CTkFrame(body, fg_color=T.SURFACE, corner_radius=T.RADIUS,
-                               border_width=1, border_color=T.BORDER)
-            row.grid(row=i, column=0, sticky="ew", padx=4, pady=6)
-            row.grid_columnconfigure(0, weight=1)
-            ctk.CTkLabel(row, text=f"{title}", font=self.fonts["body_b"], text_color=T.TEXT).grid(
-                row=0, column=0, sticky="w", padx=14, pady=(10, 0))
-            ctk.CTkLabel(row, text=f"有 {n} 个模板是旧尺寸标的", font=self.fonts["small"],
-                         text_color=T.WARN).grid(row=1, column=0, sticky="w", padx=14, pady=(0, 10))
-            ctk.CTkButton(row, text="重新标定", font=self.fonts["body"], height=34, width=110,
-                          corner_radius=T.RADIUS_SM, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
-                          text_color=T.ON_ACCENT,
-                          command=lambda ns=name, d=dlg: self._restale_one(ns, d)).grid(
-                              row=0, column=1, rowspan=2, padx=14)
-
-    def _restale_one(self, task_name, dialog=None, only=None):
-        """给某个命名空间重标旧尺寸模板：只渲染这些 key（only 白名单），标完自动从列表消失。"""
-        if only is None:
-            cfg = self.cfg = cfg_mod.load_config()
-            only = calib.stale_templates(cfg, task_name)
-        if not only:
-            return
-        from .calibrate_dialog import CalibrateDialog
-
-        def _after():
-            self.refresh()
-            if dialog is not None:
-                try:
-                    dialog.destroy()
-                except Exception:
-                    pass
-            self._open_stale_dialog()
-
-        try:
-            CalibrateDialog(self.app, task_name=task_name, only=only, on_done=_after)
-        except Exception as e:
-            self.app.toast(f"打开重标窗口失败：{e}")
 
     def _kick_enum_windows(self, holder, active_size):
         """后台枚举窗口，完成后回主线程把列表填进 holder。用 token 丢弃过期结果（连续切页/刷新时）。"""
@@ -2712,29 +2459,7 @@ class GeneralPage(ctk.CTkFrame):
             ctk.CTkLabel(row, text=meta + tag, font=self.fonts["body"],
                          text_color=T.SUCCESS if is_act else T.TEXT).grid(
                              row=0, column=0, sticky="w", padx=12, pady=8)
-            ctk.CTkButton(row, text="还原", font=self.fonts["small"], width=72, height=30,
-                          corner_radius=T.RADIUS_SM, fg_color="transparent", hover_color=T.BORDER, text_color=T.TEXT,
-                          border_width=1, border_color=T.BORDER,
-                          command=lambda win=w: self._restore_one(win)).grid(row=0, column=1, padx=10)
         ctk.CTkFrame(holder, fg_color="transparent", height=6).pack()
-
-    def _restore_one(self, w):
-        """把某一个号拉回激活尺寸组的尺寸。没有尺寸组时提示（标定一次即自动建组）。"""
-        size = calib.active_size(self.cfg)
-        if not size:
-            self.app.toast("还没有尺寸组：先标定任意一项（标定时会自动记住窗口尺寸）")
-            return
-        r = w.rect()
-        if not r:
-            self.app.toast("该窗口已失效，请点「刷新」")
-            return
-        w.activate()
-        ok = w.resize_to(int(size[0]), int(size[1]))
-        self.app._game_connected = None
-        self.app.toast(f"已还原到 {int(size[0])}×{int(size[1])}" if ok
-                       else f"还原失败（目标 {int(size[0])}×{int(size[1])}）：新版客户端锁定比例，"
-                            f"该尺寸可能不可达，建议在目标尺寸下重新标定")
-        self.refresh()
 
     def _calib_singleton(self, attr, only, fail_msg, exclude=None):
         """打开一个标定窗并按 attr 去重：已开着就 lift 回来，不叠开多个写同一处 teaming 的窗
@@ -2797,9 +2522,9 @@ class GeneralPage(ctk.CTkFrame):
             cap = 0
         multi = self.app.cfg.get("targets", {}).get("multi", False)
         if n >= 2:
-            tip = f"已选 {n} 个号，队长=第{cap + 1}个所选号，其余当队员。点「一键组队」开始。"
+            tip = f"已选 {n} 个号，队长=第{cap + 1}个所选号"
         elif not multi:
-            tip = "组队需多开：请点「选择窗口/队长」切到多开、勾 2~5 个号并指定队长。"
+            tip = "组队需多开：勾 2~5 个号并指定队长。"
         else:
             tip = f"已选 {n} 个号，组队至少 2 个号（队长+≥1 队员）。"
         self.lbl_team_status.configure(text=tip)
@@ -2858,6 +2583,7 @@ class GeneralPage(ctk.CTkFrame):
             return
         self._log_line("开始一键组队…", "hit", "组队")
         self.btn_team.configure(text="■  停止组队", fg_color=T.DANGER, hover_color=T.DANGER_HOVER, state="normal")
+        self.app.on_task_started("组队", self._start_teaming, self.runner)
 
     def _on_team_finished(self):
         if self.btn_team is not None:
@@ -2892,6 +2618,7 @@ class GeneralPage(ctk.CTkFrame):
         self._log_line("开始一键解散…", "hit", "解散")
         self.btn_disband.configure(text="■  停止解散", fg_color=T.DANGER, hover_color=T.DANGER_HOVER,
                                    state="normal")
+        self.app.on_task_started("解散", self._start_disband, self.runner_db)
 
     def _on_disband_finished(self):
         if self.btn_disband is not None:
@@ -2969,11 +2696,6 @@ class GeneralPage(ctk.CTkFrame):
                               + ("　✓ 已就绪" if ready else "　（还需标定）"),
                      font=self.fonts["body"],
                      text_color=T.SUCCESS if ready else T.WARN).pack(anchor="w", pady=(4, 0))
-        sub = ctk.CTkLabel(txt, text="翻包裹找到标定的物品，逐个使用/丢弃/出售。是跨任务共享能力，"
-                                     "任何任务流程都可穿插调用；这里可单独一键运行。",
-                           font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
-        sub.pack(fill="x", pady=(2, 0))
-        bind_wraplength(sub)
         ctk.CTkLabel(txt, text="将整理：" + self._targets_summary(cfg),
                      font=self.fonts["small"], text_color=T.TEXT_DIM).pack(anchor="w", pady=(4, 0))
         btns = ctk.CTkFrame(head, fg_color="transparent")
@@ -2999,7 +2721,7 @@ class GeneralPage(ctk.CTkFrame):
                       corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
                       border_width=1, border_color=T.BORDER,
                       command=lambda: self.app.open_window_picker(self.refresh)).pack(side="right")
-        self.switch_ob = ctk.CTkSwitch(act, text="实战模式（真的会使用/丢弃/出售）", font=self.fonts["body"],
+        self.switch_ob = ctk.CTkSwitch(act, text="实战模式", font=self.fonts["body"],
                                        command=self._toggle_organize_mode, progress_color=T.DANGER)
         self.switch_ob.pack(side="left", padx=(16, 0))
         if not ob_tc.get("dry_run", True):
@@ -3011,19 +2733,13 @@ class GeneralPage(ctk.CTkFrame):
         # 运行中每隔一会儿检测一次背包「满」图标，满了就自动整理一遍（真整理/只识别跟随上面的实战开关）。
         auto_row = ctk.CTkFrame(c, fg_color="transparent")
         auto_row.pack(fill="x", padx=16, pady=(0, 12))
-        self.switch_auto_ob = ctk.CTkSwitch(auto_row, text="自动整理背包（任何任务检测到背包满就自动清）",
-                                            font=self.fonts["body"], command=self._toggle_auto_organize)
+        self.switch_auto_ob = ctk.CTkSwitch(auto_row, text="自动整理背包", font=self.fonts["body"],
+                                            command=self._toggle_auto_organize)
         self.switch_auto_ob.pack(anchor="w")
         if ob_tc.get("auto_organize"):
             self.switch_auto_ob.select()
         else:
             self.switch_auto_ob.deselect()
-        auto_hint = ctk.CTkLabel(auto_row, text="开启后，运镖 / 宝图 / 秘境 / 副本等任务运行中会每隔一会儿检测一次背包"
-                                                "「满」图标，满了就自动整理一遍 —— 需先在「标定（整理背包）」里框选"
-                                                "『背包满图标』，否则无从判断、不会触发。",
-                                 font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
-        auto_hint.pack(fill="x", anchor="w", pady=(2, 0))
-        bind_wraplength(auto_hint)
 
         # 重建后：若整理在跑，恢复「停止整理」文案/颜色（照 btn_team 的恢复写法）
         if self.runner_ob and self.runner_ob.is_running():
@@ -3070,9 +2786,9 @@ class GeneralPage(ctk.CTkFrame):
         cfg_mod.save_config(cfg)
         self.app.cfg = self.cfg = cfg
         if live:
-            self._log_line("⚠ 整理背包已切到实战模式：会真正使用/丢弃/出售物品，请谨慎！", "warn", "整理背包")
+            self._log_line("⚠ 实战模式：会真使用/丢弃/出售物品", "warn", "整理背包")
         else:
-            self._log_line("整理背包已切回演练模式（安全，只识别不操作）。", "info", "整理背包")
+            self._log_line("演练模式（只识别不操作）", "info", "整理背包")
 
     def _toggle_auto_organize(self):
         """「自动整理背包」开关：存 tasks.organize_bag.auto_organize（任何任务流程检测到背包满自动整理）。"""
@@ -3085,11 +2801,11 @@ class GeneralPage(ctk.CTkFrame):
         self.app.cfg = self.cfg = cfg
         if on:
             tpl_ok = bool((tc.get("templates", {}) or {}).get("bag_full_icon"))
-            self._log_line("已开启「自动整理背包」：任务流程中检测到背包满会自动整理。"
-                           + ("" if tpl_ok else " ⚠ 但还没标定『背包满图标』，请先去「标定（整理背包）」框选，否则不会触发。"),
+            self._log_line("自动整理背包：开"
+                           + ("" if tpl_ok else "　⚠ 还没标定『背包满图标』，不会触发"),
                            "warn" if not tpl_ok else "info", "整理背包")
         else:
-            self._log_line("已关闭「自动整理背包」。", "info", "整理背包")
+            self._log_line("自动整理背包：关", "info", "整理背包")
 
     def _start_organize(self):
         if self.runner_ob and self.runner_ob.is_running():
@@ -3113,6 +2829,7 @@ class GeneralPage(ctk.CTkFrame):
             return
         self._log_line("开始一键整理背包…", "hit", "整理背包")
         self.btn_ob.configure(text="■  停止整理", fg_color=T.DANGER, hover_color=T.DANGER_HOVER, state="normal")
+        self.app.on_task_started("整理背包", self._start_organize, self.runner_ob)
 
     def _on_ob_finished(self):
         if self.btn_ob is not None:
@@ -3177,11 +2894,6 @@ class DailyPage(ctk.CTkFrame):
         right.grid(row=0, column=1, sticky="e")
         self.pill_game = Pill(right, self.fonts)
         self.pill_game.pack(side="left")
-        sub = ctk.CTkLabel(bar, text="勾选要串起来跑的任务并调序，一次按顺序跑完；多开/单开与各任务的演练/实战、"
-                                     "标定、参数全部沿用各自任务页设置",
-                           font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left", anchor="w")
-        sub.grid(row=1, column=0, sticky="ew", pady=(2, 0))
-        bind_wraplength(sub)
 
     # ---- 控制区：运行按钮 + 工具（选择窗口/刷新），无标定/无模式开关 ----
     def _build_control(self):
@@ -3221,10 +2933,6 @@ class DailyPage(ctk.CTkFrame):
         self.var_limit = ctk.StringVar(value="0")
         ctk.CTkEntry(lim, textvariable=self.var_limit, width=70, font=self.fonts["body"],
                      fg_color=T.SURFACE_2, border_color=T.BORDER).pack(side="left", padx=(8, 0))
-        net = ctk.CTkLabel(opts, text="只是安全网：正常会按各子任务自身条件跑完。未就绪（缺标定/缺窗口）的任务会自动跳过。",
-                     font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
-        net.pack(fill="x", pady=(5, 0))
-        bind_wraplength(net)
 
     # ---- 主体：任务清单（铺满；日志已移到全局右栏）----
     def _build_body(self):
@@ -3245,7 +2953,7 @@ class DailyPage(ctk.CTkFrame):
                      text_color=T.TEXT).grid(row=0, column=0, sticky="w")
         self.lbl_count = ctk.CTkLabel(head, text="", font=self.fonts["small"], text_color=T.TEXT_DIM)
         self.lbl_count.grid(row=0, column=1, sticky="e")
-        hint = ctk.CTkLabel(head, text="按住左侧 ⠿ 上下拖动排序　·　右侧开关启用 / 停用　·　序号即执行先后",
+        hint = ctk.CTkLabel(head, text="拖动 ⠿ 排序　·　开关启用 / 停用",
                             font=self.fonts["small"], text_color=T.TEXT_DIM, anchor="w")
         hint.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(4, 0))
         bind_wraplength(hint)
@@ -3506,6 +3214,7 @@ class DailyPage(ctk.CTkFrame):
             self.runner = None
             return
         self.btn_run.configure(text="■  停止", fg_color=T.DANGER, hover_color=T.DANGER_HOVER, state="normal")
+        self.app.on_task_started(self.LOG_SOURCE, self._toggle_run, self.runner)
 
     def _on_runner_finished(self):
         self.btn_run.configure(text=self.RUN_LABEL, fg_color=T.ACCENT,
@@ -3576,7 +3285,11 @@ class App(ctk.CTk):
         self._game_connected = None   # 缓存连接状态，只在变化时刷新药丸
         self._locating = False        # 防止多个后台定位线程叠加
         self._ui_queue = queue.Queue()  # 后台线程 -> 主线程的任务队列（见 App.ui_post）
-        self.float_log = None         # 「收起为悬浮日志窗」的窗实例（None=没收起，主界面正常显示）
+        self.float_log = None         # 悬浮日志窗实例（None=没收起，主界面正常显示）
+        # 任务运行态：给悬浮窗的「开始/停止」按钮用（见 on_task_started / task_state）。
+        self._task_label = None       # 最近一次启动的模块名（如「秒装备」），用作按钮上的说明
+        self._task_restart = None     # 最近一次启动的模块的重启入口（点悬浮窗「开始」原样重跑）
+        self._started = []            # [(runner, label)]：本次会话启动过的 runner，实时判活取正在跑的
 
         self.grid_columnconfigure(1, weight=1)   # 中间内容区随窗口拉伸
         self.grid_columnconfigure(2, weight=0)   # 右侧全局日志列固定宽
@@ -3653,7 +3366,6 @@ class App(ctk.CTk):
         self.log.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 14))
         T.apply_log_tags(self.log._textbox)
         self.log.configure(state="disabled")
-        self.log_line("界面就绪。各功能的日志都会汇总到这里。", "info")
 
     def log_line(self, msg, level="info", source=None):
         """统一日志出口（所有页面/任务都调它）。source 非空时在行首加暗色来源标签，如「秒装备 ›」。
@@ -3669,18 +3381,22 @@ class App(ctk.CTk):
             fl.append(msg, level, source)
 
     # ---------------- 收起为悬浮日志窗（细长条，可摆到游戏窗口边上） ----------------
-    def collapse_to_float(self):
-        """把主界面收起成一条悬浮日志窗。已经收起了就把悬浮窗抬到最前（幂等，重复点不叠窗）。"""
+    def collapse_to_float(self, auto=False):
+        """把主界面收起成一条悬浮日志窗。已经收起了就把悬浮窗抬到最前（幂等，重复点不叠窗）。
+
+        两个触发点：① 通用页「收起为悬浮日志窗」按钮（手动，auto=False）；
+        ② 任意模块脚本启动成功后由 on_task_started 自动调（auto=True，主力用法——开跑就收掉界面）。
+        ⚠ auto=True 时【不抢焦点】：任务刚启动，紧接着就要把游戏窗口切前台（约束 9），
+        这里 focus_force 会把它顶掉；手动收起（用户正看着界面）才置前。"""
         if self.float_log is not None:
             try:
                 self.float_log.lift()
-                self.float_log.focus_force()
             except Exception:
                 pass
             return
         try:
             from .float_log import FloatLogWindow
-            self.float_log = FloatLogWindow(self)
+            self.float_log = FloatLogWindow(self, focus=not auto)
         except Exception as e:
             self.float_log = None
             self.toast(f"打开悬浮日志窗失败：{e}")
@@ -3690,7 +3406,47 @@ class App(ctk.CTk):
             self.withdraw()
         except Exception:
             pass
-        self.log_line("主界面已收起为悬浮日志窗；点悬浮窗上的「展开主界面」可还原。", "info")
+        self.log_line("已收起为悬浮窗，点「展开主界面」还原。", "info")
+
+    # ---------------- 任务运行态（悬浮窗的「开始/停止」按钮据此刷新） ----------------
+    def on_task_started(self, label, restart=None, runner=None):
+        """【各模块在脚本“启动成功后”调用一行】记下谁在跑、怎么再跑，并把主界面自动收起为悬浮窗。
+
+        为什么由各页显式调用、而不是在 _tick 里轮询扫描：轮询只知道「有个 runner 在跑」，
+        既不知道是哪个模块，也不知道它该怎么重新启动（各页入口不同：_toggle_run / _start_teaming /
+        _start_organize …）。restart 传该模块自己的启动方法，点悬浮窗的「开始」即原样重跑。
+        ⚠ preflight 失败、没真正跑起来的路径【不要】调本方法——那样会把界面收掉、用户却看不到错误。"""
+        self._task_label = label or "任务"
+        if callable(restart):
+            self._task_restart = restart
+        if runner is not None:
+            self._started = [(r, l) for r, l in self._started if self._runner_running(r)]
+            self._started.append((runner, self._task_label))
+        self.collapse_to_float(auto=True)
+        fl = self.float_log
+        if fl is not None:
+            try:
+                fl.refresh_state()      # 别等下一拍轮询，按钮立刻变「停止」
+            except Exception:
+                pass
+
+    @staticmethod
+    def _runner_running(runner):
+        try:
+            return bool(runner.is_running())
+        except Exception:
+            return False
+
+    def task_state(self):
+        """返回 (是否有任务在跑, 正在跑的模块名列表)。悬浮窗每 0.3s 调一次，顺手清掉已结束的记录。
+
+        「在跑」以 _any_running() 扫全页为兜底（万一有 runner 绕过 on_task_started 启动），
+        模块名则取本会话启动过、且此刻仍活着的那些。"""
+        alive = [(r, l) for r, l in self._started if self._runner_running(r)]
+        self._started = alive
+        labels = list(dict.fromkeys(l for _r, l in alive))
+        return (bool(labels) or self._any_running()), labels
+
 
     def close_float_log(self, save=True):
         """收起悬浮窗、还原主界面（悬浮窗的标题栏 X 与「展开主界面」都走这里）。

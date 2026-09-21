@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""标定尺寸组（calib_profiles）纯逻辑自测：加减组 / 镜像同步 / 满 3 组 / stale 计算。
+"""标定尺寸组（calib_profiles）纯逻辑自测：加减组 / 镜像同步 / 满 3 组 / 指针级联。
 用临时 config 字典（不碰真实 config.json）。跑法（项目根目录）：
     python -m tools.check_calib_profiles
 """
@@ -59,7 +59,7 @@ def main():
         check("第 4 组报错（含提示）", "3 个" in str(e), str(e))
     check("报错后组数仍 3", len(cp.items(cfg)) == 3)
 
-    # 5) 任务/模板组指针 + stale
+    # 5) 任务/模板组指针
     cp.set_task_profile(cfg, "escort", p1)
     cp.set_template_profile(cfg, "escort", "escort_join", p1)
     cp.set_template_profile(cfg, "escort", "escort_silver", p3)
@@ -68,17 +68,11 @@ def main():
         "escort_join": "templates/tm_escort_join.png",
         "escort_silver": "templates/tm_escort_silver.png",
         "escort_ongoing": "templates/tm_escort_ongoing.png",
-        "never_calibrated": None,          # 没标过的项不该进 stale
+        "never_calibrated": None,
     }
     check("task_profile 读回", cp.task_profile(cfg, "escort") == p1)
     check("template_profiles 三个键", cp.template_profiles(cfg, "escort") ==
           {"escort_join": 1, "escort_silver": 3, "escort_ongoing": None})
-    cp.set_active(cfg, 3)
-    st = sorted(cp.stale_templates(cfg, "escort"))
-    check("active=③ 时 stale = join/ongoing（silver 是同组）", st == ["escort_join", "escort_ongoing"], st)
-    cp.set_active(cfg, 1)
-    st = sorted(cp.stale_templates(cfg, "escort"))
-    check("active=① 时 stale = silver/ongoing", st == ["escort_ongoing", "escort_silver"], st)
 
     # 6) 删组：级联清指针 + 激活兜底 + 镜像同步（绝不删模板文件）
     cp.set_active(cfg, 1)
@@ -112,7 +106,6 @@ def main():
                                "active": 99}
     check("脏 items 被过滤，只剩合法项", [it["id"] for it in cp.items(dirty)] == [3])
     check("active 越界兜底到第一组", cp.active_id(dirty) == 3)
-    check("色板下标按编号取模", cp.color_index(4) == 0 and cp.color_index(1) == 0 and cp.color_index(2) == 1)
     check("尺寸文本", cp.size_text(cp.get(dirty, 3)) == "1600×1200")
 
     print("\n全部通过")
