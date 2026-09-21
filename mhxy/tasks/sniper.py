@@ -114,39 +114,7 @@ class SniperTask(Task):
         ctx.log(f"已停止。共循环 {rounds} 轮。")
 
     # ---- 多开轮转：窗口上下文的构建与维护 ----
-    def _resolve_contexts(self, ctx, multi):
-        """按选择把目标窗口包成「要轮转的上下文」列表。
-        单开→复用主 ctx 并把它绑到选中的那个窗口；多开→每个号一个子上下文(带「号N」标签)。"""
-        wins = ctx.select_windows()
-        if not wins:
-            return []
-        if multi:
-            return [ctx.make_child(w, f"号{i + 1}") for i, w in enumerate(wins)]
-        ctx.window = wins[0]        # 单开：直接操作选中的那个窗口（不再每轮 locate 选最大）
-        return [ctx]
-
-    def _ensure_contexts(self, ctx, contexts, multi):
-        """每轮开头校验窗口是否还在；任一失效（被关/最小化）就重新枚举选择。"""
-        if contexts and all(c.window.rect() is not None for c in contexts):
-            return contexts
-        fresh = self._resolve_contexts(ctx, multi)
-        if not fresh:
-            ctx.log("暂时没检测到目标窗口，等待…", level="warn")
-        elif len(fresh) != len(contexts):
-            ctx.log(f"目标窗口数变化：现 {len(fresh)} 个。", level="info")
-        return fresh
-
-    def _prepare_window(self, wctx, multi):
-        """操作某个号前的准备：校验窗口有效，并把它切到前台，确保点击落在这个号身上。"""
-        if wctx.window.rect() is None:
-            return False
-        if multi:
-            # 多开必须切前台，避免点击穿透/点错号。切前台失败（被系统拒绝焦点抢占）就跳过该号本轮、下轮重试。
-            if not wctx.window.activate():
-                return False
-            if wctx.should_stop():
-                return False
-        return True
+    # （_resolve_contexts / _ensure_contexts / _prepare_window 已上移 Task 基类，供逐号轮转任务共用）
 
     def _snipe_one_round(self, ctx, pkg, refresh_interval):
         """对单个号跑「一轮」：重进货架 → 等加载 → 识别 → 命中下单。"""

@@ -128,6 +128,13 @@ def bind_wraplength(label, padding=4):
     state = {"w": -1}
 
     def _apply():
+        # 列表行/卡片会被重建（清单刷新、拖拽调序后重画），此时排队的 after_idle 可能落在
+        # 已销毁的标签上；先验存在性，否则 Tk 回调抛 TclError 把控制台刷满（只是噪音，但很吓人）。
+        try:
+            if not label.winfo_exists():
+                return
+        except Exception:
+            return
         # 用外层 frame 的真实槽宽（单元宽），减去少量内边距余量。
         w = label.winfo_width() - padding
         if w > 1 and w != state["w"]:

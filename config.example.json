@@ -244,6 +244,23 @@
         }
       ]
     },
+    "freeclick": {
+      "dry_run": true,
+      "loop": {
+        "match_threshold": 0.85,
+        "after_click_wait_sec": 0.35,
+        "round_interval_sec": 0.8
+      },
+      "regions": {
+        "scene": null
+      },
+      "items": [
+        {
+          "name": "example_anniu",
+          "template": "templates/fc_example_anniu.png"
+        }
+      ]
+    },
     "treasure_map": {
       "dry_run": true,
       "skip_collect": false,

@@ -166,6 +166,20 @@ DEFAULT_CONFIG = {
             "watchlist": []              # [{name, template, max_price}]
         },
 
+        # ---- 自由点击（用户自己框一批截图当模板，按清单顺序循环识别、认到就点）----
+        "freeclick": {
+            "dry_run": True,             # true=演练：只识别 + 打日志，不点击（安全默认）
+            "loop": {
+                "match_threshold": 0.85,      # 模板匹配阈值
+                "after_click_wait_sec": 0.35,  # 点完一项后的等待（带抖动），等画面反应再继续
+                "round_interval_sec": 0.8      # 清单过完一整轮后的间隔（带抖动）
+            },
+            "regions": {
+                "scene": None            # 识别区（相对游戏窗口 [x,y,w,h]）；留空=整窗检测（推荐）
+            },
+            "items": []                  # [{name, template}]，【数组顺序 = 点击顺序】（GUI 可拖拽调序）
+        },
+
         # ---- 刷副本·宝图（一次性两阶段状态机；游戏自带自动战斗全托管，脚本只导航+监控+关键点击）----
         "treasure_map": {
             "dry_run": True,             # true=演练：只识别+打日志，不发快捷键/不点关键操作/不真用图

@@ -446,6 +446,458 @@ class SniperPage(ctk.CTkFrame):
 
 
 # ----------------------------------------------------------------------
+# 自由点击 页面
+# ----------------------------------------------------------------------
+class FreeClickPage(ctk.CTkFrame):
+    """自由点击：自己框一批截图当模板，运行时按清单顺序循环识别、认到就点。
+
+    清单即顺序（用户拍板：左键按住行左侧拖动上下移动调序），行内「重新标定」「删除」。
+    拖拽调序的实现要点（改前务必看懂，否则极易改回「拖了没用/拖飞」）：
+      · 按下 → 记录被拖的行，只在 <B1-Motion> 里【改 _rows/_items 顺序 + 重新 grid】，
+        不销毁重建任何控件——一重建，正在拖的那个控件就被销毁了，后续 motion 全丢。
+      · 行落在哪个名次由「指针 y_root 与各行中线比较」得出（_index_at），
+        搬完后指针必落在被拖行的上/下半区 → 结果稳定，不会左右横跳（无振荡）。
+      · 按钮/绑定全部按【行对象】回调，绝不按当时的下标闭包：调序后下标会失效，
+        按旧下标点「删除」会删错一行。
+      · 落手才写盘；拖动期间只动内存副本 self._items。运行中禁止改清单。
+    """
+
+    TASK_NAME = "freeclick"
+    LOG_SOURCE = "自由点击"
+    ROW_H = 56          # 行高（几何兜底：winfo_height 还没算出来时按它估落点）
+
+    def __init__(self, master, app):
+        super().__init__(master, fg_color="transparent")
+        self.app = app
+        self.fonts = app.fonts
+        self.runner = None
+        self._thumbs = []       # 防止缩略图被 GC
+        self._rows = []         # 行控件（显示顺序）
+        self._items = []        # 清单的内存副本（与 _rows 同序；落手才写盘）
+        self._sig = None        # 内容签名：没变就不重建（切页反复 refresh 也不卡）
+        self._drag_idx = None
+        self._drag_from = None
+        self._drag_name = "?"
+
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(2, weight=1)
+
+        self._build_header()
+        self._build_control()
+        self._build_body()
+        self.refresh()
+
+    # ---- 头部：标题 + 状态 ----
+    def _build_header(self):
+        bar = ctk.CTkFrame(self, fg_color="transparent")
+        bar.grid(row=0, column=0, sticky="ew", padx=4, pady=(2, 14))
+        bar.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(bar, text="自由点击", font=self.fonts["title"], text_color=T.TEXT).grid(
+            row=0, column=0, sticky="w")
+
+        right = ctk.CTkFrame(bar, fg_color="transparent")
+        right.grid(row=0, column=1, sticky="e")
+        self.pill_game = Pill(right, self.fonts)
+        self.pill_game.pack(side="left", padx=(0, 8))
+        self.pill_mode = Pill(right, self.fonts)
+        self.pill_mode.pack(side="left")
+
+    # ---- 控制区：运行按钮 + 工具 / 分隔线 / 模式开关 ----
+    def _build_control(self):
+        card = Card(self)
+        card.grid(row=1, column=0, sticky="ew", padx=4, pady=(0, 14))
+        card.grid_columnconfigure(0, weight=1)
+
+        top = ctk.CTkFrame(card, fg_color="transparent")
+        top.grid(row=0, column=0, sticky="ew", padx=16, pady=(16, 10))
+        top.grid_columnconfigure(1, weight=1)
+        self.btn_run = ctk.CTkButton(top, text="▶  开始自由点击", font=self.fonts["btn"],
+                                     height=46, width=200, corner_radius=T.RADIUS_SM,
+                                     fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER, text_color=T.ON_ACCENT,
+                                     command=self._toggle_run)
+        self.btn_run.grid(row=0, column=0, sticky="w")
+        tools = ctk.CTkFrame(top, fg_color="transparent")
+        tools.grid(row=0, column=2, sticky="e")
+        ctk.CTkButton(tools, text="选择窗口", font=self.fonts["body"], height=36, width=104,
+                      corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
+                      border_width=1, border_color=T.BORDER,
+                      command=lambda: self.app.open_window_picker(self.refresh)).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(tools, text="＋ 框选加截图", font=self.fonts["body"], height=36, width=124,
+                      corner_radius=T.RADIUS_SM, fg_color=T.SUCCESS, hover_color=T.SUCCESS_HOVER,
+                      text_color=T.BG, command=self._add_shot).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(tools, text="刷新配置", font=self.fonts["body"], height=36, width=104,
+                      corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
+                      border_width=1, border_color=T.BORDER,
+                      command=self.refresh).pack(side="left")
+
+        ctk.CTkFrame(card, fg_color=T.BORDER, height=1).grid(
+            row=1, column=0, sticky="ew", padx=16, pady=(0, 4))
+
+        opts = ctk.CTkFrame(card, fg_color="transparent")
+        opts.grid(row=2, column=0, sticky="ew", padx=16, pady=(8, 16))
+        box1 = ctk.CTkFrame(opts, fg_color="transparent")
+        box1.pack(anchor="w")
+        self.switch_mode = ctk.CTkSwitch(box1, text="实战模式", font=self.fonts["body"],
+                                         progress_color=T.DANGER, command=self._toggle_mode)
+        self.switch_mode.pack(anchor="w")
+
+    # ---- 主体：截图清单（铺满；日志已移到全局右栏）----
+    def _build_body(self):
+        body = ctk.CTkFrame(self, fg_color="transparent")
+        body.grid(row=2, column=0, sticky="nsew", padx=4)
+        body.grid_columnconfigure(0, weight=1)
+        body.grid_rowconfigure(0, weight=1)
+
+        card = Card(body)
+        card.grid(row=0, column=0, sticky="nsew")
+        card.grid_rowconfigure(1, weight=1)
+        card.grid_columnconfigure(0, weight=1)
+        head = ctk.CTkFrame(card, fg_color="transparent")
+        head.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 8))
+        head.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(head, text="截图清单（顺序即点击顺序）", font=self.fonts["h2"],
+                     text_color=T.TEXT).grid(row=0, column=0, sticky="w")
+        self.lbl_count = ctk.CTkLabel(head, text="", font=self.fonts["small"], text_color=T.TEXT_DIM)
+        self.lbl_count.grid(row=0, column=1, sticky="e")
+        self.list_frame = ctk.CTkScrollableFrame(card, fg_color="transparent")
+        self.list_frame.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 12))
+        self.list_frame.grid_columnconfigure(0, weight=1)
+        T.tune_scroll_speed(self.list_frame)
+
+    # ------------------------------------------------------------------
+    # 数据刷新
+    # ------------------------------------------------------------------
+    def refresh(self):
+        self.app.cfg = cfg_mod.load_config()
+        tc = cfg_mod.task_config(self.app.cfg, self.TASK_NAME)
+        dry = tc.get("dry_run", True)
+        (self.switch_mode.select if not dry else self.switch_mode.deselect)()
+        self._render_mode_pill(dry)
+        self._render_items(tc.get("items") or [])
+
+    def _render_items(self, items):
+        sig = [(it.get("name"), it.get("template")) for it in items]
+        if sig == self._sig:
+            return
+        self._sig = list(sig)
+        self._items = [dict(it) for it in items]
+        self._rows = []
+        self._thumbs.clear()
+        for w in self.list_frame.winfo_children():
+            w.destroy()
+        self.lbl_count.configure(text=f"{len(self._items)} 张")
+
+        if not self._items:
+            empty = ctk.CTkLabel(self.list_frame, text="点上方「＋ 框选加截图」添加。",
+                                 font=self.fonts["body"], text_color=T.TEXT_DIM, justify="left")
+            empty.grid(row=0, column=0, sticky="ew", padx=12, pady=20)
+            bind_wraplength(empty)
+            return
+
+        for i, it in enumerate(self._items):
+            self._build_row(i, it)
+
+    def _build_row(self, i, it):
+        row = ctk.CTkFrame(self.list_frame, fg_color=T.SURFACE_2, corner_radius=T.RADIUS_SM)
+        row.grid(row=i, column=0, sticky="ew", pady=4, padx=4)
+        row.grid_columnconfigure(2, weight=1)
+
+        # 左起第一格：拖动把手 + 名次（按住这里上下拖 = 调序）
+        handle = ctk.CTkLabel(row, text=f"⠿{i + 1}", font=self.fonts["small"],
+                              text_color=T.TEXT_DIM, width=36, cursor="fleur")
+        handle.grid(row=0, column=0, padx=(10, 6), pady=8)
+
+        thumb = load_thumb(it.get("template"), self._thumbs)
+        thumb_lbl = (ctk.CTkLabel(row, text="", image=thumb) if thumb is not None
+                     else ctk.CTkLabel(row, text="🖼", font=self.fonts["h2"]))
+        thumb_lbl.grid(row=0, column=1, padx=(0, 8), pady=8)
+
+        name_lbl = ctk.CTkLabel(row, text=it.get("name", "?"), font=self.fonts["body_b"],
+                                text_color=T.TEXT, justify="left", anchor="w")
+        name_lbl.grid(row=0, column=2, sticky="ew", padx=(0, 8))
+        bind_wraplength(name_lbl)
+
+        # 按钮一律按【行对象】回调（见类 docstring：按下标闭包调序后会删错行）
+        ctk.CTkButton(row, text="重新标定", font=self.fonts["small"], height=30, width=76,
+                      corner_radius=T.RADIUS_SM, fg_color="transparent", hover_color=T.BTN_HOVER,
+                      text_color=T.TEXT, border_width=1, border_color=T.BORDER,
+                      command=lambda r=row: self._recalibrate(r)).grid(row=0, column=3, padx=(0, 8))
+        ctk.CTkButton(row, text="删除", font=self.fonts["small"], height=30, width=52,
+                      corner_radius=T.RADIUS_SM, fg_color="transparent", hover_color=T.DANGER,
+                      text_color=T.TEXT, border_width=1, border_color=T.BORDER,
+                      command=lambda r=row: self._delete_item(r)).grid(row=0, column=4, padx=(0, 10))
+
+        # 左半边（把手/缩略图/名字/行底）可按住拖动；按钮不参与，免得点按钮变成拖行
+        for w in (row, handle, thumb_lbl, name_lbl):
+            w.bind("<ButtonPress-1>", lambda e, r=row: self._drag_start(r, e))
+            w.bind("<B1-Motion>", self._drag_motion)
+            w.bind("<ButtonRelease-1>", self._drag_end)
+
+        row._fc_handle = handle      # 调序后要即时改名次，挂在行上最省事
+        self._rows.append(row)
+
+    # ------------------------------------------------------------------
+    # 拖拽调序（左键按住行左侧上下移动）
+    # ------------------------------------------------------------------
+    def _drag_start(self, row, event):
+        if self._busy():
+            self._log_line("运行中不能改清单，请先停止。", "warn")
+            return
+        try:
+            idx = self._rows.index(row)
+        except ValueError:
+            return
+        self._drag_idx = idx
+        self._drag_from = idx
+        self._drag_name = self._items[idx].get("name", "?")
+        self._mark_row(row, True)
+
+    def _drag_motion(self, event):
+        if self._drag_idx is None:
+            return
+        target = self._index_at(event.y_root)
+        if target is None or target == self._drag_idx:
+            return
+        row = self._rows.pop(self._drag_idx)
+        item = self._items.pop(self._drag_idx)
+        self._rows.insert(target, row)
+        self._items.insert(target, item)
+        self._drag_idx = target
+        self._regrid_rows()
+
+    def _drag_end(self, event=None):
+        idx, row = self._drag_idx, None
+        if idx is not None and 0 <= idx < len(self._rows):
+            row = self._rows[idx]
+        if row is not None:
+            self._mark_row(row, False)
+        moved = idx is not None and idx != self._drag_from
+        name = self._drag_name
+        self._drag_idx = self._drag_from = None
+        if moved:
+            self._persist_items()
+            self._log_line(f"顺序已保存：「{name}」现为第 {idx + 1} 项")
+
+    def _index_at(self, y_root):
+        """指针该插到第几名：与各行中线比较，取第一个「中线在指针下方」的行。"""
+        n = len(self._rows)
+        if n == 0:
+            return None
+        for i, r in enumerate(self._rows):
+            try:
+                top, h = r.winfo_rooty(), r.winfo_height()
+            except Exception:
+                continue
+            if h < 5:
+                h = self.ROW_H
+            if y_root < top + h / 2.0:
+                return i
+        return n - 1
+
+    def _regrid_rows(self):
+        for i, r in enumerate(self._rows):
+            r.grid_configure(row=i)
+            h = getattr(r, "_fc_handle", None)
+            if h is not None:
+                h.configure(text=f"⠿{i + 1}")
+        try:
+            self.list_frame.update_idletasks()   # 让 winfo_rooty 立刻反映新次序，落点才准
+        except Exception:
+            pass
+
+    @staticmethod
+    def _mark_row(row, on):
+        try:
+            row.configure(border_width=2 if on else 0,
+                          border_color=T.ACCENT if on else T.SURFACE_2)
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    # 加图 / 重新标定 / 删除
+    # ------------------------------------------------------------------
+    def _toast(self, msg, color=None):
+        """给 grab_roi_on_app 用的提示回调（框选失败原因走日志面板）。"""
+        self._log_line(msg, "warn")
+
+    def _add_shot(self):
+        if self._busy():
+            self._log_line("运行中不能改清单，请先停止。", "warn")
+            return
+        from .calibrate_dialog import grab_roi_on_app
+        rel, crop, pid = grab_roi_on_app(self.app, self.app.cfg,
+                                         "框选要点击的目标（按钮/图标，框紧一点）",
+                                         with_crop=True, toast=self._toast)
+        if rel is None:
+            return
+        if crop is None or crop.size == 0:
+            self._log_line("截图失败，请重试。", "error")
+            return
+        name = self._ask_name()
+        if not name:
+            return
+        from ..core import vision        # 局部导入：app 顶层不引 vision（load_thumb 内部也这么做）
+        rel_path = f"templates/fc_{name}.png"
+        if not vision.save_image(rel_path, crop):
+            self._log_line("保存截图失败。", "error")
+            return
+        tc = cfg_mod.task_config(self.app.cfg, self.TASK_NAME)
+        tc.setdefault("items", []).append({"name": name, "template": rel_path})
+        cfg_mod.set_task_config(self.app.cfg, self.TASK_NAME, tc)
+        calib.set_task_profile(self.app.cfg, self.TASK_NAME, pid)
+        calib.set_template_profile(self.app.cfg, self.TASK_NAME, name, pid)
+        cfg_mod.save_config(self.app.cfg)
+        self._sig = None
+        self._render_items(tc["items"])
+        self._log_line(f"已添加截图：{name}（第 {len(tc['items'])} 项）", "hit")
+
+    def _recalibrate(self, row):
+        if self._busy():
+            self._log_line("运行中不能改清单，请先停止。", "warn")
+            return
+        try:
+            idx = self._rows.index(row)
+        except ValueError:
+            return
+        it = self._items[idx]
+        name = it.get("name", "?")
+        from .calibrate_dialog import grab_roi_on_app
+        rel, crop, pid = grab_roi_on_app(self.app, self.app.cfg, f"重新框选「{name}」",
+                                         with_crop=True, toast=self._toast)
+        if rel is None:
+            return
+        if crop is None or crop.size == 0:
+            self._log_line("截图失败，请重试。", "error")
+            return
+        from ..core import vision
+        # 覆盖同一张模板图：名字、在清单里的位置都不变（其余项零影响）
+        rel_path = it.get("template") or f"templates/fc_{name}.png"
+        if not vision.save_image(rel_path, crop):
+            self._log_line("保存截图失败。", "error")
+            return
+        it["template"] = rel_path
+        self._persist_items()
+        calib.set_task_profile(self.app.cfg, self.TASK_NAME, pid)
+        calib.set_template_profile(self.app.cfg, self.TASK_NAME, name, pid)
+        cfg_mod.save_config(self.app.cfg)
+        self._sig = None
+        self._render_items(self._items)
+        self._log_line(f"已重新标定：{name}（尺寸组 {calib.label_for(pid)}）", "hit")
+
+    def _delete_item(self, row):
+        if self._busy():
+            self._log_line("运行中不能改清单，请先停止。", "warn")
+            return
+        try:
+            idx = self._rows.index(row)
+        except ValueError:
+            return
+        removed = self._items.pop(idx)
+        self._persist_items()
+        self._sig = None
+        self._render_items(self._items)
+        # 模板图按项目惯例保留在盘上（删记录不动文件，避免尺寸组指针悬空）
+        self._log_line(f"已删除：{removed.get('name', '?')}", "info")
+
+    def _ask_name(self):
+        dlg = ctk.CTkInputDialog(text="给这个点击目标起个名字（中英文均可）：", title="命名")
+        raw = dlg.get_input()
+        if raw is None:
+            return None
+        name = raw.strip().replace("/", "_").replace("\\", "_").replace(" ", "_")
+        if not name:
+            name = f"click_{len(self._items) + 1}"
+        existing = {it.get("name") for it in self._items}
+        base, n = name, 2
+        while name in existing:
+            name = f"{base}_{n}"
+            n += 1
+        return name
+
+    def _persist_items(self):
+        """把内存里的清单（顺序 + 内容）写回 config，并同步内容签名。"""
+        tc = cfg_mod.task_config(self.app.cfg, self.TASK_NAME)
+        tc["items"] = [dict(it) for it in self._items]
+        cfg_mod.set_task_config(self.app.cfg, self.TASK_NAME, tc)
+        cfg_mod.save_config(self.app.cfg)
+        self._sig = [(it.get("name"), it.get("template")) for it in self._items]
+
+    def _busy(self):
+        return bool(self.runner and self.runner.is_running())
+
+    # ------------------------------------------------------------------
+    # 运行控制
+    # ------------------------------------------------------------------
+    def _toggle_run(self):
+        if self._busy():
+            self.runner.stop()
+            self._log_line("正在停止…", "warn")
+            self.btn_run.configure(text="停止中…", state="disabled")
+            return
+        # 启动
+        self.app.cfg = cfg_mod.load_config()
+        task_cls = get_task(self.TASK_NAME)
+        self.runner = TaskRunner(task_cls(), self.app.cfg)
+        ok, problems = self.runner.start()
+        if not ok:
+            for p in problems:
+                self._log_line("无法启动：" + p, "error")
+            self.runner = None
+            return
+        self.btn_run.configure(text="■  停止", fg_color=T.DANGER, hover_color=T.DANGER_HOVER, state="normal")
+        self.app.on_task_started(self.LOG_SOURCE, self._toggle_run, self.runner)
+
+    def _on_runner_finished(self):
+        self.btn_run.configure(text="▶  开始自由点击", fg_color=T.ACCENT,
+                               hover_color=T.ACCENT_HOVER, state="normal")
+
+    def _toggle_mode(self):
+        live = bool(self.switch_mode.get())  # 1=实战
+        tc = cfg_mod.task_config(self.app.cfg, self.TASK_NAME)
+        tc["dry_run"] = not live
+        cfg_mod.set_task_config(self.app.cfg, self.TASK_NAME, tc)
+        cfg_mod.save_config(self.app.cfg)
+        self._render_mode_pill(not live)
+        if live:
+            self._log_line("⚠ 实战模式：命中会真的点击", "warn")
+        else:
+            self._log_line("演练模式（只识别不点击）", "info")
+
+    def _render_mode_pill(self, dry):
+        if dry:
+            self.pill_mode.configure(text="演练", fg_color=T.PILL_OK_BG, text_color=T.SUCCESS)
+        else:
+            self.pill_mode.configure(text="实战", fg_color=T.PILL_DANGER_BG, text_color=T.DANGER)
+
+    # ------------------------------------------------------------------
+    # 日志与状态（由 App 的定时器驱动）
+    # ------------------------------------------------------------------
+    def pump(self):
+        if self.runner:
+            q = self.runner.log_queue
+            while not q.empty():
+                level, msg = q.get()
+                self._log_line(msg, level)
+            if not self.runner.is_running() and self.btn_run.cget("text") != "▶  开始自由点击":
+                self._on_runner_finished()
+
+    def update_game_pill(self, connected, summary=""):
+        if connected:
+            self.pill_game.configure(text="● " + (summary or "目标窗口已连接"),
+                                     fg_color=T.PILL_OK_BG, text_color=T.SUCCESS)
+        else:
+            self.pill_game.configure(text="○ 未检测到目标窗口", fg_color=T.SURFACE_2, text_color=T.TEXT_DIM)
+
+    def _log_line(self, msg, level="info"):
+        # 日志统一汇到 App 右侧全局面板，按本页 LOG_SOURCE 打来源标签。
+        self.app.log_line(msg, level, getattr(self, "LOG_SOURCE", None))
+
+    def _clear_log(self):
+        self.app.clear_log()
+
+
+# ----------------------------------------------------------------------
 # 宝图 页面
 # ----------------------------------------------------------------------
 class TreasureMapPage(ctk.CTkFrame):
@@ -3253,11 +3705,12 @@ class App(ctk.CTk):
            ("daily", "🐉  日常一条龙"),
            ("sniper", "🗡  秒装备"), ("treasure_map", "🗺  宝图"),
            ("escort", "🚚  运镖"), ("secret_realm", "👹  秘境降妖"),
-           ("dungeon", "🏰  刷副本"),
+           ("dungeon", "🏰  刷副本"), ("freeclick", "🎯  自由点击"),
            ("settings", "⚙  设置"), ("about", "ⓘ  关于")]
     # 可运行任务页（有 runner/pump/update_game_pill），App 的定时器/热键/关闭钩子按此遍历。
     # general 也在内：它的「一键组队」会跑后台任务，需要 pump 抽日志、关闭时停 runner。
-    RUNNABLE_KEYS = ("general", "daily", "sniper", "treasure_map", "escort", "secret_realm", "dungeon")
+    RUNNABLE_KEYS = ("general", "daily", "sniper", "freeclick", "treasure_map",
+                     "escort", "secret_realm", "dungeon")
 
     def __init__(self):
         super().__init__()
@@ -3487,6 +3940,7 @@ class App(ctk.CTk):
     PAGE_CLASSES = {
         "daily": DailyPage,
         "sniper": SniperPage,
+        "freeclick": FreeClickPage,
         "treasure_map": TreasureMapPage,
         "escort": EscortPage,
         "secret_realm": SecretRealmPage,

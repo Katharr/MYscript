@@ -73,6 +73,8 @@ mhxy/
   tasks/  可插拔任务
     base.py     Task 基类 + 注册表（register/get_task/all_tasks）+ _make_rotation()（包多开轮转）+ dungeon_tasks()
     sniper.py   SniperTask（秒装备）：preflight() 自检 + run() 主循环；刷新=每轮重进货架 _enter_shelf()
+    freeclick.py     FreeClickTask（自由点击）：自己框一批截图当模板，按清单顺序循环识别→点击；
+                      一轮内每项最多点一次（用户拍板 A 方案），顺序在页面上按住行左侧拖动调整（见 FreeClickPage）
     escort.py        EscortTask（运镖）：开活动→参加→押送普通镖银→循环押满次数
     treasure_map.py  TreasureMapTask（宝图）：开活动→收图→挖宝→领奖 两阶段状态机
     secret_realm.py  SecretRealmTask（秘境降妖）：开活动→参加→挑战→盯「进入战斗」续战，可连跑 max_runs 轮
