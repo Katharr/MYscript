@@ -604,7 +604,8 @@ class FreeClickPage(ctk.CTkFrame):
         row.grid_columnconfigure(2, weight=1)
 
         # 左起第一格：拖动把手 + 名次（按住这里上下拖 = 调序）
-        handle = ctk.CTkLabel(row, text=f"⠿{i + 1}", font=self.fonts["small"],
+        # 用「≡」而不是盲文点阵「⠿」：后者在雅黑下字形可疑（看着像坏字），「≡」各字体都有、一眼是拖柄。
+        handle = ctk.CTkLabel(row, text=f"≡{i + 1}", font=self.fonts["small"],
                               text_color=T.TEXT_DIM, width=36, cursor="fleur")
         handle.grid(row=0, column=0, padx=(10, 6), pady=8)
 
@@ -700,7 +701,7 @@ class FreeClickPage(ctk.CTkFrame):
             r.grid_configure(row=i)
             h = getattr(r, "_fc_handle", None)
             if h is not None:
-                h.configure(text=f"⠿{i + 1}")
+                h.configure(text=f"≡{i + 1}")
         try:
             self.list_frame.update_idletasks()   # 让 winfo_rooty 立刻反映新次序，落点才准
         except Exception:
