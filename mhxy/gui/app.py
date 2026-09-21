@@ -5,6 +5,7 @@
 """
 
 import os
+import queue
 import ctypes
 import threading
 
@@ -1277,7 +1278,7 @@ class DungeonPage(ctk.CTkFrame):
                     self._render_team_status()
 
             try:
-                self.app.after(0, apply)
+                self.app.ui_post(apply)
             except Exception:
                 pass
 
@@ -2163,7 +2164,7 @@ class GeneralPage(ctk.CTkFrame):
                 self.app._game_connected = None   # 窗口状态变了，强制下一轮 tick 刷新药丸
 
             try:
-                self.app.after(0, apply)
+                self.app.ui_post(apply)
             except Exception:
                 pass
 
@@ -2671,7 +2672,7 @@ class GeneralPage(ctk.CTkFrame):
             except Exception:
                 data = []
             try:
-                self.app.after(0, lambda: self._fill_win_rows(holder, data, active_size, token))
+                self.app.ui_post(lambda: self._fill_win_rows(holder, data, active_size, token))
             except Exception:
                 pass
 
@@ -3574,6 +3575,7 @@ class App(ctk.CTk):
         self._tick_count = 0
         self._game_connected = None   # 缓存连接状态，只在变化时刷新药丸
         self._locating = False        # 防止多个后台定位线程叠加
+        self._ui_queue = queue.Queue()  # 后台线程 -> 主线程的任务队列（见 App.ui_post）
         self.float_log = None         # 「收起为悬浮日志窗」的窗实例（None=没收起，主界面正常显示）
 
         self.grid_columnconfigure(1, weight=1)   # 中间内容区随窗口拉伸
@@ -3947,6 +3949,8 @@ class App(ctk.CTk):
         self.after(1600, lbl.destroy)
 
     def _tick(self):
+        # 先兑现后台线程投递的主线程任务（见 ui_post）——放在最前，枚举一完成就渲染，不等下一拍。
+        self._drain_ui_queue()
         # 抽日志：所有可运行任务页
         for k in self.RUNNABLE_KEYS:
             p = self.pages.get(k)
@@ -3957,6 +3961,34 @@ class App(ctk.CTk):
         if self._tick_count % 8 == 0:
             self._kick_locate()
         self.after(150, self._tick)
+
+    def ui_post(self, fn):
+        """【线程安全】把 fn 排到主线程执行，供后台线程回填 UI 用。
+
+        ⚠ 别改回「后台线程直接调 Tk 的 after(0, fn)」：启动期（App.__init__ 里建页/
+        reveal_with_overlay 建其余页）mainloop 还没进，Tk 会抛
+        `RuntimeError: main thread is not in main loop`；调用点的 `except Exception: pass`
+        把异常一吞，回调就【永久丢失】——现象正是「窗口归一化首次打开一直停在
+        『正在检测窗口…』，点一次『刷新』才出来」（那时 mainloop 已在跑，after 才成功）。
+        队列 + _tick 抽取则与 mainloop 无关，任何时候投递都必达。"""
+        self._ui_queue.put(fn)
+
+    def _drain_ui_queue(self):
+        """在主线程抽干 ui_post 投递的任务。单项异常不拖垮其余项。"""
+        q = getattr(self, "_ui_queue", None)
+        if q is None:
+            return
+        while True:
+            try:
+                fn = q.get_nowait()
+            except queue.Empty:
+                return
+            except Exception:
+                return
+            try:
+                fn()
+            except Exception:
+                pass
 
     def _kick_locate(self):
         """在后台线程枚举窗口找游戏；getAllWindows 较慢，绝不能在主线程跑。"""
@@ -3973,9 +4005,9 @@ class App(ctk.CTk):
                 found, summary = self._compute_target_state(all_wins, targets)
             except Exception:
                 found, summary = False, ""
-            # 回主线程更新（after 由 Tk 在主线程执行，线程安全）
+            # 回主线程更新（走 ui_post 队列，与 mainloop 是否已进入无关）
             try:
-                self.after(0, lambda: self._apply_game_state(found, summary))
+                self.ui_post(lambda: self._apply_game_state(found, summary))
             except Exception:
                 pass
 
