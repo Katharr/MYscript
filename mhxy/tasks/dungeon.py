@@ -37,7 +37,7 @@ class DungeonTask(Task):
         targets = ctx.cfg.get("targets", {})
         wins = ctx.select_windows()
         if not targets.get("multi"):
-            problems.append("组队需多开模式：请在「选择窗口」切到多开并选 2~5 个号")
+            problems.append("组队需选 2~5 个号：请在「选择窗口」勾上多个号并指定队长")
         if len(wins) < 2:
             problems.append(f"组队至少 2 人，当前选中 {len(wins)} 个号（队长+≥1 队员）")
         elif len(wins) > 5:
@@ -46,7 +46,7 @@ class DungeonTask(Task):
         dc = ctx.task_cfg(_PARAM_NS)
         cap = dc.get("captain_index", 0)
         if wins and not (0 <= cap < len(wins)):
-            problems.append(f"队长序号 号{cap + 1} 越界（共 {len(wins)} 个号），请在下拉框重选队长")
+            problems.append(f"队长选项已失效（共 {len(wins)} 个号），请重新选队长")
 
         # 组队模板/区域（共享 teaming 命名空间）
         team_tc = ctx.task_cfg("teaming")
@@ -87,17 +87,18 @@ class DungeonTask(Task):
                     level="warn")
 
         # 按 captain_index 分配角色 + 派生子上下文（队长放第 0 位，便于握手尽快收敛）。
+        labels = ctx.window_labels(wins)
         cap_pair = None
         member_pairs = []
         for i, w in enumerate(wins):
-            child = ctx.make_child(w, f"号{i + 1}")
+            child = ctx.make_child(w, labels[i])
             if i == cap:
                 cap_pair = (child, TeamFormation.ROLE_CAPTAIN)
             else:
                 member_pairs.append((child, TeamFormation.ROLE_MEMBER))
         assignments = [cap_pair] + member_pairs
 
-        ctx.log(f"★ 一键组队：队长=号{cap + 1}，队员 {len(wins) - 1} 人 ★", level="warn")
+        ctx.log(f"★ 一键组队：队长={labels[cap]}，队员 {len(wins) - 1} 人 ★", level="warn")
         if dry_run:
             ctx.log("演练模式：只对各号识别组队标志、打日志，不发快捷键/不点。", level="warn")
 

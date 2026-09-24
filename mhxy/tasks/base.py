@@ -101,13 +101,14 @@ class Task:
     # ------------------------------------------------------------------
     def _resolve_contexts(self, ctx, multi):
         """按「选择窗口」把目标窗口包成「要轮转的上下文」列表。
-        单开→复用主 ctx 并把它绑到选中的那个窗口；多开→每个号一个子上下文(带「号N」标签)。
+        单开→复用主 ctx 并把它绑到选中的那个窗口；多开→每个号一个子上下文(带「角色名（等级）」标签)。
         没找到/没选中返回 []。"""
         wins = ctx.select_windows()
         if not wins:
             return []
         if multi:
-            return [ctx.make_child(w, f"号{i + 1}") for i, w in enumerate(wins)]
+            labels = ctx.window_labels(wins)
+            return [ctx.make_child(w, labels[i]) for i, w in enumerate(wins)]
         ctx.window = wins[0]        # 单开：直接操作选中的那个窗口（不再每轮 locate 选最大）
         return [ctx]
 

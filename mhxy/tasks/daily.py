@@ -76,7 +76,8 @@ class DailyTask(Task):
             ctx.log("没找到/没选中目标窗口，已停止。", level="error")
             return
         if multi:
-            wctxs = [ctx.make_child(w, f"号{i + 1}") for i, w in enumerate(wins)]
+            labels = ctx.window_labels(wins)
+            wctxs = [ctx.make_child(w, labels[i]) for i, w in enumerate(wins)]
         else:
             ctx.window = wins[0]
             wctxs = [ctx]

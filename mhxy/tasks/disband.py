@@ -64,7 +64,8 @@ class DisbandTask(Task):
                     level="warn")
 
         # 退队不分角色：每个号都跑同一套流程。仍按 TeamFormation 的约定给 (ctx, role)，role 不影响退队。
-        assignments = [(ctx.make_child(w, f"号{i + 1}"), TeamFormation.ROLE_MEMBER)
+        labels = ctx.window_labels(wins)
+        assignments = [(ctx.make_child(w, labels[i]), TeamFormation.ROLE_MEMBER)
                        for i, w in enumerate(wins)]
 
         ctx.log(f"★ 一键解散：让所选 {len(wins)} 个号各自退出当前队伍 ★", level="warn")

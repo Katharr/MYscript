@@ -110,24 +110,35 @@ def set_game_process(name):
     _GAME_PROCESSES = _parse_process_names(name)
 
 
-def _proc_basename(hwnd):
-    """返回 hwnd 所属进程的 exe basename（小写）。取不到返回 ""。"""
+def proc_image_path(hwnd):
+    """返回 hwnd 所属进程的 exe 完整路径。取不到返回 ""。
+
+    权限：只用 PROCESS_QUERY_LIMITED_INFORMATION（低完整性进程也能查高完整性进程），
+    故没提权时也能拿到游戏 exe 路径——core/accounts 靠它反推游戏安装目录。
+    （对比 Get-Process 的 .Path/MainModule 需要更高权限，对 elevated 的游戏进程会返回空。）"""
     try:
         pid = ctypes.wintypes.DWORD()
         _user32.GetWindowThreadProcessId(int(hwnd), ctypes.byref(pid))
+        if not pid.value:
+            return ""
         hp = _kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
         if not hp:
             return ""
         try:
-            buf = ctypes.create_unicode_buffer(512)
-            sz = ctypes.wintypes.DWORD(512)
+            buf = ctypes.create_unicode_buffer(1024)
+            sz = ctypes.wintypes.DWORD(1024)
             if not _kernel32.QueryFullProcessImageNameW(hp, 0, buf, ctypes.byref(sz)):
                 return ""
-            return os.path.basename(buf.value or "").lower()
+            return buf.value or ""
         finally:
             _kernel32.CloseHandle(hp)
     except Exception:
         return ""
+
+
+def _proc_basename(hwnd):
+    """返回 hwnd 所属进程的 exe basename（小写）。取不到返回 ""。"""
+    return os.path.basename(proc_image_path(hwnd)).lower()
 
 
 def _match_basic(w, title_substr, allow_minimized=False):
@@ -477,7 +488,8 @@ def wake_all_to_front(title_substr, offset=(0, 0), max_n=0):
 def resolve_targets(title_substr, offset, targets):
     """按 targets 配置从 locate_all 结果里选出要操作的窗口列表（纯函数，供任务与 GUI 共用）。
 
-    targets 结构见 config.DEFAULT_CONFIG["targets"]：
+    targets 结构见 config.DEFAULT_CONFIG["targets"]（「选择窗口」里勾 1 个=单开、勾多个=多开，
+    multi 由勾选数量派生）：
       - 单开(multi=False)：返回 [第 single_index 个窗口]（序号越界自动回退 0）。
       - 多开(multi=True) ：按 multi_indices 选子集（空=全部），再按 max_windows 截断。
     找不到任何窗口返回 []。

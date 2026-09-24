@@ -15,6 +15,7 @@ from . import theme as T
 from ..core import calib_profiles as calib
 from ..core import config as cfg_mod
 from ..core import window as win_mod
+from ..core import accounts
 from ..core.runner import TaskRunner
 from ..tasks import get_task
 from ..tasks.base import dungeon_tasks
@@ -22,6 +23,22 @@ from ..tasks.daily import CHAINABLE
 from ..core.teaming import TEAM_REQUIRED_REGIONS, TEAM_REQUIRED_TEMPLATES
 from ..core.inventory import required_templates
 from ..core.input import get_cursor
+
+
+def resolve_window_labels(title, offset, targets):
+    """后台线程用：选出目标窗口并给出「角色名（等级）」显示名列表（认不出退回「号N」）。
+
+    与 win_mod.resolve_targets 严格同序，故可以直接和「号N」序号互换。
+    原理见 core/accounts 模块头（读客户端 LocalData 下的纯文本，零 OCR）。
+    ⚠ 会枚举进程，别在 UI 线程直接调——各页都放在后台枚举的 work() 里。"""
+    try:
+        wins = win_mod.resolve_targets(title, offset, targets)
+    except Exception:
+        return []
+    try:
+        return accounts.labels_for(wins)
+    except Exception:
+        return [accounts.fallback_label(i) for i in range(len(wins))]
 
 
 # ----------------------------------------------------------------------
@@ -1428,6 +1445,7 @@ class DungeonPage(ctk.CTkFrame):
         self._cal_dialog = None          # 副本自身「标定」的去重槽（队长ID 走「队长ID 库」弹窗）
         self._leader_thumbs = []         # 行内队长ID缩略图防 GC
         self._win_count = 0
+        self._win_labels = []            # 已选窗口的显示名（「角色名（等级）」，认不出是「号N」），与 _win_count 同序
         # 已收录的副本（按注册顺序）。title 给下拉显示、name 作配置命名空间键。
         self._dungeons = dungeon_tasks()
         self._dnames = [c.name for c in self._dungeons]
@@ -1538,8 +1556,8 @@ class DungeonPage(ctk.CTkFrame):
         cap = ctk.CTkFrame(left, fg_color="transparent")
         cap.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 6))
         ctk.CTkLabel(cap, text="谁当队长", font=self.fonts["body"], text_color=T.TEXT).pack(side="left")
-        self.var_captain = ctk.StringVar(value="号1")
-        self.opt_captain = ctk.CTkOptionMenu(cap, variable=self.var_captain, values=["号1"],
+        self.var_captain = ctk.StringVar(value="（未选窗口）")
+        self.opt_captain = ctk.CTkOptionMenu(cap, variable=self.var_captain, values=["（未选窗口）"],
                                              font=self.fonts["body"], fg_color=T.SURFACE_2,
                                              button_color=T.BORDER, button_hover_color=T.ACCENT,
                                              text_color=T.TEXT, dropdown_text_color=T.TEXT, width=120,
@@ -1619,15 +1637,17 @@ class DungeonPage(ctk.CTkFrame):
         return rdone, len(need_r), tdone, len(need_t)
 
     def _render_team_status(self):
-        """据当前 self._win_count + 组队标定 + 选中副本标定，渲染队长下拉与就绪状态（纯本地数据，秒回）。"""
+        """据当前 self._win_count/_win_labels + 组队标定 + 选中副本标定，渲染队长下拉与就绪状态（纯本地数据，秒回）。"""
         n = self._win_count
-        opts = [f"号{i + 1}" for i in range(n)] or ["（未选窗口）"]
+        labels = list(self._win_labels)[:n] + [accounts.fallback_label(i)
+                                               for i in range(len(self._win_labels), n)]
+        opts = labels or ["（未选窗口）"]
         self.opt_captain.configure(values=opts)
         tc = cfg_mod.task_config(self.app.cfg, self._selected) if self._selected else {}
         cap = tc.get("captain_index", 0)
         if not (0 <= cap < n):
             cap = 0
-        self.var_captain.set(f"号{cap + 1}" if n else "（未选窗口）")
+        self.var_captain.set(labels[cap] if n else "（未选窗口）")
 
         skip_team = self._selected_skip_team()
         team_tc = cfg_mod.task_config(self.app.cfg, "teaming")
@@ -1646,11 +1666,11 @@ class DungeonPage(ctk.CTkFrame):
             ready = team_ok and self_ok and n >= 2
             team_line = (f"组队标定：区域 {trdone}/{len(TEAM_REQUIRED_REGIONS)}，"
                          f"模板 {ttdone}/{len(TEAM_REQUIRED_TEMPLATES)}\n")
-            tail = "　✓ 可运行" if ready else "　（需多开≥2 且组队+副本标定齐全）"
+            tail = "　✓ 可运行" if ready else "　（需选 ≥2 个号 且组队+副本标定齐全）"
         self.lbl_calib.configure(
             text=team_line
                  + f"副本标定（{self._selected_title()}）：区域 {rdone}/{rneed}，模板 {tdone}/{tneed}\n"
-                 + f"已选 {n} 个号，队长=号{cap + 1}" + tail)
+                 + f"已选 {n} 个号，队长={labels[cap] if n else '—'}" + tail)
 
     def _kick_count_windows(self):
         """后台枚举已选窗口数，变了再回主线程重渲染。token 丢弃过期结果。"""
@@ -1661,16 +1681,15 @@ class DungeonPage(ctk.CTkFrame):
         self._count_token = token
 
         def work():
-            try:
-                n = len(win_mod.resolve_targets(title, offset, targets))
-            except Exception:
-                n = 0
+            labels = resolve_window_labels(title, offset, targets)
+            n = len(labels)
 
             def apply():
                 if token is not getattr(self, "_count_token", None):
                     return
-                if n != self._win_count:
+                if n != self._win_count or labels != self._win_labels:
                     self._win_count = n
+                    self._win_labels = labels
                     self._render_team_status()
 
             try:
@@ -1747,14 +1766,23 @@ class DungeonPage(ctk.CTkFrame):
         except Exception:
             pass
 
+    def _captain_index_from_label(self, label):
+        """把队长下拉框的显示名映射回窗口序号。
+
+        下拉项现在是【角色名（等级）】（认不出才是「号N」），不能再拿字符串去 replace("号","") 解析
+        ——故先按 self._win_labels 反查下标，「号N」形态作为兜底。"""
+        s = str(label)
+        labels = list(self._win_labels)
+        if s in labels:
+            return max(0, min(len(labels) - 1, labels.index(s)))
+        if s.startswith("号") and s[1:].isdigit():
+            return int(s[1:]) - 1
+        return 0
+
     def _on_captain(self, choice):
         if not self._win_count or not self._selected:
             return
-        try:
-            idx = int(str(choice).replace("号", "")) - 1
-        except (TypeError, ValueError):
-            idx = 0
-        idx = max(0, min(self._win_count - 1, idx))
+        idx = max(0, min(self._win_count - 1, self._captain_index_from_label(choice)))
         cfg = cfg_mod.load_config()
         tc = cfg_mod.task_config(cfg, self._selected)
         tc["captain_index"] = idx
@@ -1809,11 +1837,8 @@ class DungeonPage(ctk.CTkFrame):
         cfg = cfg_mod.load_config()
         tc = cfg_mod.task_config(cfg, self._selected)
         if self._win_count:
-            try:
-                idx = int(self.var_captain.get().replace("号", "")) - 1
-                tc["captain_index"] = max(0, min(self._win_count - 1, idx))
-            except (TypeError, ValueError):
-                pass
+            idx = max(0, min(self._win_count - 1, self._captain_index_from_label(self.var_captain.get())))
+            tc["captain_index"] = idx
         cfg_mod.set_task_config(cfg, self._selected, tc)
         cfg_mod.save_config(cfg)
         self.app.cfg = cfg
@@ -2411,6 +2436,7 @@ class GeneralPage(ctk.CTkFrame):
         self.switch_ob = None       # 整理背包实战/演练开关
         self.switch_auto_ob = None  # 「自动整理背包」开关（任何任务检测到背包满自动整理）
         self._win_count = 0         # 已选多开窗口数（resolve_targets），供状态行显示
+        self._win_labels = []       # 已选窗口的显示名（「角色名（等级）」，认不出是「号N」），与 _win_count 同序
         self.btn_team = None
         self.btn_disband = None     # 「一键解散」按钮（_refresh_body 每次重建）
         self.btn_wake = None        # 「唤出所有游戏窗口」按钮（_refresh_body 每次重建）
@@ -2418,6 +2444,7 @@ class GeneralPage(ctk.CTkFrame):
         self.btn_leader = None      # 行内队长ID按钮（_refresh_body 每次重建）
         self._leader_thumbs = []    # 行内队长ID缩略图防 GC
         self.lbl_team_status = None
+        self.lbl_ob_targets = None  # 「将整理：…」那句（构建时静态渲染，枚举回来要刷，见 _refresh_targets_labels）
         # 标定时「尺寸组已满 3 个」的引导回调：标定入口会调它让用户挑一个旧组替换
         # （见 calibrate_dialog.resolve_profile）。挂个小函数，免得标定模块反向依赖本页。
         self.app.on_profile_full = self._ask_replace_profile
@@ -2872,15 +2899,19 @@ class GeneralPage(ctk.CTkFrame):
             except Exception:
                 data = []
             try:
-                self.app.ui_post(lambda: self._fill_win_rows(holder, data, active_size, token))
+                labels = accounts.labels_for([w for w, _r in data])
+            except Exception:
+                labels = [accounts.fallback_label(i) for i in range(len(data))]
+            try:
+                self.app.ui_post(lambda: self._fill_win_rows(holder, data, labels, active_size, token))
             except Exception:
                 pass
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _fill_win_rows(self, holder, data, active_size, token):
+    def _fill_win_rows(self, holder, data, labels, active_size, token):
         """在主线程把枚举结果渲染进 holder。过期结果/控件已销毁则丢弃。
-        每行显示该号当前尺寸，并标注它「属于哪个尺寸组」（与激活组尺寸吻合 = ±4px）。"""
+        每行显示该号的角色名 + 当前尺寸，并标注它「属于哪个尺寸组」（与激活组尺寸吻合 = ±4px）。"""
         if token is not getattr(self, "_enum_token", None):
             return
         try:
@@ -2898,7 +2929,8 @@ class GeneralPage(ctk.CTkFrame):
             row = ctk.CTkFrame(holder, fg_color=T.SURFACE_2, corner_radius=T.RADIUS_SM)
             row.pack(fill="x", padx=12, pady=4)
             row.grid_columnconfigure(0, weight=1)
-            meta = f"号{i + 1}    {r[2]}×{r[3]}    @({r[0]},{r[1]})" if r else f"号{i + 1}    （窗口已失效）"
+            lbl = labels[i] if i < len(labels) else accounts.fallback_label(i)
+            meta = f"{lbl}    {r[2]}×{r[3]}    @({r[0]},{r[1]})" if r else f"{lbl}    （窗口已失效）"
             is_act = bool(active_size and r
                           and abs(int(active_size[0]) - r[2]) <= 4
                           and abs(int(active_size[1]) - r[3]) <= 4)
@@ -2964,26 +2996,27 @@ class GeneralPage(ctk.CTkFrame):
     # 一键组队（角色参数存共享命名空间 tasks.teaming；跑的是 DungeonTask）
     # ------------------------------------------------------------------
     def _render_team_action(self):
-        """据当前 self._win_count + teaming.captain_index 渲染队长状态行（纯本地数据，秒回）。
+        """据当前 self._win_count/_win_labels + teaming.captain_index 渲染队长状态行（纯本地数据，秒回）。
         队长已挪进「选择窗口/队长」里选（带缩略图），这里只读出来显示。"""
         if self.lbl_team_status is None:
             return
         n = self._win_count
+        labels = self._win_labels
         team_tc = cfg_mod.task_config(self.app.cfg, "teaming")
         cap = team_tc.get("captain_index", 0)
         if not (0 <= cap < n):
             cap = 0
         multi = self.app.cfg.get("targets", {}).get("multi", False)
         if n >= 2:
-            tip = f"已选 {n} 个号，队长=第{cap + 1}个所选号"
+            tip = f"已选 {n} 个号，队长={labels[cap] if cap < len(labels) else accounts.fallback_label(cap)}"
         elif not multi:
-            tip = "组队需多开：勾 2~5 个号并指定队长。"
+            tip = "组队需勾 2~5 个号并指定队长。"
         else:
             tip = f"已选 {n} 个号，组队至少 2 个号（队长+≥1 队员）。"
         self.lbl_team_status.configure(text=tip)
 
     def _kick_count_windows(self):
-        """后台枚举已选窗口数，变了再回主线程重渲染队长状态。token 丢弃过期结果。"""
+        """后台枚举已选窗口数 + 角色名，回主线程重渲染队长状态与「将整理：…」。token 丢弃过期结果。"""
         title = self.app.cfg.get("window_title", "梦幻西游")
         offset = self.app.cfg.get("window_offset", [0, 0])
         targets = self.app.cfg.get("targets", {})
@@ -2991,21 +3024,20 @@ class GeneralPage(ctk.CTkFrame):
         self._count_token = token
 
         def work():
-            try:
-                n = len(win_mod.resolve_targets(title, offset, targets))
-            except Exception:
-                n = 0
+            labels = resolve_window_labels(title, offset, targets)
 
             def apply():
                 if token is not getattr(self, "_count_token", None):
                     return
-                self._win_count = n
+                self._win_count = len(labels)
+                self._win_labels = labels
                 self._render_team_action()
+                self._refresh_targets_labels()
 
-            try:
-                self.app.after(0, apply)
-            except Exception:
-                pass
+            # ⚠ 必须走 ui_post（队列）。后台线程直接调 Tk 的 after(0, …) 在启动期会抛
+            # RuntimeError 并被 except 吞掉 → 回调永久丢失，现象就是「将整理：」这类文案
+            # 一直停在构建那一刻的「号1」。见 App.ui_post docstring，别再改回去。
+            self.app.ui_post(apply)
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -3108,14 +3140,33 @@ class GeneralPage(ctk.CTkFrame):
     @staticmethod
     def _targets_summary(cfg):
         """只读 cfg.targets 拼一句「将操作哪些号」的说明，不去枚举/定位窗口（够快、给卡片当提示用）。
-        多开未指定 multi_indices = 全体号；指定了就报个数；单开报号几。"""
+        号名取 core/accounts 的缓存（纯读内存，不枚举进程）；缓存没热起来才退回「号N」。
+
+        ⚠ 正因为是静态渲染，调用方在后台枚举出号名之后**必须**重新渲染这句
+        （见 _refresh_targets_labels），否则卡片会一直挂着构建那一刻的「号1」。"""
         targets = (cfg or {}).get("targets", {}) or {}
+        cached = accounts.cached_labels()
         if targets.get("multi"):
-            idxs = targets.get("multi_indices") or []
+            idxs = targets.get("multi_indices") or list(range(len(cached)))
+            names = [cached[i] for i in idxs if 0 <= i < len(cached)]
+            if names:
+                return "多开 · " + "、".join(names)
             return f"多开 · 已选 {len(idxs)} 个号" if idxs else "多开 · 全体号"
         i = targets.get("single_index", 0)
         i = i if isinstance(i, int) and i >= 0 else 0
-        return f"单开 · 号{i + 1}"
+        return f"单开 · {accounts.cached_label(i)}"
+
+    def _refresh_targets_labels(self):
+        """窗口枚举出角色名之后，重渲染「将整理：…」这句。
+
+        它是 _build_organize_card 里静态渲染的，构建那一刻 accounts 缓存往往还是空的（会显示「号1」），
+        所以每次后台枚举回来都要刷一次——否则名字永远停在「号1」。"""
+        if self.lbl_ob_targets is None:
+            return
+        try:
+            self.lbl_ob_targets.configure(text="将整理：" + self._targets_summary(self.app.cfg))
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # 整理背包（跨任务共享：core.InventoryOrganizer + tasks.OrganizeBagTask；
@@ -3149,8 +3200,9 @@ class GeneralPage(ctk.CTkFrame):
                               + ("　✓ 已就绪" if ready else "　（还需标定）"),
                      font=self.fonts["body"],
                      text_color=T.SUCCESS if ready else T.WARN).pack(anchor="w", pady=(4, 0))
-        ctk.CTkLabel(txt, text="将整理：" + self._targets_summary(cfg),
-                     font=self.fonts["small"], text_color=T.TEXT_DIM).pack(anchor="w", pady=(4, 0))
+        self.lbl_ob_targets = ctk.CTkLabel(txt, text="将整理：" + self._targets_summary(cfg),
+                                           font=self.fonts["small"], text_color=T.TEXT_DIM)
+        self.lbl_ob_targets.pack(anchor="w", pady=(4, 0))
         btns = ctk.CTkFrame(head, fg_color="transparent")
         btns.grid(row=0, column=1, padx=(12, 0))
         ctk.CTkButton(btns, text="标定（整理背包）", font=self.fonts["body"], height=36, width=130,
@@ -3718,6 +3770,8 @@ class App(ctk.CTk):
         self.cfg = cfg_mod.load_config()
         # 全局窗口识别按进程名过滤（避免把终端/编辑器等同名标题窗口当游戏号）；GUI 各窗口操作据此生效。
         win_mod.set_game_process(self.cfg.get("window_process") or win_mod.DEFAULT_GAME_PROCESS_SPEC)
+        # 游戏安装目录（读角色名用；空=自动从窗口进程反推）。见 core/accounts 模块头。
+        accounts.set_game_dir(self.cfg.get("game_dir"))
         mode = self.cfg.get("appearance", "dark")
         ctk.set_appearance_mode(mode if mode in ("dark", "light") else "dark")
         self.title("梦幻 · 时空 助手")
@@ -4227,18 +4281,21 @@ class App(ctk.CTk):
     @staticmethod
     def _compute_target_state(all_wins, targets):
         """据「已枚举的窗口 + targets 选择」算出药丸要显示的 (是否连上, 摘要串)。
-        纯函数，跑在后台线程，不碰 Tk。"""
+        纯函数，跑在后台线程，不碰 Tk。号名用真实角色名（认不出自动退回「号N」，见 core/accounts）。"""
         if not all_wins:
             return False, ""
+        try:
+            labels = accounts.labels_for(all_wins)
+        except Exception:
+            labels = [accounts.fallback_label(i) for i in range(len(all_wins))]
         if targets.get("multi"):
             idxs = targets.get("multi_indices") or list(range(len(all_wins)))
-            sel = [i for i in idxs if 0 <= i < len(all_wins)]
-            n = len(sel) if sel else len(all_wins)
-            return True, f"{n} 号 · 多开"
+            sel = [i for i in idxs if 0 <= i < len(all_wins)] or list(range(len(all_wins)))
+            return True, "、".join(labels[i] for i in sel) + " · 多开"
         i = targets.get("single_index", 0)
         if not (isinstance(i, int) and 0 <= i < len(all_wins)):
             i = 0
-        return True, f"号{i + 1} · 单开"
+        return True, f"{labels[i]} · 单开"
 
     def _apply_game_state(self, found, summary=""):
         self._locating = False
@@ -4250,15 +4307,24 @@ class App(ctk.CTk):
             p = self.pages.get(k)
             if p:
                 p.update_game_pill(found, summary)
+                # 这次枚举顺带把角色名（core/accounts 缓存）算出来了；页里那些「将整理：…」之类
+                # 构建时静态渲染的文案要重渲染一遍，否则会一直停在构建那一刻的「号1」。
+                refresh = getattr(p, "_refresh_targets_labels", None)
+                if callable(refresh):
+                    try:
+                        refresh()
+                    except Exception:
+                        pass
 
     def open_window_picker(self, after=None, captain_ns=None):
         """打开「选择窗口」对话框（各任务页共用）。关闭后刷新配置并强制刷新药丸。
-        captain_ns: 传入则多开模式下可在卡片上直接指定队长，写入 tasks.<captain_ns>.captain_index。"""
+        captain_ns: 传入则可在卡片上直接指定队长，写入 tasks.<captain_ns>.captain_index。"""
         from .window_picker import WindowPickerDialog
 
         def _done():
             self.cfg = cfg_mod.load_config()
             self._game_connected = None   # 选择可能变了，强制下次 tick 刷新药丸
+            accounts.invalidate()         # 序号→角色名 的缓存也作废，否则卡片提示会显示旧名字
             if callable(after):
                 try:
                     after()

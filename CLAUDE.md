@@ -47,8 +47,14 @@
    **禁止写死 `wraplength=数字`**（窗口比它窄就溢出截断）。三个非显而易见的坑见 `theme.bind_wraplength`
    docstring 与 memory `ctklabel-wraplength-gotcha`——**改它前务必看懂，否则极易改回截断/振荡**。
 9. **多开通用约束（贯穿全部任务）**：多开各号窗口须**同尺寸**（共用标定点位）；一只鼠标，多开节奏天然慢于单开；
+   **「选择窗口」只有复选框、没有单开/多开模式开关（用户拍板）**：勾 1 个=单开、勾多个=多开，
+   `targets.multi` 由勾选数量派生（字段结构不变，任务照旧读它）；不要再加坡模式开关/单选控件。
    操作某号前先 `window.activate()` 切前台（`_force_foreground` 绕过焦点抢占并校验，失败则跳过该号、下轮重试，
    绝不在后台号瞎点）。
+10. **界面上的「号N」一律显示真实角色名「角色名（等级）」（用户拍板）**：名字只能从**游戏客户端自己的文件**读
+   （`<安装目录>\LocalData\last_server_info` 的 `cName` + `UserDefault.xml` 的 `XyqPocket_LoginInfo_*` 名册），
+   窗口↔角色靠**登录时间戳精确到秒**配对。⚠ **别再回头试窗口标题/子窗口/UIA/MSAA/进程命令行/枚举句柄，
+   也绝不上 OCR**——实测全灭，理由与实测记录见 `core/accounts.py` 模块头。认不出就退回「号N」，不猜。
 
 ## 架构（三层，包名 mhxy/）
 > 文件树是「地图」，只给一句话功能；实现细节看各文件 docstring 与 memory，别往这里抄。
@@ -60,6 +66,7 @@ templates/          装备/模板图   captures/  命中截图
 mhxy/
   core/   通用基础设施（与玩法无关）
     config.py   配置读写（DEFAULT_CONFIG / load/save / task_config / set_task_config）
+    accounts.py 角色名识别（读客户端 LocalData 纯文本；把界面/日志里的「号N」换成「角色名（等级）」）——见约束 10
     window.py   GameWindow（locate/rect/activate/坐标换算）+ grab() 截图 + set_dpi_aware()
     vision.py   load_template / save_image / match() / frame_diff()（兼容中文路径）
     scan.py     通用「滚动查找」scroll_search()（翻列表/翻包裹统一底层）；详见 docstring + memory scroll-search-scan

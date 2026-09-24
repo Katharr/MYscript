@@ -222,12 +222,13 @@ class TreasureMapTask(Task):
     # ------------------------------------------------------------------
     def _resolve_contexts(self, ctx, multi):
         """按选择把目标窗口包成「要轮转的上下文」列表。
-        单开→复用主 ctx 并绑到选中的那个窗口；多开→每号一个子上下文(带「号N」标签，日志自动加前缀)。"""
+        单开→复用主 ctx 并绑到选中的那个窗口；多开→每号一个子上下文(带「角色名（等级）」标签，日志自动加前缀)。"""
         wins = ctx.select_windows()
         if not wins:
             return []
         if multi:
-            return [ctx.make_child(w, f"号{i + 1}") for i, w in enumerate(wins)]
+            labels = ctx.window_labels(wins)
+            return [ctx.make_child(w, labels[i]) for i, w in enumerate(wins)]
         ctx.window = wins[0]
         return [ctx]
 

@@ -37,6 +37,10 @@ DEFAULT_CONFIG = {
                                          #   MyGame_x64r.exe 只剩隐藏渲染窗口，两个都认以兼容新旧客户端。
                                          #   客户端 exe 再改名就改这里。见 core/window.set_game_process。
     "input_backend": "sendinput",        # sendinput(底层+拟人化, 推荐) / pyautogui / pydirectinput
+    "game_dir": "",                      # 游戏安装目录（读角色名用；只读，不写游戏任何文件）。
+                                         #   留空=自动从游戏窗口的进程 exe 路径反推，一般不用填。
+                                         #   界面上「号1/号2」显示成真实角色名就是靠它下面的 LocalData。
+                                         #   见 core/accounts 模块头（为什么只能从文件读、怎么对上窗口）。
     "window_offset": [0, 0],             # 整体点击偏移修正 [dx, dy]
     "hotkey_stop": "ctrl+alt+F12",       # 全局【急停】组合键：游戏前台也能按，按一下立刻停止一切正在跑的任务
                                          #   （鼠标被脚本拉着失控时随时叫停）。设置里可改修饰键(Ctrl/Alt/Shift)+主键。
@@ -51,13 +55,14 @@ DEFAULT_CONFIG = {
     },
 
     # ---- 目标窗口选择（基础特性，跨任务共享）----
-    #   所有任务都基于它确定「操作哪个号」：单开=选 1 个窗口，多开=选多个号轮流操作。
+    #   所有任务都基于它确定「操作哪个号」：勾 1 个窗口=单开，勾多个=多开（轮流操作）。
+    #   「选择窗口」对话框只有复选框，没有模式开关——multi 由勾选数量派生（见 gui/window_picker.py）。
     #   窗口身份用「屏幕位置序号」(左→右，见 window.locate_all 排序)——三个号标题相同、HWND 重启会变，
     #   按摆放位置认号最稳。检测区(listing/scene)留空即「整窗检测」，无需框大区域。
     "targets": {
-        "multi": False,            # False=单开(操作1个号) / True=多开(轮流操作多个号)
-        "single_index": 0,         # 单开：选中窗口的序号(左→右,从0起)；越界自动回退0
-        "multi_indices": [],       # 多开：选中的序号列表；空=检测到的全部
+        "multi": False,            # 【派生】True=多开(勾了多个号) / False=单开(只勾1个)；由窗口选择写入
+        "single_index": 0,         # 单选/勾唯一的那个号的序号(左→右,从0起)；越界自动回退0
+        "multi_indices": [],       # 勾选的序号列表；空=检测到的全部（勾满即存空）
         "max_windows": 3,          # 多开最多同时操作几个号(0=不限)
         "switch_delay_sec": 0.15,  # 号与号之间切换的停顿(秒,带抖动)，别太机械
         "base_size": None          # 【派生镜像字段】激活标定组的尺寸[w,h]，由 core/calib_profiles 统一同步写入

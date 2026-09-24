@@ -87,13 +87,13 @@ class TaohaiquTask(Task):
         else:
             # 组队前提：必须多开、至少 2 个号（队长 + ≥1 队员）
             if not targets.get("multi"):
-                problems.append("蹈海去需先组队：请在「选择窗口」切到多开并选好队长+队员（≥2 个号）")
+                problems.append("蹈海去需先组队：请在「选择窗口」勾上队长+队员（≥2 个号）")
             if len(wins) < 2:
                 problems.append(f"组队至少 2 人（队长+队员），当前选中 {len(wins)} 个号")
 
         cap = tc.get("captain_index", 0)
         if wins and not (0 <= cap < len(wins)):
-            problems.append(f"队长序号 号{cap + 1} 越界（共 {len(wins)} 个号），请在下拉框重选队长")
+            problems.append(f"队长选项已失效（共 {len(wins)} 个号），请重新选队长")
 
         # 组队资产（共享 teaming 命名空间）——已组队则不需要
         if not skip_team:
@@ -166,10 +166,11 @@ class TaohaiquTask(Task):
                     level="warn")
 
         # 按 captain_index 分配角色（队长放第 0 位，便于组队握手尽快收敛）。
+        labels = ctx.window_labels(wins)
         cap_child = None
         member_pairs = []
         for i, w in enumerate(wins):
-            child = ctx.make_child(w, f"号{i + 1}")
+            child = ctx.make_child(w, labels[i])
             if i == cap:
                 cap_child = child
             else:
@@ -183,9 +184,9 @@ class TaohaiquTask(Task):
 
         # —— 第一步：组队（已勾选「已组队」则跳过，直接由队长跑）——
         if skip_team:
-            ctx.log(f"★ 蹈海去·50：已组队，跳过组队，直接由队长（号{cap + 1}）跑副本 ★", level="warn")
+            ctx.log(f"★ 蹈海去·50：已组队，跳过组队，直接由队长（{labels[cap]}）跑副本 ★", level="warn")
         else:
-            ctx.log(f"★ 蹈海去·50：先组队（队长=号{cap + 1}，队员 {len(wins) - 1} 人），再由队长跑副本 ★",
+            ctx.log(f"★ 蹈海去·50：先组队（队长={labels[cap]}，队员 {len(wins) - 1} 人），再由队长跑副本 ★",
                     level="warn")
             team_cfg = ctx.task_cfg("teaming")
             team = TeamFormation(ctx, assignments, team_cfg, dry_run=False)

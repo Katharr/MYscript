@@ -10,6 +10,7 @@ import threading
 from . import config as cfg_mod
 from . import window as win_mod
 from . import vision
+from . import accounts
 from .window import GameWindow
 from .input import Mouse
 
@@ -19,6 +20,8 @@ class TaskContext:
         self.cfg = cfg
         # 按 config 设定「只认游戏进程的窗口」，避免把终端/编辑器等同名标题窗口当成游戏号去点击。
         win_mod.set_game_process(cfg.get("window_process") or win_mod.DEFAULT_GAME_PROCESS_SPEC)
+        # 游戏安装目录（读角色名用）；空=自动从窗口进程 exe 反推，见 core/accounts 模块头。
+        accounts.set_game_dir(cfg.get("game_dir"))
         # window 非空（多开派生子上下文）则绑定指定窗口；否则按标题建一个待 locate 的窗口。
         self.window = window or GameWindow(cfg.get("window_title", "梦幻西游"),
                                            cfg.get("window_offset", [0, 0]))
@@ -27,7 +30,7 @@ class TaskContext:
         # 键盘动作（按键/组合键）也在同一个拟人化输入对象上，导航/复位靠它发快捷键。
         self.keyboard = self.mouse
         self.hotkeys = cfg.get("hotkeys", {})   # 键名映射，任务用 ctx.send_hotkey(动作名) 发
-        self.label = label                      # 多开时标识「号1/号2…」，单开为 None
+        self.label = label                      # 多开时的号标识（「角色名（等级）」，认不出才是「号N」），单开为 None
         self._log_fn = log_fn or (lambda msg, level="info": None)
         self.stop_event = stop_event or threading.Event()
         self._last_bag_check = 0.0              # 「自动整理背包」节流：上次检测背包满的时刻（每号独立）
@@ -54,6 +57,16 @@ class TaskContext:
         return win_mod.resolve_targets(self.cfg.get("window_title", "梦幻西游"),
                                        self.cfg.get("window_offset", [0, 0]),
                                        self.cfg.get("targets", {}))
+
+    def window_labels(self, wins):
+        """按 wins 的顺序给出「角色名（等级）」显示名（认不出退回「号N」），与 select_windows 同序。
+
+        用途：多开时把日志/界面里的「号1/号2」换成真实角色名，免得对不上是哪个号。
+        原理见 core/accounts 模块头（读客户端 LocalData 下的纯文本 + 登录时间戳配对，零 OCR）。"""
+        try:
+            return accounts.labels_for(wins)
+        except Exception:
+            return [accounts.fallback_label(i) for i in range(len(wins))]
 
     # ---- 基础特性：取「大检测区」的屏幕矩形（整窗检测核心）----
     def detection_rect(self, region):

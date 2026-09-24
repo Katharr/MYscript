@@ -2,6 +2,7 @@
   "window_title": "梦幻西游",
   "window_process": "MyTabCtrl_x64r.exe,MyGame_x64r.exe",
   "input_backend": "sendinput",
+  "game_dir": "",
   "window_offset": [
     0,
     0

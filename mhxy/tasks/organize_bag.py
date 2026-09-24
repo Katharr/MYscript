@@ -81,10 +81,11 @@ class OrganizeBagTask(Task):
         if dry_run:
             ctx.log("整理背包·演练：只识别物品+打日志，不执行任何动作。", level="warn")
         total = 0
+        labels = ctx.window_labels(wins) if multi else None
         for i, w in enumerate(wins):
             if ctx.should_stop():
                 break
-            label = f"号{i + 1}" if multi else None
+            label = labels[i] if multi else None
             child = ctx.make_child(w, label)
             # 单开/多开都先切前台并校验（约束9铁律）：activate 失败=没真正到前台，绝不在后台号瞎点，跳过。
             if not w.activate():
