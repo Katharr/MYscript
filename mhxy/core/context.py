@@ -22,6 +22,8 @@ class TaskContext:
         win_mod.set_game_process(cfg.get("window_process") or win_mod.DEFAULT_GAME_PROCESS_SPEC)
         # 游戏安装目录（读角色名用）；空=自动从窗口进程 exe 反推，见 core/accounts 模块头。
         accounts.set_game_dir(cfg.get("game_dir"))
+        # 启动器 EXE 路径：游戏没开时靠它反推 LocalData 读名册（见 accounts.set_launcher_path）。
+        accounts.set_launcher_path((cfg.get("account_launch") or {}).get("launcher_path"))
         # window 非空（多开派生子上下文）则绑定指定窗口；否则按标题建一个待 locate 的窗口。
         self.window = window or GameWindow(cfg.get("window_title", "梦幻西游"),
                                            cfg.get("window_offset", [0, 0]))

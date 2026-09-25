@@ -3944,6 +3944,7 @@ class App(ctk.CTk):
         win_mod.set_game_process(self.cfg.get("window_process") or win_mod.DEFAULT_GAME_PROCESS_SPEC)
         # 游戏安装目录（读角色名用；空=自动从窗口进程反推）。见 core/accounts 模块头。
         accounts.set_game_dir(self.cfg.get("game_dir"))
+        accounts.set_launcher_path((self.cfg.get("account_launch") or {}).get("launcher_path"))
         mode = self.cfg.get("appearance", "dark")
         ctk.set_appearance_mode(mode if mode in ("dark", "light") else "dark")
         self.title("梦幻 · 时空 助手")

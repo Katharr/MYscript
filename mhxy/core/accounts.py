@@ -56,6 +56,7 @@ _identity = {}                       # hwnd -> {fingerprint, pending, role_id, r
 _launch_sessions = {}                 # hwnd -> {role_id, profile_id, bound_at}; 仅本次一键启动会话
 _data_dir = {"path": "", "at": 0.0}
 _game_dir = ""                       # config.game_dir 覆盖（空 = 自动探测）
+_launcher_path = ""                  # config.account_launch.launcher_path（用户选的启动器 EXE）
 _ocr_lock = threading.Lock()
 _ocr_infer_lock = threading.Lock()   # ONNX 推理串行，绝不让多窗口同时抢满 CPU
 _ocr_engine = None
@@ -167,6 +168,21 @@ def set_game_dir(path):
             _cache["order"] = []
 
 
+def set_launcher_path(path):
+    """记下用户选定的启动器 EXE（config.account_launch.launcher_path）。
+
+    启动器就装在游戏安装根下，故它的路径能反推出 LocalData —— 这是「游戏已登录过但当前没开」
+    时唯一还能用的线索。与 set_game_dir 同一套路：模块级生效，App/TaskContext 各设一次。
+    """
+    global _launcher_path
+    with _lock:
+        new = (path or "").strip()
+        if new != _launcher_path:
+            _launcher_path = new
+            _data_dir["path"] = ""
+            _data_dir["at"] = 0.0
+
+
 def _hwnd(win):
     try:
         return int(win._win._hWnd)
@@ -195,27 +211,55 @@ def _read_json(path, retries=4):
         return None
 
 
-def _data_dir_from_wins(wins):
-    """从窗口所属进程的 exe 路径往上找含 LocalData 的祖先目录。
+# 客户端进程名（小写）：窗口外壳 / 渲染进程 / 官方启动器（与 core/launcher.LAUNCHER_EXE 一致）。
+# 用途：即使当前【没有可见游戏窗口】（被最小化、只开着启动器），也能从进程 exe 反推 LocalData，
+# 从而让第一次用脚本的人直接从名册里挑角色名，不必手打复杂名字。
+_CLIENT_PROCESSES = {"mytabctrl_x64r.exe", "mygame_x64r.exe", "mypclauncher_x64r.exe"}
+
+
+def _localdata_from_exe(exe):
+    """从客户端 exe 路径往上找含 LocalData 的祖先目录。
     外壳在 <安装>\\Engine\\Binaries\\Win64\\ 下，往上 3~4 层即安装根，故搜 6 层足够。"""
+    if not exe:
+        return ""
+    d = os.path.dirname(exe)
+    for _ in range(6):
+        cand = os.path.join(d, "LocalData")
+        if os.path.isdir(cand):
+            return os.path.normpath(cand)
+        parent = os.path.dirname(d)
+        if parent == d:
+            break
+        d = parent
+    return ""
+
+
+def _data_dir_from_wins(wins):
+    """从窗口所属进程的 exe 路径反推 LocalData。"""
     for w in wins:
-        exe = win_mod.proc_image_path(_hwnd(w))
-        if not exe:
+        path = _localdata_from_exe(win_mod.proc_image_path(_hwnd(w)))
+        if path:
+            return path
+    return ""
+
+
+def _data_dir_from_processes():
+    """没有任何可用窗口时的兜底：扫正在运行的客户端进程，按它们的 exe 路径反推 LocalData。
+
+    覆盖「游戏窗口被最小化」「只开着启动器」「窗口已关但进程还在」这些看不到窗口的情况。
+    """
+    for proc in _proc_table():
+        if (proc.get("exe") or "") not in _CLIENT_PROCESSES:
             continue
-        d = os.path.dirname(exe)
-        for _ in range(6):
-            cand = os.path.join(d, "LocalData")
-            if os.path.isdir(cand):
-                return cand
-            parent = os.path.dirname(d)
-            if parent == d:
-                break
-            d = parent
+        path = _localdata_from_exe(win_mod.proc_path_by_pid(proc.get("pid")))
+        if path:
+            return path
     return ""
 
 
 def data_dir(wins=None, ttl=_DATA_DIR_TTL):
-    """游戏 LocalData 目录（找不到返回 ""）。先 config.game_dir，再从窗口进程 exe 反推；结果带缓存。"""
+    """游戏 LocalData 目录（找不到返回 ""）。先 config.game_dir，再从窗口进程 exe 反推；
+    没有可用窗口就退回扫进程；结果带缓存。"""
     now = time.time()
     with _lock:
         if _data_dir["path"] and now - _data_dir["at"] < ttl:
@@ -226,8 +270,13 @@ def data_dir(wins=None, ttl=_DATA_DIR_TTL):
         cand = base if os.path.basename(base).lower() == "localdata" else os.path.join(base, "LocalData")
         if os.path.isdir(cand):
             path = cand
+    if not path and _launcher_path:
+        # 游戏没开、窗口也没有，但只要用户配过启动器，就能从启动器 EXE 反推安装根。
+        path = _localdata_from_exe(_launcher_path)
     if not path and wins:
         path = _data_dir_from_wins(wins)
+    if not path:
+        path = _data_dir_from_processes()
     with _lock:
         _data_dir["path"] = path
         _data_dir["at"] = now

@@ -136,6 +136,29 @@ def proc_image_path(hwnd):
         return ""
 
 
+def proc_path_by_pid(pid):
+    """按 PID 取进程 exe 完整路径（与 proc_image_path 同权限，但不需要窗口句柄）。取不到返回 ""。
+
+    用途：游戏窗口被最小化/已关闭、只开着启动器时，core/accounts 仍要靠进程 exe 反推 LocalData。
+    """
+    try:
+        if not pid:
+            return ""
+        hp = _kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+        if not hp:
+            return ""
+        try:
+            buf = ctypes.create_unicode_buffer(1024)
+            sz = ctypes.wintypes.DWORD(1024)
+            if not _kernel32.QueryFullProcessImageNameW(hp, 0, buf, ctypes.byref(sz)):
+                return ""
+            return buf.value or ""
+        finally:
+            _kernel32.CloseHandle(hp)
+    except Exception:
+        return ""
+
+
 def _proc_basename(hwnd):
     """返回 hwnd 所属进程的 exe basename（小写）。取不到返回 ""。"""
     return os.path.basename(proc_image_path(hwnd)).lower()

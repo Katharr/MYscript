@@ -119,17 +119,40 @@ class LaunchLoginPage(ctk.CTkFrame):
 
     def _roles(self):
         try:
+            # 启动器路径是「游戏没开也能读到名册」的关键线索（见 accounts.set_launcher_path）。
+            accounts.set_launcher_path((self.app.cfg.get("account_launch") or {}).get("launcher_path"))
             wins = win_mod.locate_all(self.app.cfg.get("window_title", "梦幻西游"),
                                       self.app.cfg.get("window_offset", [0, 0]))
             records = accounts.roster(wins)
         except Exception:
             records = {}
+        if records:
+            self._remember_game_dir(wins)
         out = {}
         for rid, rec in records.items():
             display = accounts.display_name(rec) or rec.get("name") or str(rid)
             value = "%s · %s" % (display, rid)
             out[value] = (str(rid), rec.get("name") or "")
         return out
+
+    def _remember_game_dir(self, wins):
+        """首次成功读到名册就把游戏目录记进 config.game_dir。
+
+        这样以后哪怕游戏和启动器都没开，脚本也能直接读名册——用户痛点就是角色名太复杂、
+        不该让人手打。目录失效（换盘/重装）也不会卡住：core/accounts 查不到会自动继续别的来源。
+        """
+        cfg = cfg_mod.load_config()
+        if (cfg.get("game_dir") or "").strip():
+            return
+        found = accounts.data_dir(wins)
+        if not found:
+            return
+        base = os.path.dirname(found) if os.path.basename(found).lower() == "localdata" else found
+        cfg["game_dir"] = base
+        cfg_mod.save_config(cfg)
+        accounts.set_game_dir(base)
+        self.app.cfg = cfg
+        self.app.log_line("已记住游戏目录：%s" % base, "info", self.LOG_SOURCE)
 
     def _maybe_refresh_roles(self, force=False):
         """名册可能【后到】（常见：先开脚本、后登录游戏），故定期重读；只有真的变了才重渲染。

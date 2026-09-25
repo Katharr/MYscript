@@ -312,6 +312,39 @@ class LaunchLoginTests(unittest.TestCase):
         # App 的既有契约：游戏连接状态变化时回调这个名字
         self.assertTrue(callable(getattr(LaunchLoginPage, "_refresh_targets_labels", None)))
 
+    def test_roster_readable_without_any_game_window(self):
+        """核心场景：游戏已登录过但当前【没开着】（或只开启动器）也要能读名册，免得手打复杂角色名。"""
+        from mhxy.core import accounts as A
+
+        install = r"C:\Game"
+        launcher = install + r"\Engine\Binaries\Win64\MyPCLauncher_x64r.exe"
+        localdata = install + r"\LocalData"
+        xml = ("<XyqPocket_LoginInfo_a>1:hid:srv:238939812:1700000000:x:复杂角色名:45"
+               "</XyqPocket_LoginInfo_a>")
+        want = os.path.normpath(localdata).lower()
+        old_dir, old_launcher = A._game_dir, A._launcher_path
+        try:
+            with mock.patch.object(A.os.path, "isdir",
+                                   side_effect=lambda p: os.path.normpath(str(p)).lower() == want), \
+                 mock.patch.object(A, "_read_text", return_value=xml):
+                A.set_game_dir("")
+                A.set_launcher_path(launcher)          # 只配了启动器、没有任何窗口
+                recs = A.roster(None)
+                self.assertEqual(recs.get("238939812", {}).get("name"), "复杂角色名")
+                self.assertEqual(recs["238939812"]["level"], "45")
+                self.assertEqual(A._localdata_from_exe(launcher), localdata)   # 层级走对了
+
+                # 启动器也没配时，退回扫进程（只认客户端进程名）
+                A.set_launcher_path("")
+                with mock.patch.object(A, "_proc_table", return_value=[
+                        {"pid": 1, "exe": "explorer.exe"},
+                        {"pid": 2, "exe": "mypclauncher_x64r.exe"}]), \
+                     mock.patch("mhxy.core.window.proc_path_by_pid", return_value=launcher):
+                    self.assertEqual(A._data_dir_from_processes(), localdata)
+        finally:
+            A.set_game_dir(old_dir)
+            A.set_launcher_path(old_launcher)
+
     def test_roster_ocr_returns_target_text_center(self):
         fake_engine = mock.Mock(return_value=([
             [[[10, 20], [50, 20], [50, 40], [10, 40]], "角色", 0.99],
