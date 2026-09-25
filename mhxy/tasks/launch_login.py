@@ -219,32 +219,44 @@ class LaunchLoginTask(Task):
     def _place_after_login(self, ctx, win, before, corner, settle_sec, margin):
         """登录完成后把本号游戏窗口摆到指定屏幕角落。
 
-        失败只告警、不影响登录结果（登录已经成功，归位只是好看/方便后续多开辨认）。
+        ⚠ 目标窗口一律【按游戏客户端进程】重新定位（本次新增的那个），绝不用状态机里跟了一路的
+        `win`：那可能还停在启动器上，也可能被整屏匹配误认成脚本自己的窗口。
+        失败只告警、不影响登录结果。
         """
         if not corner:
             return
         self._interruptible_sleep(ctx, settle_sec)   # 等游戏窗口建好/外壳切换稳定再归位
-        target = win
-        if target.rect() is None:
-            # 点角色后外壳可能换过 HWND：从本次新增的游戏客户端窗口里挑最新的那个。
-            fresh = [w for w in win_mod.locate_all(ctx.cfg.get("window_title", "梦幻西游"),
-                                                   ctx.cfg.get("window_offset", [0, 0]))
-                     if self._window_hwnd(w) and self._window_hwnd(w) not in before]
-            if fresh:
-                target = fresh[-1]
         label = self._CORNER_LABELS.get(corner, corner)
+        target = self._resolve_game_window(ctx, before)
+        if target is None:
+            ctx.log("窗口归位到%s失败：没找到本号新出现的游戏窗口。" % label, level="warn")
+            return
         rect = target.move_to_corner(corner, margin=margin)
         if rect is None:
             ctx.log("窗口归位到%s失败（窗口可能已最小化或被外壳约束）。" % label, level="warn")
         else:
             ctx.log("窗口已归位到%s：%s。" % (label, rect), level="hit")
 
+    def _resolve_game_window(self, ctx, before):
+        """定位本号真正进入游戏的窗口：本次新增 + 属于游戏客户端进程（MyTabCtrl/MyGame）。
+
+        locate_all 已按「游戏标题 + 游戏进程白名单」过滤，故天然排除启动器和脚本自身窗口；
+        再用启动前的 HWND 基线剔除已经登录好的老号。
+        """
+        fresh = [w for w in win_mod.locate_all(ctx.cfg.get("window_title", "梦幻西游"),
+                                               ctx.cfg.get("window_offset", [0, 0]))
+                 if self._window_hwnd(w) and self._window_hwnd(w) not in before]
+        return fresh[-1] if fresh else None
+
     def _desktop_windows(self, ctx):
         """枚举可见的大型顶层窗口，不按游戏标题/进程过滤。
 
         官方启动器可能与最终游戏窗口使用不同 exe 或标题；但候选仍必须是本次启动后出现的
         新 HWND，且之后还要命中对应模板才会被点击，因此不会把普通窗口当游戏操作。
+        ⚠ 必须排掉脚本自己的窗口：悬浮日志窗置顶且日志文字里就含「开始游戏」等字样，会被
+        模板匹配命中，从而把脚本自己的窗口当成游戏窗口（实测踩过）。
         """
+
         out = []
         title = ctx.cfg.get("window_title", "梦幻西游")
         offset = ctx.cfg.get("window_offset", [0, 0])
@@ -256,7 +268,8 @@ class LaunchLoginTask(Task):
             try:
                 if desktop_win.isMinimized or desktop_win.width <= 200 or desktop_win.height <= 160:
                     continue
-                if not int(desktop_win._hWnd):
+                hwnd = int(desktop_win._hWnd)
+                if not hwnd or win_mod.is_own_window(hwnd):
                     continue
                 out.append(win_mod.GameWindow(title, offset).bind(desktop_win))
             except Exception:
@@ -355,7 +368,15 @@ class LaunchLoginTask(Task):
     def _scene(self, _ctx, _win):
         # 模板从屏幕上框选得到，直接按真实屏幕像素匹配，绝不按启动器或游戏窗口尺寸缩放。
         rect = self._screen_rect()
-        return win_mod.grab_scene(rect) if rect and rect[2] > 0 and rect[3] > 0 else None
+        if not rect or rect[2] <= 0 or rect[3] <= 0:
+            return None
+        image = win_mod.grab(rect)
+        if image is None:
+            return None
+        # 挖掉脚本自己的窗口：悬浮日志窗置顶，日志文字里含「开始游戏/进入游戏/切换/已有角色」，
+        # 不挖掉就会被模板匹配命中，把脚本自己的窗口当成游戏窗口（实测踩过）。
+        win_mod.mask_rects(image, rect, win_mod.own_window_rects())
+        return win_mod.ScaledScene(rect, None, img=image)
 
     def _match(self, ctx, win, tpl, threshold):
         if tpl is None:

@@ -212,7 +212,6 @@ class LaunchLoginTests(unittest.TestCase):
         moved = []
 
         class _Win:
-            def rect(self): return [0, 0, 800, 600]
             def move_to_corner(self, corner, margin=0):
                 moved.append((corner, margin))
                 return [1120, 0, 800, 600]
@@ -223,15 +222,69 @@ class LaunchLoginTests(unittest.TestCase):
             def should_stop(self): return False
             def log(self, msg, level="info"): logs.append((level, msg))
 
-        with mock.patch.object(task, "_interruptible_sleep", lambda *a: None):
-            task._place_after_login(_RunCtx(DEFAULT_CONFIG), _Win(), set(), "top_right", 0.0, 0)
+        with mock.patch.object(task, "_interruptible_sleep", lambda *a: None), \
+             mock.patch.object(task, "_resolve_game_window", return_value=_Win()):
+            task._place_after_login(_RunCtx(DEFAULT_CONFIG), object(), set(), "top_right", 0.0, 0)
         self.assertEqual(moved, [("top_right", 0)])
         self.assertTrue(any("右上" in msg for _lv, msg in logs))
 
         # corner=None（未开启归位）→ 不移动窗口
-        with mock.patch.object(task, "_interruptible_sleep", lambda *a: None):
-            task._place_after_login(_RunCtx(DEFAULT_CONFIG), _Win(), set(), None, 0.0, 0)
+        with mock.patch.object(task, "_interruptible_sleep", lambda *a: None), \
+             mock.patch.object(task, "_resolve_game_window", return_value=_Win()):
+            task._place_after_login(_RunCtx(DEFAULT_CONFIG), object(), set(), None, 0.0, 0)
         self.assertEqual(moved, [("top_right", 0)])
+
+    def test_desktop_windows_skips_script_own_windows(self):
+        """悬浮日志窗置顶且日志文字含「开始游戏」等字样，绝不能被当成候选窗口。"""
+        task = LaunchLoginTask()
+
+        class _W:
+            def __init__(self, hwnd):
+                self._hWnd, self.isMinimized = hwnd, False
+                self.left, self.top, self.width, self.height = 100, 100, 800, 600
+
+        wins = [_W(11), _W(22)]
+        with mock.patch("mhxy.tasks.launch_login.win_mod.gw.getAllWindows", return_value=wins), \
+             mock.patch("mhxy.tasks.launch_login.win_mod.is_own_window",
+                        side_effect=lambda h: int(h) == 22):
+            got = task._desktop_windows(_Ctx(DEFAULT_CONFIG))
+        self.assertEqual([task._window_hwnd(w) for w in got], [11])
+
+    def test_mask_rects_blanks_own_window_area(self):
+        import numpy as np
+        from mhxy.core import window as win_mod
+        img = np.full((300, 400, 3), 255, dtype="uint8")
+        win_mod.mask_rects(img, [1000, 500, 400, 300], [[1050, 550, 100, 50]])
+        self.assertEqual(int(img[60, 60].sum()), 0)          # 洞内被涂黑
+        self.assertEqual(int(img[200, 200].sum()), 255 * 3)  # 洞外不变
+
+    def test_place_after_login_uses_game_window_and_warns_when_missing(self):
+        task = LaunchLoginTask()
+        moved = []
+
+        class _Win:
+            def move_to_corner(self, corner, margin=0):
+                moved.append(corner)
+                return [1120, 0, 800, 600]
+
+        logs = []
+
+        class _RunCtx(_Ctx):
+            def should_stop(self): return False
+            def log(self, msg, level="info"): logs.append((level, msg))
+
+        ctx = _RunCtx(DEFAULT_CONFIG)
+        with mock.patch.object(task, "_interruptible_sleep", lambda *a: None), \
+             mock.patch.object(task, "_resolve_game_window", return_value=_Win()):
+            task._place_after_login(ctx, object(), set(), "top_right", 0.0, 0)
+        self.assertEqual(moved, ["top_right"])
+
+        logs.clear()
+        with mock.patch.object(task, "_interruptible_sleep", lambda *a: None), \
+             mock.patch.object(task, "_resolve_game_window", return_value=None):
+            task._place_after_login(ctx, object(), set(), "bottom_left", 0.0, 0)
+        self.assertEqual(moved, ["top_right"])               # 找不到游戏窗口绝不乱搬
+        self.assertTrue(any(lv == "warn" for lv, _m in logs))
 
     def test_roster_ocr_returns_target_text_center(self):
         fake_engine = mock.Mock(return_value=([

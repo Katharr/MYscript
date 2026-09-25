@@ -300,6 +300,64 @@ def corner_left_top(corner, win_w, win_h, hwnd=None, margin=0):
     return (int(x), int(y))
 
 
+def is_own_window(hwnd):
+    """该 HWND 是否属于脚本自己（主界面/悬浮日志窗）。
+
+    ⚠ 启动登录是【整屏找图】，而悬浮日志窗是置顶的：它的日志文字里恰好含「开始游戏/进入游戏/
+    切换/已有角色」等字样，会被模板匹配当成命中 —— 实测导致脚本把自己的悬浮窗认成游戏窗口并搬走。
+    故候选窗口和截屏都必须先排掉本进程的窗口。
+    """
+    if not hwnd:
+        return False
+    try:
+        pid = ctypes.wintypes.DWORD()
+        _user32.GetWindowThreadProcessId(int(hwnd), ctypes.byref(pid))
+        return int(pid.value) == os.getpid()
+    except Exception:
+        return False
+
+
+def own_window_rects():
+    """脚本自身可见窗口的屏幕矩形 [[left,top,w,h], ...]，供整屏截图挖洞用。"""
+    out = []
+    try:
+        wins = gw.getAllWindows()
+    except Exception:
+        return out
+    for w in wins:
+        try:
+            if not is_own_window(int(w._hWnd)):
+                continue
+            if w.isMinimized or w.width <= 0 or w.height <= 0:
+                continue
+            out.append([int(w.left), int(w.top), int(w.width), int(w.height)])
+        except Exception:
+            continue
+    return out
+
+
+def mask_rects(image, base_rect, rects):
+    """把 image（其左上角对应屏幕 base_rect[0:2]）里 rects 覆盖的区域涂黑，返回原图。
+
+    纯图像操作、不改坐标映射：只是为了不让脚本自己的窗口出现在整屏匹配里。
+    """
+    if image is None or not rects:
+        return image
+    try:
+        img_h, img_w = image.shape[:2]
+        bx, by = int(base_rect[0]), int(base_rect[1])
+        for r in rects:
+            x0 = max(0, int(r[0]) - bx)
+            y0 = max(0, int(r[1]) - by)
+            x1 = min(img_w, int(r[0]) + int(r[2]) - bx)
+            y1 = min(img_h, int(r[1]) + int(r[3]) - by)
+            if x1 > x0 and y1 > y0:
+                image[y0:y1, x0:x1] = 0
+    except Exception:
+        pass
+    return image
+
+
 class GameWindow:
     """对一个游戏窗口的封装。"""
 
