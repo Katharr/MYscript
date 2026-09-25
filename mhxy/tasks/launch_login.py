@@ -5,10 +5,10 @@
 完成后，才会启动下一个档案。最终游戏窗口仍可由其它任务按既有多开逻辑使用。
 """
 
+import ctypes
 import time
 
 from ..core import accounts
-from ..core import calib_profiles as calib
 from ..core import launcher
 from ..core import vision
 from ..core import window as win_mod
@@ -21,7 +21,8 @@ class LaunchLoginTask(Task):
     title = "启动登录"
     description = "串行启动并登录预设角色"
     CALIBRATION = {
-        "regions": [("scene", "识别区", "留空=整窗检测(推荐)", True)],
+        # 启动器与游戏外壳尺寸不同，整个启动登录阶段统一在虚拟桌面范围找图。
+        "regions": [],
         "templates": [
             ("start_game", "开始游戏", "启动器右下角按钮"),
             ("enter_game", "进入游戏", "已登录后的进入按钮"),
@@ -254,10 +255,20 @@ class LaunchLoginTask(Task):
             return role_tpl
         return templates.get("in_game_ready")
 
-    def _scene(self, ctx, win):
-        region = (ctx.task_cfg(self.name).get("regions") or {}).get("scene")
-        rect = win.region_to_screen_rect(region) if region else win.rect()
-        return win_mod.grab_scene(rect, calib.active_size(ctx.cfg)) if rect else None
+    @staticmethod
+    def _screen_rect():
+        """整个虚拟桌面矩形，含副屏与负坐标；启动器/游戏外壳不共用窗口尺寸。"""
+        try:
+            user32 = ctypes.windll.user32
+            return [user32.GetSystemMetrics(76), user32.GetSystemMetrics(77),
+                    user32.GetSystemMetrics(78), user32.GetSystemMetrics(79)]
+        except Exception:
+            return None
+
+    def _scene(self, _ctx, _win):
+        # 模板从屏幕上框选得到，直接按真实屏幕像素匹配，绝不按启动器或游戏窗口尺寸缩放。
+        rect = self._screen_rect()
+        return win_mod.grab_scene(rect) if rect and rect[2] > 0 and rect[3] > 0 else None
 
     def _match(self, ctx, win, tpl, threshold):
         if tpl is None:

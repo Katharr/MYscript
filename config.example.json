@@ -208,9 +208,7 @@
         "launcher_timeout_sec": 120,
         "state_timeout_sec": 60
       },
-      "regions": {
-        "scene": null
-      },
+      "regions": {},
       "templates": {
         "start_game": null,
         "enter_game": null,

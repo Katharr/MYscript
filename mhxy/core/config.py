@@ -167,7 +167,7 @@ DEFAULT_CONFIG = {
                 "launcher_timeout_sec": 120,
                 "state_timeout_sec": 60
             },
-            "regions": {"scene": None},
+            "regions": {},
             "templates": {
                 "start_game": None,
                 "enter_game": None,
