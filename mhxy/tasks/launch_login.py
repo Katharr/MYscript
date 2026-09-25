@@ -6,6 +6,7 @@
 """
 
 import ctypes
+import random
 import time
 
 from ..core import accounts
@@ -78,6 +79,14 @@ class LaunchLoginTask(Task):
         timeout = float(loop.get("state_timeout_sec", 60))
         launcher_timeout = float(loop.get("launcher_timeout_sec", 120))
         recheck_after = max(0.5, float(loop.get("recheck_previous_after_sec", 3.0)))
+        # 用户拍板：点“切换”这一步要慢（先等 2~3 秒界面稳定），且找不到“已有角色”时反复回查切换。
+        wait_min = max(0.0, float(loop.get("switch_wait_min_sec", 2.0)))
+        switch_cfg = {
+            "wait_min": wait_min,
+            "wait_max": max(wait_min, float(loop.get("switch_wait_max_sec", 3.0))),
+            "retry_interval": max(1.0, float(loop.get("switch_retry_interval_sec", 2.5))),
+            "retry_max": max(1, int(loop.get("switch_retry_max", 6))),
+        }
 
         ctx.log("启动登录：%d 个档案，%s。" % (len(profiles), "演练模式" if dry_run else "实战模式"))
         for index, profile in enumerate(profiles, 1):
@@ -86,7 +95,7 @@ class LaunchLoginTask(Task):
             label = profile.get("label") or profile.get("expected_role_name") or ("档案 %d" % index)
             ctx.log("[%s] 开始处理（%d/%d）。" % (label, index, len(profiles)))
             result = self._run_profile(ctx, profile, templates, threshold, timeout,
-                                       launcher_timeout, recheck_after, dry_run)
+                                       launcher_timeout, recheck_after, switch_cfg, dry_run)
             if result == "ok":
                 ctx.log("[%s] 登录并完成窗口角色校验。" % label, level="hit")
             elif result == "stopped":
@@ -98,7 +107,8 @@ class LaunchLoginTask(Task):
         else:
             ctx.log("启动登录队列结束。")
 
-    def _run_profile(self, ctx, profile, templates, threshold, timeout, launcher_timeout, recheck_after, dry_run):
+    def _run_profile(self, ctx, profile, templates, threshold, timeout, launcher_timeout, recheck_after,
+                     switch_cfg, dry_run):
         label = profile.get("label") or profile.get("expected_role_name") or "档案"
         if dry_run:
             return "演练模式不启动程序"
@@ -119,6 +129,13 @@ class LaunchLoginTask(Task):
         state_at = time.time()
         rechecked_states = set()
         last_role_ocr_at = 0.0
+        switch_ready_at = 0.0          # 进入 WAIT_SWITCH 后允许点击“切换”的最早时刻（用户要求先等 2~3 秒）
+        switch_retries = 0             # “已有角色”没出现时重按“切换”的次数
+        last_switch_retry_at = 0.0
+        wait_min = switch_cfg["wait_min"]
+        wait_max = switch_cfg["wait_max"]
+        retry_interval = switch_cfg["retry_interval"]
+        retry_max = switch_cfg["retry_max"]
         while not ctx.should_stop():
             if win.rect() is None:
                 # 点击“开始游戏”后，启动器可能销毁原 HWND 并新建游戏外壳；按下一状态
@@ -132,6 +149,7 @@ class LaunchLoginTask(Task):
                 else:
                     self._interruptible_sleep(ctx, 0.35)
                     continue
+            elapsed = time.time() - state_at
             if state == "WAIT_ROLE":
                 # 角色选择页有清晰文本，直接 OCR 名册中的目标角色，不再维护脆弱的角色名截图模板。
                 now = time.time()
@@ -139,13 +157,42 @@ class LaunchLoginTask(Task):
                     last_role_ocr_at = now
                     if self._click_roster_role(ctx, win, profile):
                         return "ok"       # 用户确认：选中角色即视为本号流程结束
-            else:
+            elif state == "WAIT_SWITCH":
+                # 用户拍板：点“切换”要慢——进入已登录首页后先等 2~3 秒让界面稳定，再点。
+                if time.time() < switch_ready_at:
+                    self._interruptible_sleep(ctx, 0.2)
+                    continue
                 key, next_state, action = self._CLICK_STATES[state]
                 if self._click_template(ctx, win, templates.get(key), threshold, action):
                     state = next_state
                     state_at = time.time()
                     continue
-            elapsed = time.time() - state_at
+            elif state == "WAIT_EXISTING":
+                key, next_state, action = self._CLICK_STATES[state]
+                if self._click_template(ctx, win, templates.get(key), threshold, action):
+                    state = next_state
+                    state_at = time.time()
+                    continue
+                # 用户拍板：没找到“已有角色”就反复回查并重按“切换”，不是只补点一次。
+                now = time.time()
+                if switch_retries < retry_max and now - last_switch_retry_at >= retry_interval:
+                    last_switch_retry_at = now
+                    self._click_template(ctx, win, templates.get("switch_role"), threshold, "重新点击切换")
+                    switch_retries += 1
+                    state_at = time.time()      # 每次重试重新计时，避免还没重试够就整体超时
+                    ctx.log("未找到“已有角色”，重新点击切换（%d/%d）。" % (switch_retries, retry_max),
+                            level="warn")
+                    continue
+            else:
+                key, next_state, action = self._CLICK_STATES[state]
+                if self._click_template(ctx, win, templates.get(key), threshold, action):
+                    if next_state == "WAIT_SWITCH":
+                        delay = random.uniform(wait_min, wait_max)
+                        switch_ready_at = time.time() + delay
+                        ctx.log("已进入游戏页，等待 %.1f 秒后再点切换。" % delay)
+                    state = next_state
+                    state_at = time.time()
+                    continue
             previous = self._previous_template_for_state(state, templates)
             if previous is not None and state not in rechecked_states and elapsed >= recheck_after:
                 prev_tpl, prev_action = previous
@@ -257,7 +304,6 @@ class LaunchLoginTask(Task):
         previous = {
             "WAIT_ENTER": (templates.get("start_game"), "开始游戏"),
             "WAIT_SWITCH": (templates.get("enter_game"), "进入游戏"),
-            "WAIT_EXISTING": (templates.get("switch_role"), "切换"),
             "WAIT_ROLE": (templates.get("existing_role"), "已有角色"),
         }
         item = previous.get(state)

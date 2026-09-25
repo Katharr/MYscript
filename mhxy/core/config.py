@@ -166,7 +166,11 @@ DEFAULT_CONFIG = {
                 "match_threshold": 0.85,
                 "launcher_timeout_sec": 120,
                 "state_timeout_sec": 60,
-                "recheck_previous_after_sec": 3.0
+                "recheck_previous_after_sec": 3.0,
+                "switch_wait_min_sec": 2.0,      # 进入已登录首页后，点“切换”前先等的秒数（用户拍板 2~3 秒）
+                "switch_wait_max_sec": 3.0,
+                "switch_retry_interval_sec": 2.5,  # 找不到“已有角色”时，每隔多久重按一次“切换”
+                "switch_retry_max": 6              # 重按“切换”的次数上限（0=不重试）
             },
             "regions": {},
             "templates": {
