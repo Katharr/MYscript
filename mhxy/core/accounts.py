@@ -1,35 +1,18 @@
 # -*- coding: utf-8 -*-
 """
-角色名识别（纯文件读取，零 OCR）。把「号1/号2/号3」换成真实角色名，如「王昭君_（83）」。
+角色名识别：用客户端标签条的屏幕像素 OCR 读取【当前可见角色名】，再用客户端文件名册核验。
 
-## 为什么不在窗口 API 里做（实测全灭，别再回头试）
-2026-09 客户端，本机实测「窗口 → 角色名」在 Windows 侧【一条都走不通】：
-  · GetWindowText：顶层标题恒为「梦幻西游：时空」，角色名是画在标签页上的像素；
-  · 子窗口枚举：shell / game 整个进程树里没有任何带文字的窗口；
-  · UI Automation / MSAA：连提权后都是空树（标签是自绘控件，没实现无障碍 provider）；
-  · 进程命令行：`MyGame_x64r.exe __MYTABCTRL_TAG___0_0_0_38_653_490_0.637695_3292_1_2_...`
-    只有外壳 PID 和窗口几何，没有账号/角色；
-  · 枚举进程句柄：客户端只把日志文件开着，LocalData\\<role_id>\\ 下的文件全是空闲的，绑不上。
-结论：显示层没有可读路径。别再从这边想办法（尤其别上 OCR——用户明确不要）。
+## 身份来源
+`UserDefault.xml` 的 `XyqPocket_LoginInfo_*` 节点是本机角色名册，含 role_id / 角色名 / 等级；
+`last_server_info` 只补全新登录角色。它们不再承担「窗口 → 角色」配对，因为一个 MyTabCtrl
+外壳可同时挂多个 MyGame 渲染进程，按进程启动时间猜会把窗口标成错误角色。
 
-## 真正能读的：客户端自己写的两个纯文本文件
-登录时客户端会把角色信息落盘（都是 UTF-8、无需 OCR、加锁打开也读得到）：
-  1) <安装目录>\\LocalData\\last_server_info —— JSON，`cName` 就是角色名，
-     另有 role_id / hostname(服务器名) / hostid(服号)。
-     ⚠ 全局「最后一次登录」，多开时各客户端互相覆盖，只能拿到最后一个。
-  2) <安装目录>\\LocalData\\UserDefault.xml —— 节点 <XyqPocket_LoginInfo_<hostid>_<role_id>>，
-     值形如 `时空区:6423:万里江山:429843638:1790259155:6:王昭君_:83:2:0`，即
-     `大区:hostid:服务器:role_id:登录时间戳:?:角色名:等级:?:?`。这是【本机角色名册】。
-     客户端运行期间会周期性重写这个文件，故读的时候可能撞上写入，read 带重试。
+真正用于窗口身份的是客户端最上方标签条：它把当前激活角色名画成像素。这里用本地 RapidOCR
+读取这块固定区域，并且只接受能唯一匹配上述名册的结果。OCR 不确定、标签条被遮挡、或名字在
+名册中重复时，一律退回「号N」，绝不猜测。整个过程只截屏和读取客户端文本文件，不读内存、不
+注入、不抓包，也无需用户额外标定。
 
-## 窗口 ↔ 角色 怎么对上（关键，也是唯一的启发式）
-名册只有 role_id → 角色名，没有窗口身份。靠的是**登录时间戳精确到秒**：
-实测窗口的游戏进程启动 22:12:20、该角色 login_ts = 1790259155 = 22:12:35，差 15 秒（登录耗时）。
-故链路是：窗口的 shell 进程 → 它的 MyGame_x64r 子进程 → GetProcessTimes 启动时刻，
-再和名册里每个角色的 login_ts 做 1:1 最优配对（|Δ-15s| 最小者胜，Δ 必须在 [0,180] 内）。
-
-⚠ 已知局限（用户知情并选择不做缩略图兜底）：几个号**同一秒**登录会分不清，
-   该窗口退回「号N」。此时看游戏窗口左上角标签页即可人工分辨。
+进程时间戳的辅助函数仍保留给历史诊断工具使用，但不再参与界面/任务的角色显示。
 
 ## 安装目录怎么找
 从「窗口所属进程的 exe 路径」往上找含 LocalData 的祖先目录，故换盘/多版本都不用配置；
@@ -38,11 +21,14 @@ config.game_dir 只是手动兜底覆盖（走 set_game_dir，与 window.set_gam
 
 import ctypes
 import ctypes.wintypes
+import difflib
 import json
 import os
 import re
 import threading
 import time
+
+import cv2
 
 from . import window as win_mod
 
@@ -50,14 +36,23 @@ from . import window as win_mod
 _GAME_EXE = "mygame_x64r.exe"        # 真正跑游戏的渲染子进程（见 core/window 模块头）
 _LOGIN_RE = re.compile(r"<(XyqPocket_LoginInfo_[^>]+)>([^<]*)</\1>")
 
-_TYPICAL_LOGIN = 15.0                # 实测登录耗时约 15s：在候选里挑「最像正常登录」的那个
-_LOGIN_WINDOW = 180.0                # Δ 超过这个秒数就不认为该角色属于这个窗口
-_TTL = 20.0                          # 绑定结果缓存时长：GUI 会反复问，别每次都枚举进程
+_TYPICAL_LOGIN = 15.0                # 仅历史诊断：原时间戳配对的典型登录耗时
+_LOGIN_WINDOW = 180.0                # 仅历史诊断：原时间戳配对的最大时间窗
+_TTL = 4.0                           # 标签切换会变角色名，缓存不能太久
+
+# 标签条相对窗口的固定身份区：避开右侧关闭按钮，只覆盖图标 + 当前角色名。
+_TAB_ROI = (0.04, 0.005, 0.255, 0.075)
+_OCR_MIN_CONFIDENCE = 0.55
+_OCR_MIN_MATCH = 0.84
+_OCR_MIN_MARGIN = 0.12
 
 _lock = threading.RLock()
 _cache = {"key": None, "at": 0.0, "labels": {}, "order": []}
 _data_dir = {"path": "", "at": 0.0}
 _game_dir = ""                       # config.game_dir 覆盖（空 = 自动探测）
+_ocr_lock = threading.Lock()
+_ocr_engine = None
+_ocr_error = None
 
 
 # ----------------------------------------------------------------------
@@ -325,31 +320,128 @@ def assign_roles(shell_pids, starts_by_shell, names):
     return out
 
 
+def _normalize_name(text):
+    """去掉 OCR 常漏/常误识的分隔符，保留中英文与数字用于名册比对。"""
+    return "".join(ch for ch in str(text or "").lower() if ch.isalnum())
+
+
+def match_ocr_result(result, names):
+    """OCR 行结果 + 客户端名册 → 唯一 role_id；不确定时返回 None。
+
+    这是纯函数，刻意不接受 OCR 结果之外的猜测。角色名就是有限白名单，故即使 OCR 识出
+    多余符号或漏掉末尾下划线，也能可靠纠正；两个候选太接近时必须放弃。
+    """
+    scored = {}
+    for item in result or []:
+        try:
+            text, confidence = str(item[1] or ""), float(item[2])
+        except (IndexError, TypeError, ValueError):
+            continue
+        if confidence < _OCR_MIN_CONFIDENCE:
+            continue
+        got = _normalize_name(text)
+        if len(got) < 2:
+            continue
+        for rid, rec in names.items():
+            wanted = _normalize_name(rec.get("name"))
+            if len(wanted) < 2:
+                continue
+            similarity = difflib.SequenceMatcher(None, wanted, got).ratio()
+            if wanted in got:
+                similarity = max(similarity, len(wanted) / max(len(got), 1))
+            if similarity < _OCR_MIN_MATCH:
+                continue
+            score = 0.7 * similarity + 0.3 * confidence
+            scored[rid] = max(scored.get(rid, 0.0), score)
+    if not scored:
+        return None
+    ranked = sorted(((score, rid) for rid, score in scored.items()), reverse=True)
+    best_score, best_rid = ranked[0]
+    if len(ranked) > 1 and best_score - ranked[1][0] < _OCR_MIN_MARGIN:
+        return None
+    return best_rid
+
+
+def _get_ocr_engine():
+    """按需初始化本地 OCR，避免启动 GUI 时加载 ONNX 模型。失败后安全降级到「号N」。"""
+    global _ocr_engine, _ocr_error
+    with _ocr_lock:
+        if _ocr_engine is not None:
+            return _ocr_engine
+        if _ocr_error is not None:
+            return None
+        try:
+            from rapidocr_onnxruntime import RapidOCR
+            _ocr_engine = RapidOCR(text_score=_OCR_MIN_CONFIDENCE, print_verbose=False)
+        except Exception as e:
+            _ocr_error = str(e)
+            return None
+    return _ocr_engine
+
+
+def ocr_status():
+    """返回 OCR 可用状态，供诊断工具输出，不触发模型初始化。"""
+    with _ocr_lock:
+        if _ocr_engine is not None:
+            return "ready"
+        if _ocr_error:
+            return "unavailable: %s" % _ocr_error
+    return "not_loaded"
+
+
+def _tab_name_roi(win):
+    """截取客户端顶部标签里的图标和角色名，按当前窗口尺寸同比缩放后放大给 OCR。"""
+    rect = win.rect()
+    if rect is None:
+        return None
+    try:
+        img = win_mod.grab(rect)
+        h, w = img.shape[:2]
+        x0 = max(0, int(round(w * _TAB_ROI[0])))
+        y0 = max(0, int(round(h * _TAB_ROI[1])))
+        x1 = min(w, int(round(w * _TAB_ROI[2])))
+        y1 = min(h, int(round(h * _TAB_ROI[3])))
+        if x1 - x0 < 20 or y1 - y0 < 12:
+            return None
+        roi = img[y0:y1, x0:x1]
+        # 原标签字高约十余像素；三倍插值 + 白边显著提高中文小字的检出率。
+        roi = cv2.resize(roi, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
+        return cv2.copyMakeBorder(roi, 12, 12, 12, 12, cv2.BORDER_CONSTANT, value=(255, 255, 255))
+    except Exception:
+        return None
+
+
+def _ocr_role_id(win, names):
+    engine = _get_ocr_engine()
+    roi = _tab_name_roi(win)
+    if engine is None or roi is None:
+        return None
+    try:
+        result, _elapsed = engine(roi)
+    except Exception:
+        return None
+    return match_ocr_result(result, names)
+
+
 def _compute(wins):
-    """算出 {hwnd: 显示名}。认不出的窗口不放进结果，由调用方退回「号N」。"""
+    """算出 {hwnd: 显示名}。只采信当前窗口标签条 OCR 的唯一名册匹配。"""
     labels = {}
     names = roster(wins)
     if not names:
         return labels
-    by_parent = {}
-    for p in _proc_table():
-        if p["exe"] == _GAME_EXE:
-            by_parent.setdefault(p["ppid"], []).append(p["pid"])
-    shell_pids = [_window_pid(_hwnd(w)) for w in wins]
-    starts = {}
-    for spid in set(shell_pids):
-        starts[spid] = [s for s in (_start_epoch(g) for g in by_parent.get(spid, [])) if s]
-    for i, rid in assign_roles(shell_pids, starts, names).items():
-        label = display_name(names[rid])
-        hwnd = _hwnd(wins[i])
-        if label and hwnd:
-            labels[hwnd] = label
+    for w in wins:
+        rid = _ocr_role_id(w, names)
+        hwnd = _hwnd(w)
+        if rid and hwnd:
+            label = display_name(names[rid])
+            if label:
+                labels[hwnd] = label
     return labels
 
 
 def labels_for(wins):
     """按 wins 的顺序返回显示名列表（与 window.locate_all 的「号N」序号严格同序）。
-    认不出角色的位置退回「号N」。结果带缓存，避免 GUI 反复调用时重复枚举进程。"""
+    认不出角色的位置退回「号N」。结果短暂缓存，避免 GUI 反复 OCR 同一个标签条。"""
     wins = list(wins)
     order = [_hwnd(w) for w in wins]
     key = tuple(order)

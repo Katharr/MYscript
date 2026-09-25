@@ -13,6 +13,7 @@
 窗口身份用「位置序号」而非 HWND——三个号标题相同、HWND 重启会变，按摆放位置认号最稳。
 """
 
+import threading
 import time
 
 import customtkinter as ctk
@@ -142,15 +143,15 @@ class WindowPickerDialog(ctk.CTkToplevel):
         self._wins = []
         self._thumbs = []
         self._labels = []
+        self._label_token = object()      # 使上一次刷新尚未返回的 OCR 结果失效
         if not wins:
             self._render()
             return
 
-        # 角色名（读客户端文件；认不出退回「号N」）。失败不影响选窗口，绝不让它把对话框搞崩。
-        try:
-            self._labels = accounts.labels_for(wins)
-        except Exception:
-            self._labels = [accounts.fallback_label(i) for i in range(len(wins))]
+        # OCR 首次加载模型较慢，先按「号N」即时绘制，识别完成后再后台刷新真实名字。
+        self._labels = [accounts.fallback_label(i) for i in range(len(wins))]
+        token = object()
+        self._label_token = token
 
         # 透明化批量截缩略图（alpha=0 不被 mss 拍到，但不整窗重建，省闪烁）
         self._set_alpha(0.0)
@@ -166,6 +167,32 @@ class WindowPickerDialog(ctk.CTkToplevel):
             self.lift()
             self.focus_force()
         self._render()
+
+        def read_labels():
+            try:
+                labels = accounts.labels_for(wins)
+            except Exception:
+                labels = [accounts.fallback_label(i) for i in range(len(wins))]
+
+            def apply():
+                if token is not getattr(self, "_label_token", None):
+                    return
+                try:
+                    if not self.winfo_exists():
+                        return
+                    # OCR 期间用户可能已勾选/取消窗口，重绘前先保留即时选择。
+                    self._sel = {i for i, var in self._multi_vars.items() if var.get()}
+                    self._labels = labels
+                    self._render()
+                except Exception:
+                    pass
+
+            try:
+                self.app.ui_post(apply)
+            except Exception:
+                pass
+
+        threading.Thread(target=read_labels, daemon=True).start()
 
     def _make_thumb(self, rect):
         if rect is None or Image is None:

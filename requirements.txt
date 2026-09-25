@@ -16,5 +16,8 @@ pygetwindow
 customtkinter
 Pillow
 
+# 本地中文 OCR（只读取游戏客户端标签条上的当前角色名）
+rapidocr-onnxruntime==1.4.4
+
 # 可选备用点击后端：默认点击在游戏里没反应时再装，并把设置里的输入后端改成 pydirectinput
 # pydirectinput

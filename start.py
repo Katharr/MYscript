@@ -17,7 +17,8 @@ os.chdir(BASE)
 sys.path.insert(0, BASE)
 
 # 运行时依赖的 import 名（注意 Pillow 的 import 名是 PIL）。
-_DEP_MODULES = ["cv2", "mss", "numpy", "pyautogui", "pygetwindow", "customtkinter", "PIL"]
+_DEP_MODULES = ["cv2", "mss", "numpy", "pyautogui", "pygetwindow", "customtkinter", "PIL",
+                "rapidocr_onnxruntime"]
 
 # 提权/去黑窗最多发起一次。一旦发起（无论成功还是被拒），就通过环境变量把这个标记
 # 传给子进程，子进程据此不再尝试提权——否则被拒后重启的进程会反复弹 UAC、甚至死循环。

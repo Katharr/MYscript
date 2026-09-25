@@ -51,10 +51,10 @@
    `targets.multi` 由勾选数量派生（字段结构不变，任务照旧读它）；不要再加坡模式开关/单选控件。
    操作某号前先 `window.activate()` 切前台（`_force_foreground` 绕过焦点抢占并校验，失败则跳过该号、下轮重试，
    绝不在后台号瞎点）。
-10. **界面上的「号N」一律显示真实角色名「角色名（等级）」（用户拍板）**：名字只能从**游戏客户端自己的文件**读
-   （`<安装目录>\LocalData\last_server_info` 的 `cName` + `UserDefault.xml` 的 `XyqPocket_LoginInfo_*` 名册），
-   窗口↔角色靠**登录时间戳精确到秒**配对。⚠ **别再回头试窗口标题/子窗口/UIA/MSAA/进程命令行/枚举句柄，
-   也绝不上 OCR**——实测全灭，理由与实测记录见 `core/accounts.py` 模块头。认不出就退回「号N」，不猜。
+10. **界面上的「号N」一律显示真实角色名「角色名（等级）」（用户拍板）**：`UserDefault.xml` / `last_server_info`
+   只提供角色名册；窗口身份必须 OCR **客户端顶部标签条中当前激活角色名的像素**，再与名册唯一匹配。
+   ⚠ **不再用登录时间戳、窗口标题 API、子窗口/UIA/MSAA/进程命令行或枚举句柄猜测**：一个外壳可挂多个渲染进程，
+   会错配。OCR 不确定/名字重复就退回「号N」，不猜；OCR 只截屏，不读内存、不注入、不抓包，也无需人工标定。
 
 ## 架构（三层，包名 mhxy/）
 > 文件树是「地图」，只给一句话功能；实现细节看各文件 docstring 与 memory，别往这里抄。
@@ -66,7 +66,7 @@ templates/          装备/模板图   captures/  命中截图
 mhxy/
   core/   通用基础设施（与玩法无关）
     config.py   配置读写（DEFAULT_CONFIG / load/save / task_config / set_task_config）
-    accounts.py 角色名识别（读客户端 LocalData 纯文本；把界面/日志里的「号N」换成「角色名（等级）」）——见约束 10
+    accounts.py 角色名识别（OCR 客户端标签条当前角色名 + LocalData 名册核验；把界面/日志里的「号N」换成「角色名（等级）」）——见约束 10
     window.py   GameWindow（locate/rect/activate/坐标换算）+ grab() 截图 + set_dpi_aware()
     vision.py   load_template / save_image / match() / frame_diff()（兼容中文路径）
     scan.py     通用「滚动查找」scroll_search()（翻列表/翻包裹统一底层）；详见 docstring + memory scroll-search-scan
