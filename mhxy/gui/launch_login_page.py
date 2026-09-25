@@ -4,6 +4,7 @@
 import os
 import time
 import uuid
+import tkinter as tk
 from tkinter import filedialog
 
 import customtkinter as ctk
@@ -100,9 +101,12 @@ class LaunchLoginPage(ctk.CTkFrame):
         head.grid(row=2, column=0, sticky="ew", padx=4, pady=(0, 8))
         head.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(head, text="启动队列", font=self.fonts["h2"], text_color=T.TEXT).grid(row=0, column=0, sticky="w")
-        ctk.CTkButton(head, text="＋ 新增档案", font=self.fonts["small"], height=32, width=100,
-                      corner_radius=T.RADIUS_SM, fg_color=T.SUCCESS, hover_color=T.SUCCESS_HOVER,
-                      text_color=T.ON_ACCENT, command=self._add_profile).grid(row=0, column=1, sticky="e")
+        # 留住按钮引用：角色列表要贴在它下沿弹出（见 _open_role_picker）。
+        self.btn_add = ctk.CTkButton(head, text="＋ 新增档案", font=self.fonts["small"], height=32,
+                                     width=100, corner_radius=T.RADIUS_SM, fg_color=T.SUCCESS,
+                                     hover_color=T.SUCCESS_HOVER, text_color=T.ON_ACCENT,
+                                     command=self._add_profile)
+        self.btn_add.grid(row=0, column=1, sticky="e")
         self.profile_list = ctk.CTkScrollableFrame(self, fg_color="transparent")
         self.profile_list.grid(row=3, column=0, sticky="nsew", padx=4)
         self.profile_list.grid_columnconfigure(0, weight=1)
@@ -292,25 +296,36 @@ class LaunchLoginPage(ctk.CTkFrame):
         return self._account_cfg().get("account_launch", {}).get("profiles") or []
 
     def _open_role_picker(self, roles):
-        """只有下拉框的小弹窗：选中哪个角色就新增哪个档案，选完即关。"""
-        win = ctk.CTkToplevel(self)
-        win.title("新增档案")
-        win.geometry("340x96")
-        win.configure(fg_color=T.BG)
-        values = list(roles)
-        var = ctk.StringVar(value=values[0])
+        """在「＋ 新增档案」按钮【正下方】弹出角色列表，选中即新增。
 
-        def _picked(value):
-            pair = roles.get(value)
-            win.destroy()
-            if pair:
-                self._create_profile(pair[0], pair[1])
+        用原生 tk.Menu + tk_popup 而不是另开一个 Toplevel：菜单就贴在按钮下沿，
+        鼠标不用跑去别处找窗口（用户明确要求，别再改回独立弹窗）。
+        """
+        menu = tk.Menu(self, tearoff=0, bd=0, relief="flat",
+                       bg=T.resolve(T.SURFACE), fg=T.resolve(T.TEXT),
+                       activebackground=T.resolve(T.BTN_HOVER), activeforeground=T.resolve(T.TEXT),
+                       font=(T.FONT_FAMILY, 11))
+        for value in roles:
+            menu.add_command(label=value, command=lambda v=value: self._picked_role(roles, v))
+        self._role_menu = menu        # 留住引用：tk_popup 后菜单仍要被引用，否则会被 GC 掉
+        x, y = self._menu_anchor(getattr(self, "btn_add", None),
+                                 self.winfo_rootx() + 40, self.winfo_rooty() + 40)
+        try:
+            menu.tk_popup(x, y)
+        finally:
+            menu.grab_release()
 
-        ctk.CTkOptionMenu(win, values=values, variable=var, height=36, width=300,
-                          font=self.fonts["body"], fg_color=T.BTN, button_color=T.SURFACE,
-                          button_hover_color=T.BTN_HOVER, text_color=T.TEXT,
-                          command=_picked).pack(padx=20, pady=(26, 20))
-        win.after(80, win.lift)
+    @staticmethod
+    def _menu_anchor(anchor, fallback_x, fallback_y):
+        """弹出菜单的屏幕坐标：贴在按钮【下沿】（左对齐），鼠标不用跑。没有按钮就用兜底坐标。"""
+        if anchor is None:
+            return fallback_x, fallback_y
+        return anchor.winfo_rootx(), anchor.winfo_rooty() + anchor.winfo_height()
+
+    def _picked_role(self, roles, value):
+        pair = roles.get(value)
+        if pair:
+            self._create_profile(pair[0], pair[1])
 
     def _create_profile(self, role_id, role_name):
         """按角色建一个档案：档案名直接用角色名，不用再让人手打一遍。"""

@@ -358,6 +358,18 @@ class LaunchLoginTests(unittest.TestCase):
 
         self.assertEqual(list(P._available_roles(_Stub())), ["乙（69） · r2"])
 
+    def test_role_picker_anchors_under_add_button(self):
+        """角色列表必须贴在「＋ 新增档案」按钮下沿弹出，不能另开一个飘到别处的窗口。"""
+        from mhxy.gui.launch_login_page import LaunchLoginPage as P
+
+        class _Btn:
+            def winfo_rootx(self): return 500
+            def winfo_rooty(self): return 200
+            def winfo_height(self): return 32
+
+        self.assertEqual(P._menu_anchor(_Btn(), 1, 2), (500, 232))
+        self.assertEqual(P._menu_anchor(None, 1, 2), (1, 2))     # 没按钮时退回兜底坐标
+
     def test_create_profile_uses_role_name_as_label(self):
         """选一个角色就建一个档案，档案名直接用角色名，不再要求手打一遍。"""
         from mhxy.gui.launch_login_page import LaunchLoginPage as P
