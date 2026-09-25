@@ -76,11 +76,17 @@ class LaunchLoginTests(unittest.TestCase):
 
     def test_state_template_uses_next_expected_screen(self):
         task = LaunchLoginTask()
-        templates = {"start_game": "start", "enter_game": "enter", "in_game_ready": "ready"}
+        templates = {"start_game": "start", "enter_game": "enter", "existing_role": "existing",
+                     "in_game_ready": "ready"}
         self.assertEqual(task._template_for_state("WAIT_START", templates, "role"), "start")
         self.assertEqual(task._template_for_state("WAIT_ENTER", templates, "role"), "enter")
         self.assertEqual(task._template_for_state("WAIT_ROLE", templates, "role"), "role")
         self.assertEqual(task._template_for_state("WAIT_READY", templates, "role"), "ready")
+        self.assertEqual(task._previous_template_for_state("WAIT_ENTER", templates, "role"),
+                         ("start", "开始游戏"))
+        self.assertEqual(task._previous_template_for_state("WAIT_ROLE", templates, "role"),
+                         (templates.get("existing_role"), "已有角色"))
+        self.assertIsNone(task._previous_template_for_state("WAIT_START", templates, "role"))
 
     def test_verified_launch_binding_is_runtime_only(self):
         win = _Window()

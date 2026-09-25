@@ -79,8 +79,9 @@ class LaunchLoginTask(Task):
         loop = tc.get("loop") or {}
         dry_run = bool(tc.get("dry_run", True))
         threshold = float(loop.get("match_threshold", 0.85))
-        timeout = float(loop.get("state_timeout_sec", 35))
+        timeout = float(loop.get("state_timeout_sec", 60))
         launcher_timeout = float(loop.get("launcher_timeout_sec", 120))
+        recheck_after = max(0.5, float(loop.get("recheck_previous_after_sec", 3.0)))
 
         ctx.log("启动登录：%d 个档案，%s。" % (len(profiles), "演练模式" if dry_run else "实战模式"))
         for index, profile in enumerate(profiles, 1):
@@ -89,7 +90,7 @@ class LaunchLoginTask(Task):
             label = profile.get("label") or profile.get("expected_role_name") or ("档案 %d" % index)
             ctx.log("[%s] 开始处理（%d/%d）。" % (label, index, len(profiles)))
             result = self._run_profile(ctx, profile, templates, threshold, timeout,
-                                       launcher_timeout, dry_run)
+                                       launcher_timeout, recheck_after, dry_run)
             if result == "ok":
                 ctx.log("[%s] 登录并完成窗口角色校验。" % label, level="hit")
             elif result == "stopped":
@@ -101,7 +102,7 @@ class LaunchLoginTask(Task):
         else:
             ctx.log("启动登录队列结束。")
 
-    def _run_profile(self, ctx, profile, templates, threshold, timeout, launcher_timeout, dry_run):
+    def _run_profile(self, ctx, profile, templates, threshold, timeout, launcher_timeout, recheck_after, dry_run):
         label = profile.get("label") or profile.get("expected_role_name") or "档案"
         if self._already_logged_in(ctx, profile, templates.get("in_game_ready"), threshold):
             ctx.log("[%s] 已检测到对应游戏窗口，跳过启动。" % label)
@@ -123,6 +124,7 @@ class LaunchLoginTask(Task):
 
         state = "WAIT_START"
         state_at = time.time()
+        rechecked_states = set()
         role_path = profile.get("role_template")
         role_tpl = vision.load_template(role_path) if role_path else None
         while not ctx.should_stop():
@@ -157,7 +159,17 @@ class LaunchLoginTask(Task):
                     state = next_state
                     state_at = time.time()
                     continue
-            if time.time() - state_at > timeout:
+            elapsed = time.time() - state_at
+            previous = self._previous_template_for_state(state, templates, role_tpl)
+            if previous is not None and state not in rechecked_states and elapsed >= recheck_after:
+                prev_tpl, prev_action = previous
+                # 只在当前状态未出现一段时间后回查一次，防止首帧加载尚未完成时重复点上一步。
+                ctx.log("当前步骤未识别，回查上一步：%s。" % prev_action, level="warn")
+                self._click_template(ctx, win, prev_tpl, threshold, "重新点击" + prev_action)
+                rechecked_states.add(state)
+                state_at = time.time()
+                continue
+            if elapsed > timeout:
                 return "%s 超时" % state
             self._interruptible_sleep(ctx, 0.35)
         return "stopped"
@@ -254,6 +266,19 @@ class LaunchLoginTask(Task):
         if state == "WAIT_ROLE":
             return role_tpl
         return templates.get("in_game_ready")
+
+    @staticmethod
+    def _previous_template_for_state(state, templates, role_tpl):
+        """当前步骤未出现时允许回查一次的上一步模板与动作名。"""
+        previous = {
+            "WAIT_ENTER": (templates.get("start_game"), "开始游戏"),
+            "WAIT_SWITCH": (templates.get("enter_game"), "进入游戏"),
+            "WAIT_EXISTING": (templates.get("switch_role"), "切换"),
+            "WAIT_ROLE": (templates.get("existing_role"), "已有角色"),
+            "WAIT_READY": (role_tpl, "预设角色"),
+        }
+        item = previous.get(state)
+        return item if item and item[0] is not None else None
 
     @staticmethod
     def _screen_rect():

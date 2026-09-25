@@ -165,7 +165,8 @@ DEFAULT_CONFIG = {
             "loop": {
                 "match_threshold": 0.85,
                 "launcher_timeout_sec": 120,
-                "state_timeout_sec": 60
+                "state_timeout_sec": 60,
+                "recheck_previous_after_sec": 3.0
             },
             "regions": {},
             "templates": {
