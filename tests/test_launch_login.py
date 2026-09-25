@@ -86,17 +86,19 @@ class LaunchLoginTests(unittest.TestCase):
         self.assertEqual(task._previous_template_for_state("WAIT_ROLE", templates),
                          (templates.get("existing_role"), "已有角色"))
         self.assertIsNone(task._previous_template_for_state("WAIT_START", templates))
-        # “切换”回查已由 WAIT_EXISTING 专用分支反复执行，不能再走通用的一次性回查，否则会重复点击。
-        self.assertIsNone(task._previous_template_for_state("WAIT_EXISTING", templates))
+        # 通用规则：每一步没成功都回查上一步，故 WAIT_EXISTING 也要回查到“切换”。
+        self.assertEqual(task._previous_template_for_state("WAIT_EXISTING", {"switch_role": "sw"}),
+                         ("sw", "切换"))
 
-    def test_switch_step_defaults_match_user_request(self):
+    def test_recheck_and_switch_defaults_match_user_request(self):
         loop = DEFAULT_CONFIG["tasks"]["launch_login"]["loop"]
         self.assertEqual(loop["switch_wait_min_sec"], 2.0)
         self.assertEqual(loop["switch_wait_max_sec"], 3.0)
-        self.assertGreaterEqual(loop["switch_retry_max"], 2)
+        self.assertGreaterEqual(loop["recheck_max"], 2)          # 反复回查，不是只补点一次
+        self.assertGreaterEqual(loop["recheck_interval_sec"], 1.0)
 
     def test_switch_waits_then_retries_until_existing_appears(self):
-        """顺序验证：进入游戏页后先等待再点“切换”；“已有角色”没出现时反复重按“切换”。"""
+        """顺序验证：进入游戏页后先等待再点“切换”；“已有角色”没出现时反复回查“切换”。"""
         cfg = copy.deepcopy(DEFAULT_CONFIG)
         cfg["account_launch"]["launcher_path"] = os.path.abspath(sys.executable)
         cfg["account_launch"]["profiles"] = [{
@@ -107,8 +109,7 @@ class LaunchLoginTests(unittest.TestCase):
         tc["dry_run"] = False
         tc["templates"] = {key: key + ".png" for key in tc["templates"]}
         tc["loop"].update({"switch_wait_min_sec": 0.2, "switch_wait_max_sec": 0.2,
-                           "switch_retry_interval_sec": 0.05, "switch_retry_max": 3,
-                           "state_timeout_sec": 5.0, "recheck_previous_after_sec": 0.05})
+                           "state_timeout_sec": 5.0})
 
         task = LaunchLoginTask()
         events = []
@@ -127,7 +128,7 @@ class LaunchLoginTests(unittest.TestCase):
             if action == "重新点击切换":
                 seen["switch_retries"] += 1
             if action == "点击已有角色":
-                return seen["switch_retries"] >= 3      # 重按 3 次后才出现“已有角色”
+                return seen["switch_retries"] >= 3      # 回查 3 次后才出现“已有角色”
             return True
 
         with mock.patch.object(task, "_desktop_hwnds", return_value=set()), \
@@ -137,9 +138,9 @@ class LaunchLoginTests(unittest.TestCase):
              mock.patch.object(task, "_click_roster_role", return_value=True), \
              mock.patch("mhxy.tasks.launch_login.launcher.launch", return_value=(True, "")):
             result = task._run_profile(_RunCtx(cfg), cfg["account_launch"]["profiles"][0],
-                                      {k: object() for k in tc["templates"]}, 0.85, 5.0, 1.0, 0.05,
-                                      {"wait_min": 0.2, "wait_max": 0.2,
-                                       "retry_interval": 0.05, "retry_max": 3}, False)
+                                      {k: object() for k in tc["templates"]}, 0.85, 5.0, 1.0,
+                                      {"after": 0.05, "interval": 0.05, "max": 3},
+                                      {"wait_min": 0.2, "wait_max": 0.2}, False)
 
         actions = [a for _t, a in events]
         self.assertEqual(result, "ok")
@@ -148,6 +149,48 @@ class LaunchLoginTests(unittest.TestCase):
         self.assertGreaterEqual(switch_at - enter_at, 0.2)          # 先等 2~3 秒再点切换
         self.assertEqual(actions.count("重新点击切换"), 3)          # 反复回查切换，不限一次
         self.assertEqual(actions[-1], "点击已有角色")
+
+    def test_any_step_repeatedly_rechecks_previous(self):
+        """通用规则验证：不是只有“切换”步反复回查，任何步没成功都反复回查上一步。"""
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        cfg["account_launch"]["profiles"] = [{
+            "id": "main", "label": "主号", "enabled": True,
+            "expected_role_id": "r1", "expected_role_name": "角色",
+        }]
+        tc = cfg["tasks"]["launch_login"]
+        tc["dry_run"] = False
+        task = LaunchLoginTask()
+        actions = []
+        seen = {"start_retries": 0}
+
+        class _Win:
+            def rect(self): return [0, 0, 800, 600]
+            def activate(self): return True
+
+        class _RunCtx(_Ctx):
+            def should_stop(self): return False
+            def log(self, msg, level="info"): pass
+
+        def fake_click(ctx, win, tpl, threshold, action):
+            actions.append(action)
+            if action == "重新点击开始游戏":
+                seen["start_retries"] += 1
+            if action == "点击进入游戏":
+                return seen["start_retries"] >= 3      # 回查“开始游戏”3 次后才出现“进入游戏”
+            return True
+
+        with mock.patch.object(task, "_desktop_hwnds", return_value=set()), \
+             mock.patch.object(task, "_wait_new_window", return_value=_Win()), \
+             mock.patch.object(task, "_interruptible_sleep", lambda *a: None), \
+             mock.patch.object(task, "_click_template", fake_click), \
+             mock.patch.object(task, "_click_roster_role", return_value=True), \
+             mock.patch("mhxy.tasks.launch_login.launcher.launch", return_value=(True, "")):
+            result = task._run_profile(_RunCtx(cfg), cfg["account_launch"]["profiles"][0],
+                                      {k: object() for k in tc["templates"]}, 0.85, 5.0, 1.0,
+                                      {"after": 0.05, "interval": 0.05, "max": 4},
+                                      {"wait_min": 0.0, "wait_max": 0.0}, False)
+        self.assertEqual(result, "ok")
+        self.assertEqual(actions.count("重新点击开始游戏"), 3)
 
     def test_roster_ocr_returns_target_text_center(self):
         fake_engine = mock.Mock(return_value=([
