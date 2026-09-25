@@ -214,8 +214,7 @@
         "start_game": null,
         "enter_game": null,
         "switch_role": null,
-        "existing_role": null,
-        "in_game_ready": null
+        "existing_role": null
       }
     },
     "sniper": {

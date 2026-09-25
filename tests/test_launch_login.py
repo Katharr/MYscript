@@ -49,7 +49,7 @@ class LaunchLoginTests(unittest.TestCase):
         cfg["account_launch"]["launcher_path"] = os.path.abspath(sys.executable)
         cfg["account_launch"]["profiles"] = [{
             "id": "main", "label": "主号", "enabled": True,
-            "expected_role_id": "r1", "expected_role_name": "角色", "role_template": "role.png",
+            "expected_role_id": "r1", "expected_role_name": "角色",
         }]
         cfg["tasks"]["launch_login"]["dry_run"] = False
         for key in cfg["tasks"]["launch_login"]["templates"]:
@@ -76,17 +76,25 @@ class LaunchLoginTests(unittest.TestCase):
 
     def test_state_template_uses_next_expected_screen(self):
         task = LaunchLoginTask()
-        templates = {"start_game": "start", "enter_game": "enter", "existing_role": "existing",
-                     "in_game_ready": "ready"}
-        self.assertEqual(task._template_for_state("WAIT_START", templates, "role"), "start")
-        self.assertEqual(task._template_for_state("WAIT_ENTER", templates, "role"), "enter")
-        self.assertEqual(task._template_for_state("WAIT_ROLE", templates, "role"), "role")
-        self.assertEqual(task._template_for_state("WAIT_READY", templates, "role"), "ready")
-        self.assertEqual(task._previous_template_for_state("WAIT_ENTER", templates, "role"),
+        templates = {"start_game": "start", "enter_game": "enter", "existing_role": "existing"}
+        self.assertEqual(task._template_for_state("WAIT_START", templates), "start")
+        self.assertEqual(task._template_for_state("WAIT_ENTER", templates), "enter")
+        self.assertIsNone(task._template_for_state("WAIT_ROLE", templates))
+        self.assertEqual(task._previous_template_for_state("WAIT_ENTER", templates),
                          ("start", "开始游戏"))
-        self.assertEqual(task._previous_template_for_state("WAIT_ROLE", templates, "role"),
+        self.assertEqual(task._previous_template_for_state("WAIT_ROLE", templates),
                          (templates.get("existing_role"), "已有角色"))
-        self.assertIsNone(task._previous_template_for_state("WAIT_START", templates, "role"))
+        self.assertIsNone(task._previous_template_for_state("WAIT_START", templates))
+
+    def test_roster_ocr_returns_target_text_center(self):
+        fake_engine = mock.Mock(return_value=([
+            [[[10, 20], [50, 20], [50, 40], [10, 40]], "角色", 0.99],
+            [[[80, 20], [120, 20], [120, 40], [80, 40]], "其它", 0.99],
+        ], 0.01))
+        with mock.patch("mhxy.core.accounts._get_ocr_engine", return_value=fake_engine):
+            hit = accounts.locate_roster_name(object(), {"r1": {"name": "角色"}}, "r1")
+        self.assertIsNotNone(hit)
+        self.assertEqual(hit[:2], (30, 30))
 
     def test_verified_launch_binding_is_runtime_only(self):
         win = _Window()

@@ -52,7 +52,7 @@ DEFAULT_CONFIG = {
     "account_launch": {
         "launcher_path": "",            # 浏览…选择的启动器 EXE / LNK；自动检测只填候选，不静默覆盖
         "launcher_args": [],             # 可选启动参数
-        "profiles": []                   # [{id,label,enabled,expected_role_id,expected_role_name,role_template}]
+        "profiles": []                   # [{id,label,enabled,expected_role_id,expected_role_name}]
     },
 
     # ---- 悬浮日志窗（通用页「收起为悬浮日志窗」；纯界面偏好，跨任务共享）----
@@ -173,8 +173,7 @@ DEFAULT_CONFIG = {
                 "start_game": None,
                 "enter_game": None,
                 "switch_role": None,
-                "existing_role": None,
-                "in_game_ready": None
+                "existing_role": None
             }
         },
 

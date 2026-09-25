@@ -394,6 +394,51 @@ def match_ocr_result(result, names):
     return best_rid
 
 
+def locate_roster_name(image_bgr, names, role_id):
+    """在角色列表截图中 OCR 定位指定名册角色，返回 ``(cx, cy, score)`` 或 ``None``。
+
+    仅接受 ``role_id`` 对应的精确名册姓名，OCR 有相近文本也不会点。坐标相对传入图片左上角；
+    启动登录任务传整屏截图，因此可直接经 ScaledScene.to_screen 换回屏幕坐标。
+    """
+    rec = (names or {}).get(str(role_id))
+    wanted = _normalize_name((rec or {}).get("name"))
+    if image_bgr is None or not wanted:
+        return None
+    engine = _get_ocr_engine()
+    if engine is None:
+        return None
+    try:
+        result, _elapsed = engine(image_bgr)
+    except Exception:
+        return None
+    best = None
+    for item in result or []:
+        try:
+            box, text, confidence = item[0], str(item[1] or ""), float(item[2])
+        except (IndexError, TypeError, ValueError):
+            continue
+        if confidence < _OCR_MIN_CONFIDENCE:
+            continue
+        got = _normalize_name(text)
+        if len(got) < 2:
+            continue
+        similarity = difflib.SequenceMatcher(None, wanted, got).ratio()
+        if wanted in got:
+            similarity = max(similarity, len(wanted) / max(len(got), 1))
+        if similarity < _OCR_MIN_MATCH:
+            continue
+        try:
+            points = list(box)
+            cx = int(round(sum(float(p[0]) for p in points) / len(points)))
+            cy = int(round(sum(float(p[1]) for p in points) / len(points)))
+        except (TypeError, ValueError, ZeroDivisionError, IndexError):
+            continue
+        score = 0.7 * similarity + 0.3 * confidence
+        if best is None or score > best[2]:
+            best = (cx, cy, score)
+    return best
+
+
 def _get_ocr_engine():
     """按需初始化本地 OCR，避免启动 GUI 时加载 ONNX 模型。失败后安全降级到「号N」。"""
     global _ocr_engine, _ocr_error

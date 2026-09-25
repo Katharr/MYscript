@@ -8,12 +8,10 @@ from tkinter import filedialog
 import customtkinter as ctk
 
 from . import theme as T
-from .calibrate_dialog import CalibrateDialog, grab_roi_on_app
+from .calibrate_dialog import CalibrateDialog
 from ..core import accounts
-from ..core import calib_profiles as calib
 from ..core import config as cfg_mod
 from ..core import launcher
-from ..core import vision
 from ..core import window as win_mod
 from ..core.runner import TaskRunner
 from ..tasks import get_task
@@ -155,23 +153,11 @@ class LaunchLoginPage(ctk.CTkFrame):
                                      button_hover_color=T.BTN_HOVER, text_color=T.TEXT,
                                      command=lambda value, pid=profile["id"]: self._set_role(pid, value))
             menu.grid(row=0, column=2, sticky="ew", padx=(0, 10), pady=(10, 2))
-            template_path = profile.get("role_template")
-            template_ok = bool(template_path) and vision.load_template(template_path) is not None
             role_name = profile.get("expected_role_name") or "未选择角色"
-            status = "%s · %s" % (role_name, "● 已标定" if template_ok else "○ 未标定")
-            ctk.CTkLabel(row, text=status, font=self.fonts["small"],
-                         text_color=T.SUCCESS if template_ok else T.TEXT_DIM).grid(
-                             row=1, column=1, columnspan=2, sticky="w", padx=(0, 10), pady=(0, 10))
+            ctk.CTkLabel(row, text=role_name, font=self.fonts["small"], text_color=T.TEXT_DIM).grid(
+                row=1, column=1, columnspan=2, sticky="w", padx=(0, 10), pady=(0, 10))
             buttons = ctk.CTkFrame(row, fg_color="transparent")
             buttons.grid(row=0, column=3, rowspan=2, sticky="e", padx=(4, 10))
-            ctk.CTkButton(buttons, text="角色名", font=self.fonts["small"], height=30, width=58,
-                          corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER,
-                          text_color=T.TEXT, border_width=1, border_color=T.BORDER,
-                          command=lambda p=profile: self._prompt_role_name(p)).pack(side="left", padx=2)
-            ctk.CTkButton(buttons, text="标定", font=self.fonts["small"], height=30, width=54,
-                          corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER,
-                          text_color=T.TEXT, border_width=1, border_color=T.BORDER,
-                          command=lambda p=profile: self._calibrate_role(p)).pack(side="left", padx=2)
             ctk.CTkButton(buttons, text="↑", font=self.fonts["body_b"], height=30, width=30,
                           corner_radius=T.RADIUS_SM, fg_color="transparent", hover_color=T.BTN_HOVER,
                           text_color=T.TEXT, command=lambda i=index: self._move(i, -1)).pack(side="left", padx=2)
@@ -236,19 +222,12 @@ class LaunchLoginPage(ctk.CTkFrame):
         cfg = self._account_cfg()
         cfg["account_launch"]["profiles"].append({"id": uuid.uuid4().hex, "label": label,
                                                       "enabled": True, "expected_role_id": "",
-                                                      "expected_role_name": "", "role_template": ""})
+                                                      "expected_role_name": ""})
         cfg_mod.save_config(cfg)
         self.refresh()
 
     def _set_enabled(self, profile_id, enabled):
         self._update_profile(profile_id, enabled=bool(enabled))
-
-    def _prompt_role_name(self, profile):
-        dialog = ctk.CTkInputDialog(text="目标角色名：", title="目标角色")
-        name = (dialog.get_input() or "").strip()
-        if name:
-            # 手填名后不伪造 role_id；进入游戏后仍要由本机名册唯一解析并由顶部 OCR 确认。
-            self._update_profile(profile["id"], expected_role_id="", expected_role_name=name)
 
     def _set_role(self, profile_id, value):
         pair = self._profile_role_values.get(value)
@@ -280,25 +259,6 @@ class LaunchLoginPage(ctk.CTkFrame):
             return
         profiles[index], profiles[target] = profiles[target], profiles[index]
         cfg_mod.save_config(cfg)
-        self.refresh()
-
-    def _calibrate_role(self, profile):
-        cfg = self._account_cfg()
-        rel, crop, pid = grab_roi_on_app(self.app, cfg, "框选该档案的目标角色名", with_crop=True,
-                                         toast=lambda msg, _color=None: self._log_line(msg, "warn"))
-        if rel is None or crop is None or crop.size == 0:
-            return
-        path = "templates/login_role_%s.png" % profile["id"]
-        if not vision.save_image(path, crop):
-            self._log_line("保存角色名模板失败。", "error")
-            return
-        for item in cfg["account_launch"]["profiles"]:
-            if item.get("id") == profile.get("id"):
-                item["role_template"] = path
-                break
-        calib.set_template_profile(cfg, self.TASK_NAME, "role_" + profile["id"], pid)
-        cfg_mod.save_config(cfg)
-        self._log_line("已标定角色名模板。", "hit")
         self.refresh()
 
     def _open_calibrate(self):

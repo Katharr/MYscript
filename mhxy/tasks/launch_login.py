@@ -28,7 +28,6 @@ class LaunchLoginTask(Task):
             ("enter_game", "进入游戏", "已登录后的进入按钮"),
             ("switch_role", "切换", "角色选择入口"),
             ("existing_role", "已有角色", "已有角色页入口"),
-            ("in_game_ready", "游戏主界面", "进入游戏后的稳定 HUD 标志"),
         ],
         "watchlist": False,
     }
@@ -52,7 +51,7 @@ class LaunchLoginTask(Task):
         if not tc.get("dry_run", True) and not launcher.normalize_path(account_cfg.get("launcher_path")):
             problems.append("请先通过“浏览...”选择有效的启动器 EXE")
         templates = tc.get("templates") or {}
-        for key in ("start_game", "enter_game", "switch_role", "existing_role", "in_game_ready"):
+        for key in ("start_game", "enter_game", "switch_role", "existing_role"):
             path = templates.get(key)
             if not path or vision.load_template(path) is None:
                 problems.append("缺少流程标定：%s" % key)
@@ -60,11 +59,8 @@ class LaunchLoginTask(Task):
                                                      ctx.cfg.get("window_offset", [0, 0])))
         for profile in profiles:
             name = profile.get("label") or profile.get("expected_role_name") or "未命名档案"
-            if not profile.get("expected_role_id") and not profile.get("expected_role_name"):
-                problems.append("%s 未选择目标角色" % name)
-            role_path = profile.get("role_template")
-            if not role_path or vision.load_template(role_path) is None:
-                problems.append("%s 缺少角色名模板" % name)
+            if not profile.get("expected_role_id"):
+                problems.append("%s 未在下拉框选择目标角色" % name)
             role_id = profile.get("expected_role_id")
             if role_id and roster and str(role_id) not in roster:
                 problems.append("%s 的目标角色不在本机名册中" % name)
@@ -104,9 +100,6 @@ class LaunchLoginTask(Task):
 
     def _run_profile(self, ctx, profile, templates, threshold, timeout, launcher_timeout, recheck_after, dry_run):
         label = profile.get("label") or profile.get("expected_role_name") or "档案"
-        if self._already_logged_in(ctx, profile, templates.get("in_game_ready"), threshold):
-            ctx.log("[%s] 已检测到对应游戏窗口，跳过启动。" % label)
-            return "ok"
         if dry_run:
             return "演练模式不启动程序"
 
@@ -125,14 +118,13 @@ class LaunchLoginTask(Task):
         state = "WAIT_START"
         state_at = time.time()
         rechecked_states = set()
-        role_path = profile.get("role_template")
-        role_tpl = vision.load_template(role_path) if role_path else None
+        last_role_ocr_at = 0.0
         while not ctx.should_stop():
             if win.rect() is None:
                 # 点击“开始游戏”后，启动器可能销毁原 HWND 并新建游戏外壳；按下一状态
                 # 的模板接管新窗口，而不是把正常窗口转换误报为登录窗口关闭。
                 replacement = self._find_template_window(
-                    ctx, self._template_for_state(state, templates, role_tpl), threshold)
+                    ctx, self._template_for_state(state, templates), threshold)
                 if replacement is not None:
                     win = replacement
                 elif time.time() - state_at > timeout:
@@ -140,19 +132,13 @@ class LaunchLoginTask(Task):
                 else:
                     self._interruptible_sleep(ctx, 0.35)
                     continue
-            if state == "WAIT_READY":
-                if self._match(ctx, win, templates.get("in_game_ready"), threshold):
-                    state = "VERIFY_ROLE"
-                    state_at = time.time()
-                    continue
-            elif state == "VERIFY_ROLE":
-                if self._verify_role(ctx, win, profile):
-                    return "ok"
-            elif state == "WAIT_ROLE":
-                if self._click_template(ctx, win, role_tpl, threshold, "选择预设角色"):
-                    state = "WAIT_READY"
-                    state_at = time.time()
-                    continue
+            if state == "WAIT_ROLE":
+                # 角色选择页有清晰文本，直接 OCR 名册中的目标角色，不再维护脆弱的角色名截图模板。
+                now = time.time()
+                if now - last_role_ocr_at >= 1.0:
+                    last_role_ocr_at = now
+                    if self._click_roster_role(ctx, win, profile):
+                        return "ok"       # 用户确认：选中角色即视为本号流程结束
             else:
                 key, next_state, action = self._CLICK_STATES[state]
                 if self._click_template(ctx, win, templates.get(key), threshold, action):
@@ -160,7 +146,7 @@ class LaunchLoginTask(Task):
                     state_at = time.time()
                     continue
             elapsed = time.time() - state_at
-            previous = self._previous_template_for_state(state, templates, role_tpl)
+            previous = self._previous_template_for_state(state, templates)
             if previous is not None and state not in rechecked_states and elapsed >= recheck_after:
                 prev_tpl, prev_action = previous
                 # 只在当前状态未出现一段时间后回查一次，防止首帧加载尚未完成时重复点上一步。
@@ -260,22 +246,19 @@ class LaunchLoginTask(Task):
             self._interruptible_sleep(ctx, 0.5)
         return None
 
-    def _template_for_state(self, state, templates, role_tpl):
+    def _template_for_state(self, state, templates):
         if state in self._CLICK_STATES:
             return templates.get(self._CLICK_STATES[state][0])
-        if state == "WAIT_ROLE":
-            return role_tpl
-        return templates.get("in_game_ready")
+        return None
 
     @staticmethod
-    def _previous_template_for_state(state, templates, role_tpl):
+    def _previous_template_for_state(state, templates):
         """当前步骤未出现时允许回查一次的上一步模板与动作名。"""
         previous = {
             "WAIT_ENTER": (templates.get("start_game"), "开始游戏"),
             "WAIT_SWITCH": (templates.get("enter_game"), "进入游戏"),
             "WAIT_EXISTING": (templates.get("switch_role"), "切换"),
             "WAIT_ROLE": (templates.get("existing_role"), "已有角色"),
-            "WAIT_READY": (role_tpl, "预设角色"),
         }
         item = previous.get(state)
         return item if item and item[0] is not None else None
@@ -314,40 +297,18 @@ class LaunchLoginTask(Task):
         ctx.mouse.click(xy[0], xy[1])
         return True
 
-    def _verify_role(self, ctx, win, profile):
-        # 顶部姓名条可能被别的窗口盖住；先确认该游戏窗口在前台再做 OCR 绑定。
-        if not win.activate():
+    def _click_roster_role(self, ctx, win, profile):
+        """在“已有角色”页 OCR 找到档案下拉框选定的角色名并点击。"""
+        role_id = str(profile.get("expected_role_id") or "")
+        if not role_id or not win.activate():
             return False
         names = accounts.roster([win])
-        expected = str(profile.get("expected_role_id") or "")
-        if not expected:
-            wanted = (profile.get("expected_role_name") or "").strip()
-            choices = [rid for rid, rec in names.items() if (rec.get("name") or "").strip() == wanted]
-            expected = choices[0] if len(choices) == 1 else ""
-        if not expected:
+        scene = self._scene(ctx, win)
+        hit = accounts.locate_roster_name(scene.img if scene is not None else None, names, role_id)
+        if hit is None:
             return False
-        labels = accounts.labels_for([win])
-        rec = names.get(expected) or {}
-        expected_label = accounts.display_name(rec)
-        if labels and labels[0] == expected_label:
-            accounts.bind_launch_session(win, expected, profile.get("id"))
-            return True
-        return False
-
-    def _already_logged_in(self, ctx, profile, ready_tpl, threshold):
-        expected = str(profile.get("expected_role_id") or "")
-        wanted = (profile.get("expected_role_name") or "").strip()
-        for win in win_mod.locate_all(ctx.cfg.get("window_title", "梦幻西游"),
-                                      ctx.cfg.get("window_offset", [0, 0])):
-            # 不在被遮挡的后台截图上判断 HUD，防止把前台的相似图案误判为此窗口已登录。
-            if not win.activate():
-                continue
-            if ready_tpl is not None and not self._match(ctx, win, ready_tpl, threshold):
-                continue
-            names = accounts.roster([win])
-            label = accounts.labels_for([win])[0]
-            if expected and expected in names and label == accounts.display_name(names[expected]):
-                return True
-            if wanted and label.split("（", 1)[0] == wanted:
-                return True
-        return False
+        xy = scene.to_screen(hit[0], hit[1])
+        ctx.log("OCR 命中角色名 %s（%.3f）。" % (profile.get("expected_role_name") or role_id, hit[2]),
+                level="hit")
+        ctx.mouse.click(xy[0], xy[1])
+        return True
