@@ -10,6 +10,9 @@
   "hotkey_stop": "ctrl+alt+F12",
   "failsafe_corner": "top_right",
   "appearance": "dark",
+  "account_launch": {
+    "profiles": []
+  },
   "float_log": {
     "geometry": "",
     "topmost": true

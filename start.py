@@ -178,7 +178,7 @@ def _report_fatal(stage):
 
 
 def _launch_gui():
-    """设 DPI → 启动页全程盖住「导入重库 + 建主窗口 + 预建全部页面」→ 一次性亮出就绪窗口。
+    """设 DPI → 启动页预热 → 透明预扫描游戏标签 → 一次性亮出就绪主窗口。
     任一步异常都回退到无启动页的直接启动，保证一定能起来。"""
     import threading
 
@@ -190,32 +190,63 @@ def _launch_gui():
     except Exception:
         splash = None
 
-    # —— 阶段一：后台线程预热重库；启动页进度条在主线程流畅转动 ——
+    # —— 阶段一：预热重库 → 启动页透明时预扫描窗口身份 → 再建主界面 ——
+    # 身份扫描必须在任何脚本界面可见前完成，否则脚本自己可能盖住某个游戏标签条。
     if splash is not None:
+        warm_ready = threading.Event()
+        allow_scan = threading.Event()
         done = threading.Event()
 
-        def _warm():
+        def _warm_and_scan():
             try:
                 import mhxy.gui.app  # noqa: F401  —— 触发 cv2/numpy/customtkinter 一次性加载
             except Exception:
-                pass               # 预热失败无妨：主线程随后会再 import 并暴露真实错误
+                pass               # 主线程随后再 import，会暴露真实错误
+            finally:
+                warm_ready.set()
+            allow_scan.wait()
+            try:
+                from mhxy.core import accounts
+                from mhxy.core import config as cfg_mod
+                accounts.prime_visible_labels(cfg_mod.load_config())
+            except Exception:
+                pass               # 扫描失败只退回号N，不阻断 GUI 启动
             finally:
                 done.set()
 
-        threading.Thread(target=_warm, daemon=True).start()
+        threading.Thread(target=_warm_and_scan, daemon=True).start()
+        scan_started = {"value": False}
 
         def _poll():
+            if warm_ready.is_set() and not scan_started["value"]:
+                scan_started["value"] = True
+                try:
+                    splash["root"].attributes("-alpha", 0.0)
+                    splash["root"].update_idletasks()
+                except Exception:
+                    pass
+                allow_scan.set()
             if done.is_set():
                 splash["root"].quit()       # 退出 mainloop，回到下面继续（启动页先不销毁）
             else:
                 splash["root"].after(40, _poll)
 
         splash["root"].after(40, _poll)
-        splash["root"].mainloop()           # 转动进度条直到重库就绪
-        # 关键：创建主窗口（另一个 ctk Tk 根）之前，必须先销毁启动页这个根——
-        # 两个 Tk 根并存会让 customtkinter 直接崩（之前「正在准备界面」后闪退就是这个）。
-        # 试过「先建主窗口、再销启动页」来消除这两步之间的空隙，结果引入更难查的问题
-        # （默认根归属、CTk 的首次显示逻辑），已回退。保持这个顺序。
+        splash["root"].mainloop()           # 预热期间显示启动页；扫描阶段透明，绝不遮挡游戏
+    else:
+        # 启动页创建失败也不能放弃启动前身份扫描。
+        try:
+            from mhxy.core import accounts
+            from mhxy.core import config as cfg_mod
+            accounts.prime_visible_labels(cfg_mod.load_config())
+        except Exception:
+            pass
+
+    # 关键：创建主窗口（另一个 ctk Tk 根）之前，必须先销毁启动页这个根——
+    # 两个 Tk 根并存会让 customtkinter 直接崩（之前「正在准备界面」后闪退就是这个）。
+    # 试过「先建主窗口、再销启动页」来消除这两步之间的空隙，结果引入更难查的问题
+    # （默认根归属、CTk 的首次显示逻辑），已回退。保持这个顺序。
+    if splash is not None:
         try:
             splash["pb"].stop()             # 先停进度条动画：其 after 定时器在根销毁后会报错
         except Exception:

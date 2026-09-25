@@ -162,10 +162,9 @@ class WindowPickerDialog(ctk.CTkToplevel):
                 rect = w.rect()
                 thumb = self._make_thumb(rect)
                 self._wins.append((w, rect, thumb))
-        finally:
-            self._set_alpha(1.0)
-            self.lift()
-            self.focus_force()
+        except Exception:
+            pass
+        # 保持透明直到 OCR 结束，避免主界面盖住游戏标签条；后台回填时统一恢复。
         self._render()
 
         def read_labels():
@@ -186,6 +185,13 @@ class WindowPickerDialog(ctk.CTkToplevel):
                     self._render()
                 except Exception:
                     pass
+                finally:
+                    try:
+                        self._set_alpha(1.0)
+                        self.lift()
+                        self.focus_force()
+                    except Exception:
+                        pass
 
             try:
                 self.app.ui_post(apply)

@@ -22,6 +22,7 @@ config.game_dir 只是手动兜底覆盖（走 set_game_dir，与 window.set_gam
 import ctypes
 import ctypes.wintypes
 import difflib
+import hashlib
 import json
 import os
 import re
@@ -38,19 +39,24 @@ _LOGIN_RE = re.compile(r"<(XyqPocket_LoginInfo_[^>]+)>([^<]*)</\1>")
 
 _TYPICAL_LOGIN = 15.0                # 仅历史诊断：原时间戳配对的典型登录耗时
 _LOGIN_WINDOW = 180.0                # 仅历史诊断：原时间戳配对的最大时间窗
-_TTL = 4.0                           # 标签切换会变角色名，缓存不能太久
 
-# 标签条相对窗口的固定身份区：避开右侧关闭按钮，只覆盖图标 + 当前角色名。
-_TAB_ROI = (0.04, 0.005, 0.255, 0.075)
+# 标签条中只含姓名的相对区域：不含头像和关闭按钮，指纹不会被图标动画干扰。
+_TAB_NAME_ROI = (0.055, 0.006, 0.245, 0.072)
+_FINGERPRINT_SIZE = (56, 16)
 _OCR_MIN_CONFIDENCE = 0.55
 _OCR_MIN_MATCH = 0.84
 _OCR_MIN_MARGIN = 0.12
+_OCR_RETRY_SEC = 10.0
+_IDENTITY_MAX_AGE_SEC = 1800.0
+_DATA_DIR_TTL = 20.0
 
 _lock = threading.RLock()
-_cache = {"key": None, "at": 0.0, "labels": {}, "order": []}
+_cache = {"order": []}
+_identity = {}                       # hwnd -> {fingerprint, pending, role_id, retry_at, seen_at}
 _data_dir = {"path": "", "at": 0.0}
 _game_dir = ""                       # config.game_dir 覆盖（空 = 自动探测）
 _ocr_lock = threading.Lock()
+_ocr_infer_lock = threading.Lock()   # ONNX 推理串行，绝不让多窗口同时抢满 CPU
 _ocr_engine = None
 _ocr_error = None
 
@@ -156,6 +162,8 @@ def set_game_dir(path):
             _game_dir = new
             _data_dir["path"] = ""
             _data_dir["at"] = 0.0
+            _identity.clear()       # 名册来源变了，旧 role_id 不可再复用
+            _cache["order"] = []
 
 
 def _hwnd(win):
@@ -205,7 +213,7 @@ def _data_dir_from_wins(wins):
     return ""
 
 
-def data_dir(wins=None, ttl=_TTL):
+def data_dir(wins=None, ttl=_DATA_DIR_TTL):
     """游戏 LocalData 目录（找不到返回 ""）。先 config.game_dir，再从窗口进程 exe 反推；结果带缓存。"""
     now = time.time()
     with _lock:
@@ -372,7 +380,8 @@ def _get_ocr_engine():
             return None
         try:
             from rapidocr_onnxruntime import RapidOCR
-            _ocr_engine = RapidOCR(text_score=_OCR_MIN_CONFIDENCE, print_verbose=False)
+            _ocr_engine = RapidOCR(text_score=_OCR_MIN_CONFIDENCE, print_verbose=False,
+                                   intra_op_num_threads=1, inter_op_num_threads=1)
         except Exception as e:
             _ocr_error = str(e)
             return None
@@ -389,73 +398,161 @@ def ocr_status():
     return "not_loaded"
 
 
-def _tab_name_roi(win):
-    """截取客户端顶部标签里的图标和角色名，按当前窗口尺寸同比缩放后放大给 OCR。"""
+def _tab_name_rect(win):
+    """返回顶部姓名条的屏幕绝对矩形。只截这一小块，绝不先抓整窗。"""
     rect = win.rect()
     if rect is None:
         return None
     try:
-        img = win_mod.grab(rect)
-        h, w = img.shape[:2]
-        x0 = max(0, int(round(w * _TAB_ROI[0])))
-        y0 = max(0, int(round(h * _TAB_ROI[1])))
-        x1 = min(w, int(round(w * _TAB_ROI[2])))
-        y1 = min(h, int(round(h * _TAB_ROI[3])))
+        left, top, w, h = (int(v) for v in rect)
+        x0 = max(0, int(round(w * _TAB_NAME_ROI[0])))
+        y0 = max(0, int(round(h * _TAB_NAME_ROI[1])))
+        x1 = min(w, int(round(w * _TAB_NAME_ROI[2])))
+        y1 = min(h, int(round(h * _TAB_NAME_ROI[3])))
         if x1 - x0 < 20 or y1 - y0 < 12:
             return None
-        roi = img[y0:y1, x0:x1]
-        # 原标签字高约十余像素；三倍插值 + 白边显著提高中文小字的检出率。
-        roi = cv2.resize(roi, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
-        return cv2.copyMakeBorder(roi, 12, 12, 12, 12, cv2.BORDER_CONSTANT, value=(255, 255, 255))
+        return [left + x0, top + y0, x1 - x0, y1 - y0]
+    except (TypeError, ValueError):
+        return None
+
+
+def _tab_name_roi(win):
+    """直接截取当前窗口的姓名小区域，典型大小约 100×40px。"""
+    rect = _tab_name_rect(win)
+    if rect is None:
+        return None
+    try:
+        return win_mod.grab(rect)
     except Exception:
         return None
 
 
-def _ocr_role_id(win, names):
-    engine = _get_ocr_engine()
-    roi = _tab_name_roi(win)
-    if engine is None or roi is None:
+def _fingerprint(roi):
+    """姓名区 → 抗缩放/颜色小变化的轻量指纹；只用于决定要不要再 OCR。"""
+    if roi is None or roi.size == 0:
         return None
     try:
-        result, _elapsed = engine(roi)
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        small = cv2.resize(gray, _FINGERPRINT_SIZE, interpolation=cv2.INTER_AREA)
+        _threshold, binary = cv2.threshold(small, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        return hashlib.blake2s(binary.tobytes(), digest_size=8).digest()
+    except Exception:
+        return None
+
+
+def _prepare_ocr_roi(roi):
+    """将已经很小的姓名区放大并加白边，提升中文小字 OCR 的检出率。"""
+    if roi is None or roi.size == 0:
+        return None
+    try:
+        enlarged = cv2.resize(roi, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
+        return cv2.copyMakeBorder(enlarged, 12, 12, 12, 12, cv2.BORDER_CONSTANT, value=(255, 255, 255))
+    except Exception:
+        return None
+
+
+def _role_for_window(win, names, now):
+    """按窗口独立缓存身份；指纹不变时零 OCR，变化后稳定一轮才重识别。"""
+    hwnd = _hwnd(win)
+    roi = _tab_name_roi(win)
+    fingerprint = _fingerprint(roi)
+    if not hwnd or fingerprint is None:
+        return None
+
+    with _lock:
+        entry = _identity.get(hwnd)
+        if entry is not None:
+            entry["seen_at"] = now
+            if fingerprint == entry.get("fingerprint") and entry.get("role_id"):
+                return entry["role_id"]
+            if fingerprint != entry.get("fingerprint"):
+                # 首次看到新指纹先等待下一轮确认稳定，期间显示号N，杜绝旧名字串号。
+                if entry.get("pending") != fingerprint:
+                    entry["pending"] = fingerprint
+                    entry["retry_at"] = 0.0
+                    return None
+                if now < float(entry.get("retry_at", 0.0)):
+                    return None
+            elif now < float(entry.get("retry_at", 0.0)):
+                return None
+
+    # 推理昂贵且会占 CPU：全局串行；入锁后重查，防止并发调用重复识别同一窗口。
+    with _ocr_infer_lock:
+        with _lock:
+            entry = _identity.get(hwnd)
+            if entry is not None and fingerprint == entry.get("fingerprint") and entry.get("role_id"):
+                return entry["role_id"]
+            if entry is not None and fingerprint != entry.get("fingerprint") \
+                    and entry.get("pending") != fingerprint:
+                return None
+        rid = _ocr_role_id_without_lock(roi, names)
+        with _lock:
+            entry = _identity.setdefault(hwnd, {})
+            entry["seen_at"] = now
+            if rid:
+                entry.update({"fingerprint": fingerprint, "pending": None, "role_id": rid, "retry_at": 0.0})
+                return rid
+            # 新指纹识别失败时不覆盖已确认身份，但本轮/重试前必须显示号N。
+            entry["pending"] = fingerprint
+            entry["retry_at"] = now + _OCR_RETRY_SEC
+            return None
+
+
+def _ocr_role_id_without_lock(roi, names):
+    """_role_for_window 已持有推理锁时调用，避免同线程二次锁死。"""
+    prepared = _prepare_ocr_roi(roi)
+    if prepared is None:
+        return None
+    engine = _get_ocr_engine()
+    if engine is None:
+        return None
+    try:
+        result, _elapsed = engine(prepared)
     except Exception:
         return None
     return match_ocr_result(result, names)
 
 
 def _compute(wins):
-    """算出 {hwnd: 显示名}。只采信当前窗口标签条 OCR 的唯一名册匹配。"""
+    """算出 {hwnd: 显示名}。每窗只在顶部姓名指纹变动时运行 OCR。"""
     labels = {}
     names = roster(wins)
     if not names:
         return labels
+    now = time.time()
     for w in wins:
-        rid = _ocr_role_id(w, names)
+        rid = _role_for_window(w, names, now)
         hwnd = _hwnd(w)
-        if rid and hwnd:
+        if rid and hwnd and rid in names:
             label = display_name(names[rid])
             if label:
                 labels[hwnd] = label
+    with _lock:
+        stale = [h for h, entry in _identity.items()
+                 if now - float(entry.get("seen_at", now)) > _IDENTITY_MAX_AGE_SEC]
+        for hwnd in stale:
+            _identity.pop(hwnd, None)
     return labels
 
 
 def labels_for(wins):
-    """按 wins 的顺序返回显示名列表（与 window.locate_all 的「号N」序号严格同序）。
-    认不出角色的位置退回「号N」。结果短暂缓存，避免 GUI 反复 OCR 同一个标签条。"""
+    """按 wins 顺序返回显示名。常驻路径只抓姓名小图；指纹不变时不运行 OCR。"""
     wins = list(wins)
     order = [_hwnd(w) for w in wins]
-    key = tuple(order)
-    now = time.time()
-    with _lock:
-        if key == _cache["key"] and now - _cache["at"] < _TTL:
-            return [_cache["labels"].get(h) or fallback_label(i) for i, h in enumerate(order)]
     labels = _compute(wins)
+    out = [labels.get(h) or fallback_label(i) for i, h in enumerate(order)]
     with _lock:
-        _cache["key"] = key
-        _cache["at"] = time.time()
-        _cache["labels"] = labels
-        _cache["order"] = [labels.get(h) or fallback_label(i) for i, h in enumerate(order)]
-    return [labels.get(h) or fallback_label(i) for i, h in enumerate(order)]
+        _cache["order"] = list(out)
+    return out
+
+
+def prime_visible_labels(cfg):
+    """主 GUI 显示前预热当前可见窗口身份，确保脚本本身不会遮住客户端标签条。"""
+    cfg = cfg or {}
+    win_mod.set_game_process(cfg.get("window_process") or win_mod.DEFAULT_GAME_PROCESS_SPEC)
+    set_game_dir(cfg.get("game_dir"))
+    wins = win_mod.locate_all(cfg.get("window_title", "梦幻西游"), cfg.get("window_offset", [0, 0]))
+    return labels_for(wins)
 
 
 def cached_labels():
@@ -472,12 +569,14 @@ def cached_label(index):
     return fallback_label(index if isinstance(index, int) and index >= 0 else 0)
 
 
-def invalidate():
-    """清掉缓存（窗口选择变了、或游戏重开时调）。"""
+def invalidate(clear_identity=False):
+    """清掉界面顺序缓存；窗口选择变化默认保留按 HWND 登记的身份。
+
+    `clear_identity=True` 只留给明确重置/切换游戏目录场景，避免选择窗口后重复 OCR。
+    """
     with _lock:
-        _cache["key"] = None
-        _cache["at"] = 0.0
-        _cache["labels"] = {}
         _cache["order"] = []
         _data_dir["path"] = ""
         _data_dir["at"] = 0.0
+        if clear_identity:
+            _identity.clear()

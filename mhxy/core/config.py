@@ -48,6 +48,12 @@ DEFAULT_CONFIG = {
                                          #   top_right/top_left/bottom_right/bottom_left/off(关闭)。设置里可改。
     "appearance": "dark",                # 界面外观：dark(夜间) / light(白天)，侧栏可切换
 
+    # 预留未来「一键启动账号」入口：每项将是 {name, path, args}，当前不执行也不显示 UI。
+    # 不保存账号密码；只允许启动用户已有的客户端快捷方式/启动命令。
+    "account_launch": {
+        "profiles": []
+    },
+
     # ---- 悬浮日志窗（通用页「收起为悬浮日志窗」；纯界面偏好，跨任务共享）----
     "float_log": {
         "geometry": "",                  # 上次收起时的窗口位置+尺寸 "宽x高+x+y"；空/非法=默认落屏幕右上角

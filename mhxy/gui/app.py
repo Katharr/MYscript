@@ -4455,6 +4455,8 @@ class App(ctk.CTk):
         if not all_wins:
             return False, ""
         try:
+            # 这里保留完整窗口序列，供通用页按 targets 的绝对序号复用缓存；
+            # 常驻路径只抓姓名小图，指纹不变时不会运行 OCR，成本极低。
             labels = accounts.labels_for(all_wins)
         except Exception:
             labels = [accounts.fallback_label(i) for i in range(len(all_wins))]
