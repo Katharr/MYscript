@@ -156,3 +156,6 @@ mhxy/
 - Windows 11，PowerShell 主 shell；也有 Bash 工具。
 - git 推送走 Clash 代理端口 7897（见全局 CLAUDE.md），本项目已是 git 仓库。
 - 记忆目录有更详细背景：game-mhxy-shikong / sniper-design-decisions / project-architecture。
+
+## git提交
+- 用中文
