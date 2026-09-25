@@ -465,6 +465,50 @@ def locate_all(title_substr, offset=(0, 0), max_n=0, include_minimized=False):
     return [GameWindow(title_substr, offset).bind(w) for w in found]
 
 
+def locate_desktop_windows(title_substr="", offset=(0, 0), min_size=(200, 160)):
+    """枚举所有可见的大型顶层桌面窗口，不按标题或进程名过滤。
+
+    仅用于“启动登录”的启动器标定：官方启动器可与最终游戏窗口使用不同标题/进程，不能走
+    locate_all 的游戏白名单。调用者必须在后续用模板确认界面，禁止把此函数用于通用任务点击。
+    """
+    min_w, min_h = min_size
+    found = []
+    for w in gw.getAllWindows():
+        try:
+            if w.isMinimized or w.width <= min_w or w.height <= min_h:
+                continue
+            if not int(w._hWnd):
+                continue
+            found.append(w)
+        except Exception:
+            continue
+    found.sort(key=lambda x: (int(x.top) // 120, int(x.left)))
+    return [GameWindow(title_substr, offset).bind(w) for w in found]
+
+
+def desktop_window_at_point(title_substr, offset, x, y):
+    """返回坐标所在的可见桌面窗口；只供启动器标定的相对坐标换算。"""
+    cands = []
+    for w in locate_desktop_windows(title_substr, offset):
+        r = w.rect()
+        if r and r[0] <= x <= r[0] + r[2] and r[1] <= y <= r[1] + r[3]:
+            cands.append((w, r))
+    if not cands:
+        return None
+    try:
+        fg = int(_user32.GetForegroundWindow() or 0)
+    except Exception:
+        fg = 0
+    for w, _r in cands:
+        try:
+            if fg and int(w._win._hWnd) == fg:
+                return w
+        except Exception:
+            pass
+    cands.sort(key=lambda wr: wr[1][2] * wr[1][3])
+    return cands[0][0]
+
+
 def wake_all_to_front(title_substr, offset=(0, 0), max_n=0):
     """把所有游戏窗口（含最小化的）唤到前台：还原最小化 + 强制前置并校验。
 

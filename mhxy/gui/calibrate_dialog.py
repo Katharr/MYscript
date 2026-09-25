@@ -61,12 +61,14 @@ def resolve_profile(cfg, size, app=None):
         return None
 
 
-def grab_roi_on_app(app, cfg, prompt, with_crop=False, toast=None, alpha_windows=None):
+def grab_roi_on_app(app, cfg, prompt, with_crop=False, toast=None, alpha_windows=None,
+                    allow_desktop_windows=False):
     """在【当前屏幕】框选一块区域，返回 (rel_roi, crop, pid)；失败/取消返回 (None, None, None)。
     不激活/不切前台：你把哪个号摆在前面就标到哪个，框完按落点反查参照窗口算相对坐标。
     pid = 本次标定所属的「尺寸组」号（按参照窗口尺寸 resolve_profile：同尺寸复用、
     否则新建并设为激活组；已满 3 组时引导用户替换一个旧组）。
-    toast: 可选回调 toast(msg, color)；alpha_windows: 框选期间临时隐身的窗口（默认仅 app）。"""
+    toast: 可选回调 toast(msg, color)；alpha_windows: 框选期间临时隐身的窗口（默认仅 app）。
+    allow_desktop_windows=True 仅给独立启动器标定用，允许其不匹配游戏窗口白名单。"""
     title = cfg.get("window_title", "梦幻西游")
     offset = cfg.get("window_offset", [0, 0])
     windows = alpha_windows or (app,)
@@ -78,10 +80,12 @@ def grab_roi_on_app(app, cfg, prompt, with_crop=False, toast=None, alpha_windows
             except Exception:
                 pass
 
-    hint_wins = win_mod.locate_all(title, offset)
+    hint_wins = (win_mod.locate_desktop_windows(title, offset) if allow_desktop_windows
+                 else win_mod.locate_all(title, offset))
     if not hint_wins:
         if toast:
-            toast(f"没找到游戏窗口（标题含「{title}」），请先打开游戏。", T.WARN)
+            toast("没找到可标定窗口，请先打开启动器或游戏。" if allow_desktop_windows
+                  else f"没找到游戏窗口（标题含「{title}」），请先打开游戏。", T.WARN)
         return None, None, None
     hr = hint_wins[0].rect()
     center = (hr[0] + hr[2] // 2, hr[1] + hr[3] // 2) if hr else None
@@ -112,11 +116,12 @@ def grab_roi_on_app(app, cfg, prompt, with_crop=False, toast=None, alpha_windows
 
     cx = roi_abs[0] + roi_abs[2] // 2
     cy = roi_abs[1] + roi_abs[3] // 2
-    ref = win_mod.window_at_point(title, offset, cx, cy)
+    ref = (win_mod.desktop_window_at_point(title, offset, cx, cy) if allow_desktop_windows
+           else win_mod.window_at_point(title, offset, cx, cy))
     wr = ref.rect() if ref else None
     if wr is None:
         if toast:
-            toast("框选不在游戏窗口内，请把要标的窗口切到前面。", T.WARN)
+            toast("框选不在目标窗口内，请把要标的窗口切到前面。", T.WARN)
         return None, None, None
     # 记下「这一套标定图是在多大的窗口下标定的」：同尺寸复用已有组、否则新建并设为激活组，
     # 同时同步 targets.base_size 镜像（唯一写入口，见 core/calib_profiles.py 模块头）。
@@ -370,7 +375,8 @@ class CalibrateDialog(ctk.CTkToplevel):
         # 只在【当前屏幕】框选，框完按落点反查参照窗口算相对坐标——你把哪个号摆前面就标到哪个。
         # 这里多传 self 让对话框自身也一并隐身，且复用 self.cfg（_save() 随后会回存 task_config）。
         return grab_roi_on_app(self.app, self.cfg, prompt, with_crop=with_crop,
-                               toast=self._toast, alpha_windows=(self.app, self))
+                               toast=self._toast, alpha_windows=(self.app, self),
+                                allow_desktop_windows=(self.task_name == "launch_login"))
 
     # ---- 区域标定 ----
     def _calibrate_region(self, key, name):
