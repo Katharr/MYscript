@@ -286,6 +286,32 @@ class LaunchLoginTests(unittest.TestCase):
         self.assertEqual(moved, ["top_right"])               # 找不到游戏窗口绝不乱搬
         self.assertTrue(any(lv == "warn" for lv, _m in logs))
 
+    def test_roster_late_arrival_triggers_rerender(self):
+        """名册后到（先开脚本、后登录游戏）必须自动重渲染下拉框，否则一直显示「未读取到角色名册」。"""
+        from mhxy.gui.launch_login_page import LaunchLoginPage
+        calls = []
+
+        class _Stub:
+            _profile_role_values = {}
+            _roles_checked_at = 0.0
+
+            def _roles(self):
+                return {"角色（10） · r1": ("r1", "角色")}
+
+        stub = _Stub()
+
+        def _refresh():
+            calls.append(1)
+            stub._profile_role_values = stub._roles()
+
+        stub.refresh = _refresh
+        LaunchLoginPage._maybe_refresh_roles(stub, force=True)
+        self.assertEqual(calls, [1])           # 名册读到了 → 重渲染
+        LaunchLoginPage._maybe_refresh_roles(stub, force=True)
+        self.assertEqual(calls, [1])           # 名册没变 → 不重建控件（别打断用户操作）
+        # App 的既有契约：游戏连接状态变化时回调这个名字
+        self.assertTrue(callable(getattr(LaunchLoginPage, "_refresh_targets_labels", None)))
+
     def test_roster_ocr_returns_target_text_center(self):
         fake_engine = mock.Mock(return_value=([
             [[[10, 20], [50, 20], [50, 40], [10, 40]], "角色", 0.99],

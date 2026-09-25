@@ -2,6 +2,7 @@
 """启动登录页面。账号档案与通用流程标定分开管理。"""
 
 import os
+import time
 import uuid
 from tkinter import filedialog
 
@@ -26,6 +27,7 @@ def _card(master, **kw):
 class LaunchLoginPage(ctk.CTkFrame):
     TASK_NAME = "launch_login"
     LOG_SOURCE = "启动登录"
+    _ROLE_REFRESH_SEC = 5.0      # 名册重读节流（进程枚举不便宜，别每帧做）
 
     def __init__(self, master, app):
         super().__init__(master, fg_color="transparent")
@@ -34,6 +36,7 @@ class LaunchLoginPage(ctk.CTkFrame):
         self.runner = None
         self._cal_dialog = None
         self._profile_role_values = {}
+        self._roles_checked_at = 0.0
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(2, weight=1)
         self._build_header()
@@ -127,6 +130,26 @@ class LaunchLoginPage(ctk.CTkFrame):
             value = "%s · %s" % (display, rid)
             out[value] = (str(rid), rec.get("name") or "")
         return out
+
+    def _maybe_refresh_roles(self, force=False):
+        """名册可能【后到】（常见：先开脚本、后登录游戏），故定期重读；只有真的变了才重渲染。
+
+        不重读就会一直卡在「未读取到角色名册」，即使游戏已经跑起来、名册文件已经写好。
+        """
+        now = time.time()
+        if not force and now - self._roles_checked_at < self._ROLE_REFRESH_SEC:
+            return
+        self._roles_checked_at = now
+        try:
+            roles = self._roles()
+        except Exception:
+            return
+        if roles != self._profile_role_values:
+            self.refresh()
+
+    def _refresh_targets_labels(self):
+        """App 在「游戏连接状态变化」时回调本方法（见 app._apply_game_state）。"""
+        self._maybe_refresh_roles(force=True)
 
     def _render_profiles(self, profiles):
         for child in self.profile_list.winfo_children():
@@ -309,6 +332,7 @@ class LaunchLoginPage(ctk.CTkFrame):
             if not self.runner.is_running() and self.btn_run.cget("text") != "▶  开始启动登录":
                 self.btn_run.configure(text="▶  开始启动登录", fg_color=T.ACCENT,
                                        hover_color=T.ACCENT_HOVER, state="normal")
+        self._maybe_refresh_roles()     # 名册后到（先开脚本、后登录游戏）也能自动出现
 
     def update_game_pill(self, connected, summary=""):
         if connected:
