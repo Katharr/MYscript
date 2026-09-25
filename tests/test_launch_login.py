@@ -345,6 +345,41 @@ class LaunchLoginTests(unittest.TestCase):
             A.set_game_dir(old_dir)
             A.set_launcher_path(old_launcher)
 
+    def test_add_profile_picker_excludes_added_roles(self):
+        """点「新增档案」弹的下拉框里，已经加过的角色不能再出现（免得同一个号加两遍）。"""
+        from mhxy.gui.launch_login_page import LaunchLoginPage as P
+
+        class _Stub:
+            _profile_role_values = {"甲（45） · r1": ("r1", "甲"),
+                                    "乙（69） · r2": ("r2", "乙")}
+
+            def _profiles(self):
+                return [{"expected_role_id": "r1"}]
+
+        self.assertEqual(list(P._available_roles(_Stub())), ["乙（69） · r2"])
+
+    def test_create_profile_uses_role_name_as_label(self):
+        """选一个角色就建一个档案，档案名直接用角色名，不再要求手打一遍。"""
+        from mhxy.gui.launch_login_page import LaunchLoginPage as P
+
+        saved = {}
+
+        class _Stub:
+            def _account_cfg(self):
+                return {"account_launch": {"profiles": []}}
+
+            def refresh(self):
+                saved["refreshed"] = True
+
+        with mock.patch("mhxy.gui.launch_login_page.cfg_mod.save_config",
+                        side_effect=lambda cfg: saved.update(cfg)):
+            P._create_profile(_Stub(), "238939812", "复杂角色名")
+        prof = saved["account_launch"]["profiles"][0]
+        self.assertEqual(prof["label"], "复杂角色名")
+        self.assertEqual(prof["expected_role_id"], "238939812")
+        self.assertEqual(prof["expected_role_name"], "复杂角色名")
+        self.assertTrue(saved["refreshed"])
+
     def test_roster_ocr_returns_target_text_center(self):
         fake_engine = mock.Mock(return_value=([
             [[[10, 20], [50, 20], [50, 40], [10, 40]], "角色", 0.99],

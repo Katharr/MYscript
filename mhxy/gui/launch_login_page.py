@@ -201,8 +201,11 @@ class LaunchLoginPage(ctk.CTkFrame):
                                      command=lambda value, pid=profile["id"]: self._set_role(pid, value))
             menu.grid(row=0, column=2, sticky="ew", padx=(0, 10), pady=(10, 2))
             role_name = profile.get("expected_role_name") or "未选择角色"
-            ctk.CTkLabel(row, text=role_name, font=self.fonts["small"], text_color=T.TEXT_DIM).grid(
-                row=1, column=1, columnspan=2, sticky="w", padx=(0, 10), pady=(0, 10))
+            # 档案名已直接用角色名，故这里只补 role_id 做区分（同名不同服的两个号靠它分辨）。
+            role_id = str(profile.get("expected_role_id") or "") or "—"
+            ctk.CTkLabel(row, text="%s · %s" % (role_name, role_id), font=self.fonts["small"],
+                         text_color=T.TEXT_DIM).grid(
+                             row=1, column=1, columnspan=2, sticky="w", padx=(0, 10), pady=(0, 10))
             buttons = ctk.CTkFrame(row, fg_color="transparent")
             buttons.grid(row=0, column=3, rowspan=2, sticky="e", padx=(4, 10))
             if not has_roster:
@@ -267,24 +270,73 @@ class LaunchLoginPage(ctk.CTkFrame):
         self.app.cfg = cfg
 
     def _add_profile(self):
-        dialog = ctk.CTkInputDialog(text="档案名称：", title="新增启动档案")
-        label = (dialog.get_input() or "").strip()
-        if not label:
+        """点一下加一个号：直接弹已有角色，选谁加谁（已加过的角色不再出现在下拉框里）。
+
+        名册读不到（从没在这台机器登录过游戏）时退回手填角色名，不能把人卡死。
+        """
+        if not self._profile_role_values:
+            self._prompt_role_name()
             return
+        roles = self._available_roles()
+        if not roles:
+            self._log_line("名册里的角色都已添加。", "warn")
+            return
+        self._open_role_picker(roles)
+
+    def _available_roles(self):
+        """名册里还没被任何档案占用的角色（已新增的从下拉框排除，避免同一个号加两遍）。"""
+        used = {str(p.get("expected_role_id") or "") for p in self._profiles()}
+        return {v: pair for v, pair in self._profile_role_values.items() if pair[0] not in used}
+
+    def _profiles(self):
+        return self._account_cfg().get("account_launch", {}).get("profiles") or []
+
+    def _open_role_picker(self, roles):
+        """只有下拉框的小弹窗：选中哪个角色就新增哪个档案，选完即关。"""
+        win = ctk.CTkToplevel(self)
+        win.title("新增档案")
+        win.geometry("340x96")
+        win.configure(fg_color=T.BG)
+        values = list(roles)
+        var = ctk.StringVar(value=values[0])
+
+        def _picked(value):
+            pair = roles.get(value)
+            win.destroy()
+            if pair:
+                self._create_profile(pair[0], pair[1])
+
+        ctk.CTkOptionMenu(win, values=values, variable=var, height=36, width=300,
+                          font=self.fonts["body"], fg_color=T.BTN, button_color=T.SURFACE,
+                          button_hover_color=T.BTN_HOVER, text_color=T.TEXT,
+                          command=_picked).pack(padx=20, pady=(26, 20))
+        win.after(80, win.lift)
+
+    def _create_profile(self, role_id, role_name):
+        """按角色建一个档案：档案名直接用角色名，不用再让人手打一遍。"""
         cfg = self._account_cfg()
-        cfg["account_launch"]["profiles"].append({"id": uuid.uuid4().hex, "label": label,
-                                                      "enabled": True, "expected_role_id": "",
-                                                      "expected_role_name": ""})
+        cfg["account_launch"]["profiles"].append({
+            "id": uuid.uuid4().hex,
+            "label": role_name or role_id or "新档案",
+            "enabled": True,
+            "expected_role_id": str(role_id or ""),
+            "expected_role_name": role_name or "",
+        })
         cfg_mod.save_config(cfg)
         self.refresh()
 
     def _set_enabled(self, profile_id, enabled):
         self._update_profile(profile_id, enabled=bool(enabled))
 
-    def _prompt_role_name(self, profile):
+    def _prompt_role_name(self, profile=None):
+        """手填角色名：传 profile=改那一行；不传=新增一个档案（名册读不到时的兜底）。"""
         dialog = ctk.CTkInputDialog(text="目标角色名：", title="手填角色名")
         name = (dialog.get_input() or "").strip()
-        if name:
+        if not name:
+            return
+        if profile is None:
+            self._create_profile("", name)
+        else:
             self._update_profile(profile["id"], expected_role_id="", expected_role_name=name)
 
     def _set_role(self, profile_id, value):
