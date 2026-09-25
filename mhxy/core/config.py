@@ -162,6 +162,7 @@ DEFAULT_CONFIG = {
         # ---- 一键启动登录（启动器唯一：账号按队列严格串行，完成窗口角色核验后才启动下一个）----
         "launch_login": {
             "dry_run": True,             # 演练只识别当前已开窗口，不启动程序、不点击
+            "place_corner": True,        # true=每登录好一个号就把它摆到屏幕角落（见 corner_order）
             "loop": {
                 "match_threshold": 0.85,
                 "launcher_timeout_sec": 120,
@@ -170,7 +171,11 @@ DEFAULT_CONFIG = {
                 "recheck_interval_sec": 2.5,        # 之后每隔多久再回查（用户拍板：反复回查本步+上一步）
                 "recheck_max": 6,                   # 每步回查上一步的次数上限
                 "switch_wait_min_sec": 2.0,      # 进入已登录首页后，点“切换”前先等的秒数（用户拍板 2~3 秒）
-                "switch_wait_max_sec": 3.0
+                "switch_wait_max_sec": 3.0,
+                # 窗口归位（用户拍板顺序：左上→右上→右下→左下；多于 4 个号时循环）
+                "corner_order": ["top_left", "top_right", "bottom_right", "bottom_left"],
+                "corner_margin_px": 0,           # 距屏幕边缘留白
+                "corner_settle_sec": 2.0         # 点完角色后等多久再归位（等窗口稳定）
             },
             "regions": {},
             "templates": {

@@ -192,6 +192,47 @@ class LaunchLoginTests(unittest.TestCase):
         self.assertEqual(result, "ok")
         self.assertEqual(actions.count("重新点击开始游戏"), 3)
 
+    def test_corner_geometry_and_cycle(self):
+        from mhxy.core import window as win_mod
+        with mock.patch("mhxy.core.window.monitor_work_area", return_value=(0, 0, 1920, 1032)):
+            self.assertEqual(win_mod.corner_left_top("top_left", 800, 600), (0, 0))
+            self.assertEqual(win_mod.corner_left_top("top_right", 800, 600), (1120, 0))
+            self.assertEqual(win_mod.corner_left_top("bottom_right", 800, 600), (1120, 432))
+            self.assertEqual(win_mod.corner_left_top("bottom_left", 800, 600), (0, 432))
+            self.assertEqual(win_mod.corner_left_top("top_left", 800, 600, margin=10), (10, 10))
+            # 窗口比工作区还大 → 钳回左上角，标题栏绝不被推到屏幕外
+            self.assertEqual(win_mod.corner_left_top("bottom_right", 3000, 2000), (0, 0))
+        # 用户拍板顺序：左上→右上→右下→左下，多于 4 个循环
+        order = list(win_mod.CORNER_ORDER)
+        self.assertEqual([LaunchLoginTask._corner_for(i, order) for i in range(5)],
+                         ["top_left", "top_right", "bottom_right", "bottom_left", "top_left"])
+
+    def test_place_after_login_moves_window_to_corner(self):
+        task = LaunchLoginTask()
+        moved = []
+
+        class _Win:
+            def rect(self): return [0, 0, 800, 600]
+            def move_to_corner(self, corner, margin=0):
+                moved.append((corner, margin))
+                return [1120, 0, 800, 600]
+
+        logs = []
+
+        class _RunCtx(_Ctx):
+            def should_stop(self): return False
+            def log(self, msg, level="info"): logs.append((level, msg))
+
+        with mock.patch.object(task, "_interruptible_sleep", lambda *a: None):
+            task._place_after_login(_RunCtx(DEFAULT_CONFIG), _Win(), set(), "top_right", 0.0, 0)
+        self.assertEqual(moved, [("top_right", 0)])
+        self.assertTrue(any("右上" in msg for _lv, msg in logs))
+
+        # corner=None（未开启归位）→ 不移动窗口
+        with mock.patch.object(task, "_interruptible_sleep", lambda *a: None):
+            task._place_after_login(_RunCtx(DEFAULT_CONFIG), _Win(), set(), None, 0.0, 0)
+        self.assertEqual(moved, [("top_right", 0)])
+
     def test_roster_ocr_returns_target_text_center(self):
         fake_engine = mock.Mock(return_value=([
             [[[10, 20], [50, 20], [50, 40], [10, 40]], "角色", 0.99],

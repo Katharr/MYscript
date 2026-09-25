@@ -203,6 +203,7 @@
   "tasks": {
     "launch_login": {
       "dry_run": true,
+      "place_corner": true,
       "loop": {
         "match_threshold": 0.85,
         "launcher_timeout_sec": 120,
@@ -211,7 +212,15 @@
         "recheck_interval_sec": 2.5,
         "recheck_max": 6,
         "switch_wait_min_sec": 2.0,
-        "switch_wait_max_sec": 3.0
+        "switch_wait_max_sec": 3.0,
+        "corner_order": [
+          "top_left",
+          "top_right",
+          "bottom_right",
+          "bottom_left"
+        ],
+        "corner_margin_px": 0,
+        "corner_settle_sec": 2.0
       },
       "regions": {},
       "templates": {

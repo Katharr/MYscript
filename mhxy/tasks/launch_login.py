@@ -40,6 +40,9 @@ class LaunchLoginTask(Task):
         "WAIT_EXISTING": ("existing_role", "WAIT_ROLE", "点击已有角色"),
     }
 
+    _CORNER_LABELS = {"top_left": "左上", "top_right": "右上",
+                      "bottom_right": "右下", "bottom_left": "左下"}
+
     def preflight(self, ctx):
         tc = ctx.task_cfg(self.name)
         account_cfg = ctx.cfg.get("account_launch") or {}
@@ -90,16 +93,25 @@ class LaunchLoginTask(Task):
             "wait_min": wait_min,
             "wait_max": max(wait_min, float(loop.get("switch_wait_max_sec", 3.0))),
         }
+        # 用户拍板：每完成一个窗口就把它摆到屏幕四角，顺序 左上→右上→右下→左下（多于 4 个循环）。
+        place_corner = bool(tc.get("place_corner", True))
+        corners = [str(c) for c in (loop.get("corner_order") or win_mod.CORNER_ORDER)]
+        corner_margin = int(loop.get("corner_margin_px", 0))
+        corner_settle = max(0.0, float(loop.get("corner_settle_sec", 2.0)))
 
         ctx.log("启动登录：%d 个档案，%s。" % (len(profiles), "演练模式" if dry_run else "实战模式"))
+        placed = 0
         for index, profile in enumerate(profiles, 1):
             if ctx.should_stop():
                 break
             label = profile.get("label") or profile.get("expected_role_name") or ("档案 %d" % index)
+            corner = self._corner_for(placed, corners) if place_corner else None
             ctx.log("[%s] 开始处理（%d/%d）。" % (label, index, len(profiles)))
             result = self._run_profile(ctx, profile, templates, threshold, timeout,
-                                       launcher_timeout, recheck_cfg, switch_cfg, dry_run)
+                                       launcher_timeout, recheck_cfg, switch_cfg, dry_run,
+                                       corner, corner_margin, corner_settle)
             if result == "ok":
+                placed += 1
                 ctx.log("[%s] 登录并完成窗口角色校验。" % label, level="hit")
             elif result == "stopped":
                 break
@@ -110,8 +122,14 @@ class LaunchLoginTask(Task):
         else:
             ctx.log("启动登录队列结束。")
 
+    @staticmethod
+    def _corner_for(placed, corners):
+        """第 placed 个成功启动的窗口该去哪个角（顺序循环）。"""
+        return corners[placed % len(corners)] if corners else None
+
     def _run_profile(self, ctx, profile, templates, threshold, timeout, launcher_timeout,
-                     recheck_cfg, switch_cfg, dry_run):
+                     recheck_cfg, switch_cfg, dry_run, corner=None, corner_margin=0,
+                     corner_settle=2.0):
         label = profile.get("label") or profile.get("expected_role_name") or "档案"
         if dry_run:
             return "演练模式不启动程序"
@@ -167,7 +185,9 @@ class LaunchLoginTask(Task):
                 if now - last_role_ocr_at >= 1.0:
                     last_role_ocr_at = now
                     if self._click_roster_role(ctx, win, profile):
-                        return "ok"       # 用户确认：选中角色即视为本号流程结束
+                        # 用户确认：选中角色即视为本号流程结束；随即把这个窗口摆到指定角落。
+                        self._place_after_login(ctx, win, before, corner, corner_settle, corner_margin)
+                        return "ok"
             else:
                 key, next_state, action = self._CLICK_STATES[state]
                 if self._click_template(ctx, win, templates.get(key), threshold, action):
@@ -195,6 +215,29 @@ class LaunchLoginTask(Task):
                 return "%s 超时" % state
             self._interruptible_sleep(ctx, 0.35)
         return "stopped"
+
+    def _place_after_login(self, ctx, win, before, corner, settle_sec, margin):
+        """登录完成后把本号游戏窗口摆到指定屏幕角落。
+
+        失败只告警、不影响登录结果（登录已经成功，归位只是好看/方便后续多开辨认）。
+        """
+        if not corner:
+            return
+        self._interruptible_sleep(ctx, settle_sec)   # 等游戏窗口建好/外壳切换稳定再归位
+        target = win
+        if target.rect() is None:
+            # 点角色后外壳可能换过 HWND：从本次新增的游戏客户端窗口里挑最新的那个。
+            fresh = [w for w in win_mod.locate_all(ctx.cfg.get("window_title", "梦幻西游"),
+                                                   ctx.cfg.get("window_offset", [0, 0]))
+                     if self._window_hwnd(w) and self._window_hwnd(w) not in before]
+            if fresh:
+                target = fresh[-1]
+        label = self._CORNER_LABELS.get(corner, corner)
+        rect = target.move_to_corner(corner, margin=margin)
+        if rect is None:
+            ctx.log("窗口归位到%s失败（窗口可能已最小化或被外壳约束）。" % label, level="warn")
+        else:
+            ctx.log("窗口已归位到%s：%s。" % (label, rect), level="hit")
 
     def _desktop_windows(self, ctx):
         """枚举可见的大型顶层窗口，不按游戏标题/进程过滤。

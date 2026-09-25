@@ -226,6 +226,80 @@ def set_dpi_aware():
             pass
 
 
+# ---- 窗口归位（启动登录把每个号摆到屏幕四角）----
+_user32.SetWindowPos.argtypes = [ctypes.wintypes.HWND, ctypes.wintypes.HWND,
+                                 ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                                 ctypes.wintypes.UINT]
+_user32.SetWindowPos.restype = ctypes.wintypes.BOOL
+_user32.MonitorFromWindow.argtypes = [ctypes.wintypes.HWND, ctypes.wintypes.DWORD]
+_user32.MonitorFromWindow.restype = ctypes.wintypes.HANDLE
+_user32.GetMonitorInfoW.argtypes = [ctypes.wintypes.HANDLE, ctypes.c_void_p]
+_user32.GetMonitorInfoW.restype = ctypes.wintypes.BOOL
+_user32.SystemParametersInfoW.argtypes = [ctypes.wintypes.UINT, ctypes.wintypes.UINT,
+                                          ctypes.c_void_p, ctypes.wintypes.UINT]
+_user32.SystemParametersInfoW.restype = ctypes.wintypes.BOOL
+
+_SWP_NOSIZE = 0x0001
+_SWP_NOZORDER = 0x0004
+_SWP_NOACTIVATE = 0x0010
+_MONITOR_DEFAULTTONEAREST = 0x0002
+_SPI_GETWORKAREA = 0x0030
+
+# 四角顺序（用户拍板）：左上 → 右上 → 右下 → 左下；窗口多于 4 个时循环使用。
+CORNER_ORDER = ("top_left", "top_right", "bottom_right", "bottom_left")
+
+
+class _MONITORINFO(ctypes.Structure):
+    _fields_ = [("cbSize", ctypes.wintypes.DWORD),
+                ("rcMonitor", ctypes.wintypes.RECT),
+                ("rcWork", ctypes.wintypes.RECT),
+                ("dwFlags", ctypes.wintypes.DWORD)]
+
+
+def monitor_work_area(hwnd=None):
+    """目标窗口所在显示器的可用工作区 (left, top, right, bottom)，已排除任务栏。
+
+    多显示器下按【窗口所在那块屏】算角，而不是永远用主屏；查不到退回主显示器工作区。
+    """
+    if hwnd:
+        try:
+            mon = _user32.MonitorFromWindow(int(hwnd), _MONITOR_DEFAULTTONEAREST)
+            if mon:
+                info = _MONITORINFO()
+                info.cbSize = ctypes.sizeof(_MONITORINFO)
+                if _user32.GetMonitorInfoW(mon, ctypes.byref(info)):
+                    r = info.rcWork
+                    return (int(r.left), int(r.top), int(r.right), int(r.bottom))
+        except Exception:
+            pass
+    try:
+        r = ctypes.wintypes.RECT()
+        if _user32.SystemParametersInfoW(_SPI_GETWORKAREA, 0, ctypes.byref(r), 0):
+            return (int(r.left), int(r.top), int(r.right), int(r.bottom))
+    except Exception:
+        pass
+    return None
+
+
+def corner_left_top(corner, win_w, win_h, hwnd=None, margin=0):
+    """按角名 + 窗口尺寸算出窗口左上角坐标，保证整窗落在该显示器工作区内。
+
+    corner: top_left / top_right / bottom_right / bottom_left（不认得按 top_left）。
+    工作区查不到返回 None。窗口比工作区还大时钳到左上角——绝不让标题栏被推到屏幕外拖不回来。
+    """
+    work = monitor_work_area(hwnd)
+    if work is None:
+        return None
+    left, top, right, bottom = work
+    m = max(0, int(margin))
+    win_w, win_h = max(1, int(win_w)), max(1, int(win_h))
+    x = left + m if corner in ("top_left", "bottom_left") else right - win_w - m
+    y = top + m if corner in ("top_left", "top_right") else bottom - win_h - m
+    x = max(left + m, min(int(x), right - m - 1))
+    y = max(top + m, min(int(y), bottom - m - 1))
+    return (int(x), int(y))
+
+
 class GameWindow:
     """对一个游戏窗口的封装。"""
 
@@ -419,6 +493,57 @@ class GameWindow:
             return False
         except Exception:
             return False
+
+    # ---- 归位到屏幕角落（启动登录每完成一个号就摆到下一个角）----
+    def hwnd(self):
+        """窗口句柄（int）；无效返回 0。"""
+        try:
+            return int(self._win._hWnd) if self._win else 0
+        except Exception:
+            return 0
+
+    def move_to(self, left, top, tries=3):
+        """把窗口左上角移到 (left, top)。位置误差 ≤8px 视为成功。
+
+        新标签外壳会约束【尺寸】但允许【移动】，故 SetWindowPos + pygetwindow 两条路径都试、
+        每次读回真实矩形闭环校验（和 resize_to 同一套「假成功」防御）。
+        """
+        if not self._win:
+            return False
+        left, top = int(left), int(top)
+        for _ in range(max(1, int(tries))):
+            try:
+                if self._win.isMinimized:
+                    self._win.restore()
+                    time.sleep(0.15)
+            except Exception:
+                pass
+            handle = self.hwnd()
+            if handle:
+                try:
+                    _user32.SetWindowPos(handle, None, left, top, 0, 0,
+                                         _SWP_NOSIZE | _SWP_NOZORDER | _SWP_NOACTIVATE)
+                except Exception:
+                    pass
+            try:
+                self._win.moveTo(left, top)
+            except Exception:
+                pass
+            time.sleep(0.15)
+            r = self.rect()
+            if r is not None and abs(r[0] - left) <= 8 and abs(r[1] - top) <= 8:
+                return True
+        return False
+
+    def move_to_corner(self, corner, margin=0):
+        """把窗口移到【它所在显示器】工作区的指定角，返回移动后的 [left,top,w,h]，失败返回 None。"""
+        r = self.rect()
+        if r is None:
+            return None
+        target = corner_left_top(corner, r[2], r[3], hwnd=self.hwnd(), margin=margin)
+        if target is None or not self.move_to(target[0], target[1]):
+            return None
+        return self.rect()
 
     # ---- 坐标换算 ----
     def region_to_screen_rect(self, region):
