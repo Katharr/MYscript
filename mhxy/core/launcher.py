@@ -51,68 +51,74 @@ def launch(path, args=None, cwd=None):
     return True, ""
 
 
-def discover_candidates(limit=24):
-    """返回可能的启动器路径，按常见安装位置和开始菜单快捷方式去重。
+LAUNCHER_EXE = "MyPCLauncher_x64r.exe"
 
-    自动发现只提供候选，GUI 不会静默改写用户当前选择。扫描故意保守，避免把所有磁盘递归
-    搜一遍造成卡顿或误命中同名文件。
-    """
+
+def _append_launcher(found, seen, candidate, limit):
+    """仅接受官方启动器同名 exe；返回是否已达到条数上限。"""
+    try:
+        item = Path(candidate)
+        if item.name.lower() != LAUNCHER_EXE.lower() or not item.is_file():
+            return False
+        value = str(item.resolve())
+    except OSError:
+        return False
+    if value not in seen:
+        seen.add(value)
+        found.append(value)
+    return len(found) >= limit
+
+
+def _running_game_install_roots():
+    """从当前可见游戏外壳反推安装根的候选祖先目录。"""
     roots = []
-    for env in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA", "APPDATA"):
-        value = os.environ.get(env)
-        if value:
-            roots.append(Path(value))
-    program_data = os.environ.get("ProgramData")
-    if program_data:
-        roots.append(Path(program_data) / "Microsoft" / "Windows" / "Start Menu" / "Programs")
-
-    hints = ("梦幻", "mhxy", "xyq", "netease", "mygame", "launcher")
-    exts = {".exe", ".lnk"}
-    found = []
-    seen = set()
-
-    # 优先把当前已运行游戏窗口所属的程序路径作为候选。这里仅取路径，不操作进程。
     try:
         from . import window as win_mod
         for desktop_win in win_mod.gw.getAllWindows():
             if "梦幻西游" not in (desktop_win.title or ""):
                 continue
-            value = win_mod.proc_image_path(desktop_win._hWnd)
-            if value and os.path.isfile(value) and value not in seen:
-                seen.add(value)
-                found.append(value)
+            image = win_mod.proc_image_path(desktop_win._hWnd)
+            if not image:
+                continue
+            current = Path(image).parent
+            for _ in range(7):
+                roots.append(current)
+                if current.parent == current:
+                    break
+                current = current.parent
     except Exception:
         pass
-    if len(found) >= max(1, int(limit)):
-        return found[:int(limit)]
+    return roots
+
+
+def discover_candidates(limit=8):
+    """自动检测官方 ``MyPCLauncher_x64r.exe``，绝不返回其它游戏进程。
+
+    先从已运行游戏窗口反推安装目录，再检查常见安装根及其两层子目录。找不到时让用户使用
+    “浏览...”选择，不进行全盘递归或模糊文件名猜测。
+    """
+    limit = max(1, int(limit))
+    found, seen = [], set()
+
+    # 正在运行游戏时，这一条最准确：外壳路径向上逐级检查同目录的官方启动器。
+    roots = _running_game_install_roots()
+    for env in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA", "APPDATA"):
+        value = os.environ.get(env)
+        if value:
+            roots.append(Path(value))
 
     for root in roots:
+        if _append_launcher(found, seen, root / LAUNCHER_EXE, limit):
+            return found
         try:
-            if not root.is_dir():
-                continue
-            # 控制深度：常见安装器/快捷方式目录足够，绝不全盘递归。
             for child in root.glob("*"):
-                paths = [child]
-                if child.is_dir():
-                    try:
-                        paths.extend(child.glob("*"))
-                    except OSError:
-                        pass
-                for item in paths:
-                    try:
-                        if item.suffix.lower() not in exts:
-                            continue
-                        low = item.name.lower()
-                        if not any(h in low for h in hints):
-                            continue
-                        value = str(item.resolve())
-                    except OSError:
-                        continue
-                    if value not in seen:
-                        seen.add(value)
-                        found.append(value)
-                        if len(found) >= max(1, int(limit)):
-                            return found
+                if not child.is_dir():
+                    continue
+                if _append_launcher(found, seen, child / LAUNCHER_EXE, limit):
+                    return found
+                for grandchild in child.glob("*"):
+                    if grandchild.is_dir() and _append_launcher(found, seen, grandchild / LAUNCHER_EXE, limit):
+                        return found
         except OSError:
             continue
     return found

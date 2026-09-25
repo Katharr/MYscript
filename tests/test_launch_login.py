@@ -3,6 +3,7 @@ import copy
 import os
 import sys
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from mhxy.core import accounts
@@ -32,6 +33,16 @@ class LaunchLoginTests(unittest.TestCase):
         self.assertEqual(launcher.normalize_path(sys.executable), expected)
         self.assertEqual(launcher.normalize_path("start.py"), "")
         self.assertEqual(launcher.normalize_path("missing-launcher.exe"), "")
+
+    def test_auto_detect_accepts_only_official_launcher_name(self):
+        official = Path("C:/game") / launcher.LAUNCHER_EXE
+        wrong = Path("C:/game/MyGame_x64r.exe")
+        found, seen = [], set()
+        with mock.patch.object(Path, "is_file", return_value=True):
+            self.assertFalse(launcher._append_launcher(found, seen, wrong, 8))
+            self.assertEqual(found, [])
+            self.assertFalse(launcher._append_launcher(found, seen, official, 8))
+        self.assertEqual(found, [str(official.resolve())])
 
     def test_preflight_accepts_complete_live_profile(self):
         cfg = copy.deepcopy(DEFAULT_CONFIG)
