@@ -95,6 +95,9 @@ class LaunchLoginTests(unittest.TestCase):
             hit = accounts.locate_roster_name(object(), {"r1": {"name": "角色"}}, "r1")
         self.assertIsNotNone(hit)
         self.assertEqual(hit[:2], (30, 30))
+        with mock.patch("mhxy.core.accounts._get_ocr_engine", return_value=fake_engine):
+            manual_hit = accounts.locate_roster_name(object(), {}, expected_name="角色")
+        self.assertEqual(manual_hit[:2], (30, 30))
 
     def test_verified_launch_binding_is_runtime_only(self):
         win = _Window()

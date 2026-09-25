@@ -59,8 +59,8 @@ class LaunchLoginTask(Task):
                                                      ctx.cfg.get("window_offset", [0, 0])))
         for profile in profiles:
             name = profile.get("label") or profile.get("expected_role_name") or "未命名档案"
-            if not profile.get("expected_role_id"):
-                problems.append("%s 未在下拉框选择目标角色" % name)
+            if not profile.get("expected_role_id") and not profile.get("expected_role_name"):
+                problems.append("%s 未选择或输入目标角色" % name)
             role_id = profile.get("expected_role_id")
             if role_id and roster and str(role_id) not in roster:
                 problems.append("%s 的目标角色不在本机名册中" % name)
@@ -300,11 +300,13 @@ class LaunchLoginTask(Task):
     def _click_roster_role(self, ctx, win, profile):
         """在“已有角色”页 OCR 找到档案下拉框选定的角色名并点击。"""
         role_id = str(profile.get("expected_role_id") or "")
-        if not role_id or not win.activate():
+        expected_name = (profile.get("expected_role_name") or "").strip()
+        if (not role_id and not expected_name) or not win.activate():
             return False
         names = accounts.roster([win])
         scene = self._scene(ctx, win)
-        hit = accounts.locate_roster_name(scene.img if scene is not None else None, names, role_id)
+        hit = accounts.locate_roster_name(scene.img if scene is not None else None, names, role_id,
+                                          expected_name=expected_name)
         if hit is None:
             return False
         xy = scene.to_screen(hit[0], hit[1])

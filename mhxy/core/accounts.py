@@ -394,14 +394,14 @@ def match_ocr_result(result, names):
     return best_rid
 
 
-def locate_roster_name(image_bgr, names, role_id):
-    """在角色列表截图中 OCR 定位指定名册角色，返回 ``(cx, cy, score)`` 或 ``None``。
+def locate_roster_name(image_bgr, names, role_id=None, expected_name=None):
+    """在角色列表截图中 OCR 定位指定角色，返回 ``(cx, cy, score)`` 或 ``None``。
 
-    仅接受 ``role_id`` 对应的精确名册姓名，OCR 有相近文本也不会点。坐标相对传入图片左上角；
-    启动登录任务传整屏截图，因此可直接经 ScaledScene.to_screen 换回屏幕坐标。
+    常规路径由 ``role_id`` 从本机名册取目标姓名；首次运行尚未发现 LocalData 时，可传
+    ``expected_name`` 手填精确姓名兜底。坐标相对传入图片左上角。
     """
-    rec = (names or {}).get(str(role_id))
-    wanted = _normalize_name((rec or {}).get("name"))
+    rec = (names or {}).get(str(role_id)) if role_id else None
+    wanted = _normalize_name((rec or {}).get("name") or expected_name)
     if image_bgr is None or not wanted:
         return None
     engine = _get_ocr_engine()

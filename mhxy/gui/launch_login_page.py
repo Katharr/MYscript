@@ -136,6 +136,7 @@ class LaunchLoginPage(ctk.CTkFrame):
             ctk.CTkLabel(self.profile_list, text="暂无启动档案", font=self.fonts["body"],
                          text_color=T.TEXT_DIM).grid(row=0, column=0, sticky="ew", padx=12, pady=24)
             return
+        has_roster = bool(self._profile_role_values)
         values = list(self._profile_role_values) or ["未读取到角色名册"]
         for index, profile in enumerate(profiles):
             row = _card(self.profile_list, fg_color=T.SURFACE_2, corner_radius=T.RADIUS_SM)
@@ -158,6 +159,11 @@ class LaunchLoginPage(ctk.CTkFrame):
                 row=1, column=1, columnspan=2, sticky="w", padx=(0, 10), pady=(0, 10))
             buttons = ctk.CTkFrame(row, fg_color="transparent")
             buttons.grid(row=0, column=3, rowspan=2, sticky="e", padx=(4, 10))
+            if not has_roster:
+                ctk.CTkButton(buttons, text="手填", font=self.fonts["small"], height=30, width=48,
+                              corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER,
+                              text_color=T.TEXT, border_width=1, border_color=T.BORDER,
+                              command=lambda p=profile: self._prompt_role_name(p)).pack(side="left", padx=2)
             ctk.CTkButton(buttons, text="↑", font=self.fonts["body_b"], height=30, width=30,
                           corner_radius=T.RADIUS_SM, fg_color="transparent", hover_color=T.BTN_HOVER,
                           text_color=T.TEXT, command=lambda i=index: self._move(i, -1)).pack(side="left", padx=2)
@@ -228,6 +234,12 @@ class LaunchLoginPage(ctk.CTkFrame):
 
     def _set_enabled(self, profile_id, enabled):
         self._update_profile(profile_id, enabled=bool(enabled))
+
+    def _prompt_role_name(self, profile):
+        dialog = ctk.CTkInputDialog(text="目标角色名：", title="手填角色名")
+        name = (dialog.get_input() or "").strip()
+        if name:
+            self._update_profile(profile["id"], expected_role_id="", expected_role_name=name)
 
     def _set_role(self, profile_id, value):
         pair = self._profile_role_values.get(value)
