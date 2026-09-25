@@ -53,6 +53,7 @@ _DATA_DIR_TTL = 20.0
 _lock = threading.RLock()
 _cache = {"order": []}
 _identity = {}                       # hwnd -> {fingerprint, pending, role_id, retry_at, seen_at}
+_launch_sessions = {}                 # hwnd -> {role_id, profile_id, bound_at}; 仅本次一键启动会话
 _data_dir = {"path": "", "at": 0.0}
 _game_dir = ""                       # config.game_dir 覆盖（空 = 自动探测）
 _ocr_lock = threading.Lock()
@@ -282,6 +283,29 @@ def display_name(rec):
 def fallback_label(index):
     """认不出角色名时的兜底显示（与旧行为一致）。"""
     return "号%d" % (index + 1)
+
+
+def bind_launch_session(win, role_id, profile_id=None):
+    """记录本次一键启动已核验的 ``窗口 -> 角色`` 绑定。
+
+    只有启动任务在角色名模板点击成功、且顶部标签 OCR 与本机名册二次确认后才调用本函数。
+    该映射只是运行期诊断/编排数据，显示身份仍以顶部标签 OCR 为权威。
+    """
+    hwnd = _hwnd(win)
+    if not hwnd or not role_id:
+        return False
+    with _lock:
+        _launch_sessions[hwnd] = {"role_id": str(role_id), "profile_id": profile_id,
+                                  "bound_at": time.time()}
+    return True
+
+
+def launch_session(win):
+    """返回本次启动会话绑定，未绑定或窗口无效时返回 ``None``。"""
+    hwnd = _hwnd(win)
+    with _lock:
+        item = _launch_sessions.get(hwnd)
+        return dict(item) if item else None
 
 
 def _window_pid(hwnd):
@@ -527,11 +551,15 @@ def _compute(wins):
             label = display_name(names[rid])
             if label:
                 labels[hwnd] = label
+    active_hwnds = {_hwnd(w) for w in wins}
     with _lock:
         stale = [h for h, entry in _identity.items()
                  if now - float(entry.get("seen_at", now)) > _IDENTITY_MAX_AGE_SEC]
         for hwnd in stale:
             _identity.pop(hwnd, None)
+        # 一键启动绑定只属于本次存活窗口会话；窗口关闭或 HWND 改变后绝不复用旧绑定。
+        for hwnd in [h for h in _launch_sessions if h not in active_hwnds]:
+            _launch_sessions.pop(hwnd, None)
     return labels
 
 
@@ -580,3 +608,4 @@ def invalidate(clear_identity=False):
         _data_dir["at"] = 0.0
         if clear_identity:
             _identity.clear()
+            _launch_sessions.clear()

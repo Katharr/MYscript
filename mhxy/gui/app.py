@@ -12,6 +12,7 @@ import threading
 import customtkinter as ctk
 
 from . import theme as T
+from .launch_login_page import LaunchLoginPage
 from ..core import calib_profiles as calib
 from ..core import config as cfg_mod
 from ..core import window as win_mod
@@ -3925,6 +3926,7 @@ class DailyPage(ctk.CTkFrame):
 # ----------------------------------------------------------------------
 class App(ctk.CTk):
     NAV = [("general", "🧰  通用 / 工具"),
+            ("launch_login", "启动登录"),
            ("daily", "🐉  日常一条龙"),
            ("sniper", "🗡  秒装备"), ("treasure_map", "🗺  宝图"),
            ("escort", "🚚  运镖"), ("secret_realm", "👹  秘境降妖"),
@@ -3932,7 +3934,7 @@ class App(ctk.CTk):
            ("settings", "⚙  设置"), ("about", "ⓘ  关于")]
     # 可运行任务页（有 runner/pump/update_game_pill），App 的定时器/热键/关闭钩子按此遍历。
     # general 也在内：它的「一键组队」会跑后台任务，需要 pump 抽日志、关闭时停 runner。
-    RUNNABLE_KEYS = ("general", "daily", "sniper", "freeclick", "treasure_map",
+    RUNNABLE_KEYS = ("general", "launch_login", "daily", "sniper", "freeclick", "treasure_map",
                      "escort", "secret_realm", "dungeon")
 
     def __init__(self):
@@ -4163,6 +4165,7 @@ class App(ctk.CTk):
     # 各页面对应的类。懒加载：启动只建默认页，其余等第一次切到才建——
     # 一次性建全部 9 个页面会瞬间绘制几百个 CTk 画布控件，正是启动「一块块慢慢刷出来」的根因。
     PAGE_CLASSES = {
+        "launch_login": LaunchLoginPage,
         "daily": DailyPage,
         "sniper": SniperPage,
         "freeclick": FreeClickPage,

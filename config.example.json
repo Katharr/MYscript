@@ -11,6 +11,8 @@
   "failsafe_corner": "top_right",
   "appearance": "dark",
   "account_launch": {
+    "launcher_path": "",
+    "launcher_args": [],
     "profiles": []
   },
   "float_log": {
@@ -199,6 +201,24 @@
     }
   },
   "tasks": {
+    "launch_login": {
+      "dry_run": true,
+      "loop": {
+        "match_threshold": 0.85,
+        "launcher_timeout_sec": 120,
+        "state_timeout_sec": 60
+      },
+      "regions": {
+        "scene": null
+      },
+      "templates": {
+        "start_game": null,
+        "enter_game": null,
+        "switch_role": null,
+        "existing_role": null,
+        "in_game_ready": null
+      }
+    },
     "sniper": {
       "dry_run": true,
       "loop": {

@@ -48,10 +48,11 @@ DEFAULT_CONFIG = {
                                          #   top_right/top_left/bottom_right/bottom_left/off(关闭)。设置里可改。
     "appearance": "dark",                # 界面外观：dark(夜间) / light(白天)，侧栏可切换
 
-    # 预留未来「一键启动账号」入口：每项将是 {name, path, args}，当前不执行也不显示 UI。
-    # 不保存账号密码；只允许启动用户已有的客户端快捷方式/启动命令。
+    # ---- 一键启动 / 登录（只保存本机启动器路径和目标角色，不保存账号密码/Cookie/Token）----
     "account_launch": {
-        "profiles": []
+        "launcher_path": "",            # 浏览…选择的启动器 EXE / LNK；自动检测只填候选，不静默覆盖
+        "launcher_args": [],             # 可选启动参数
+        "profiles": []                   # [{id,label,enabled,expected_role_id,expected_role_name,role_template}]
     },
 
     # ---- 悬浮日志窗（通用页「收起为悬浮日志窗」；纯界面偏好，跨任务共享）----
@@ -158,6 +159,24 @@ DEFAULT_CONFIG = {
 
     # ---- 各任务独立配置 ----
     "tasks": {
+        # ---- 一键启动登录（启动器唯一：账号按队列严格串行，完成窗口角色核验后才启动下一个）----
+        "launch_login": {
+            "dry_run": True,             # 演练只识别当前已开窗口，不启动程序、不点击
+            "loop": {
+                "match_threshold": 0.85,
+                "launcher_timeout_sec": 120,
+                "state_timeout_sec": 60
+            },
+            "regions": {"scene": None},
+            "templates": {
+                "start_game": None,
+                "enter_game": None,
+                "switch_role": None,
+                "existing_role": None,
+                "in_game_ready": None
+            }
+        },
+
         "sniper": {
             "dry_run": True,             # true=演练只识别不下单
             "loop": {
