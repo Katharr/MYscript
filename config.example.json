@@ -255,12 +255,20 @@
       "regions": {
         "scene": null
       },
-      "items": [
+      "lists": [
         {
-          "name": "example_anniu",
-          "template": "templates/fc_example_anniu.png"
+          "id": "default",
+          "name": "默认清单",
+          "items": [
+            {
+              "name": "example_anniu",
+              "template": "templates/fc_example_anniu.png"
+            }
+          ]
         }
-      ]
+      ],
+      "selected_list": "default",
+      "items": []
     },
     "treasure_map": {
       "dry_run": true,

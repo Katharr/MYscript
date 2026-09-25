@@ -38,10 +38,22 @@ class FreeClickTask(Task):
         "watchlist": False,
     }
 
+    @staticmethod
+    def selected_items(tc):
+        """返回当前选中清单的项目；兼容旧版顶层 items 配置。"""
+        lists = tc.get("lists") or []
+        selected_id = tc.get("selected_list")
+        for entry in lists:
+            if entry.get("id") == selected_id:
+                return entry.get("items") or []
+        if lists:
+            return []
+        return tc.get("items") or []
+
     def preflight(self, ctx):
         tc = ctx.task_cfg(self.name)
         problems = []
-        items = tc.get("items") or []
+        items = self.selected_items(tc)
         if not items:
             problems.append("截图清单为空 —— 请先「＋ 框选加截图」")
         for it in items:
@@ -61,7 +73,7 @@ class FreeClickTask(Task):
         after_click = float(loop.get("after_click_wait_sec", 0.35))
         round_interval = float(loop.get("round_interval_sec", 0.8))
 
-        items = [(it, vision.load_template(it.get("template"))) for it in (tc.get("items") or [])]
+        items = [(it, vision.load_template(it.get("template"))) for it in self.selected_items(tc)]
         items = [(it, tpl) for it, tpl in items if tpl is not None]
         if not items:
             ctx.log("清单里没有可用的截图，已停止。", level="error")

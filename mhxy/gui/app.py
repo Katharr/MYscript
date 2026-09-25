@@ -495,6 +495,9 @@ class FreeClickPage(ctk.CTkFrame):
         self._drag_idx = None
         self._drag_from = None
         self._drag_name = "?"
+        self._selected_list_id = None
+        self._lists = []
+        self._edit_controls = []
 
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(2, weight=1)
@@ -520,44 +523,84 @@ class FreeClickPage(ctk.CTkFrame):
         self.pill_mode = Pill(right, self.fonts)
         self.pill_mode.pack(side="left")
 
-    # ---- 控制区：运行按钮 + 工具 / 分隔线 / 模式开关 ----
+    # ---- 控制区：运行 / 清单 / 当前清单编辑 ----
     def _build_control(self):
         card = Card(self)
         card.grid(row=1, column=0, sticky="ew", padx=4, pady=(0, 14))
         card.grid_columnconfigure(0, weight=1)
 
-        top = ctk.CTkFrame(card, fg_color="transparent")
-        top.grid(row=0, column=0, sticky="ew", padx=16, pady=(16, 10))
-        top.grid_columnconfigure(1, weight=1)
-        self.btn_run = ctk.CTkButton(top, text="▶  开始自由点击", font=self.fonts["btn"],
-                                     height=46, width=200, corner_radius=T.RADIUS_SM,
-                                     fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER, text_color=T.ON_ACCENT,
-                                     command=self._toggle_run)
+        # 运行操作单独占一行，避免和清单管理混成一组。
+        run_bar = ctk.CTkFrame(card, fg_color="transparent")
+        run_bar.grid(row=0, column=0, sticky="ew", padx=16, pady=(16, 12))
+        run_bar.grid_columnconfigure(1, weight=1)
+        self.btn_run = ctk.CTkButton(
+            run_bar, text="▶  开始自由点击", font=self.fonts["btn"], height=46, width=200,
+            corner_radius=T.RADIUS_SM, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
+            text_color=T.ON_ACCENT, command=self._toggle_run)
         self.btn_run.grid(row=0, column=0, sticky="w")
-        tools = ctk.CTkFrame(top, fg_color="transparent")
-        tools.grid(row=0, column=2, sticky="e")
-        ctk.CTkButton(tools, text="选择窗口", font=self.fonts["body"], height=36, width=104,
-                      corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
-                      border_width=1, border_color=T.BORDER,
-                      command=lambda: self.app.open_window_picker(self.refresh)).pack(side="left", padx=(0, 8))
-        ctk.CTkButton(tools, text="＋ 框选加截图", font=self.fonts["body"], height=36, width=124,
-                      corner_radius=T.RADIUS_SM, fg_color=T.SUCCESS, hover_color=T.SUCCESS_HOVER,
-                      text_color=T.BG, command=self._add_shot).pack(side="left", padx=(0, 8))
-        ctk.CTkButton(tools, text="刷新配置", font=self.fonts["body"], height=36, width=104,
-                      corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
-                      border_width=1, border_color=T.BORDER,
-                      command=self.refresh).pack(side="left")
+        ctk.CTkButton(
+            run_bar, text="选择窗口", font=self.fonts["body"], height=36, width=104,
+            corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER,
+            text_color=T.TEXT, border_width=1, border_color=T.BORDER,
+            command=lambda: self.app.open_window_picker(self.refresh)).grid(row=0, column=2, sticky="e")
 
         ctk.CTkFrame(card, fg_color=T.BORDER, height=1).grid(
-            row=1, column=0, sticky="ew", padx=16, pady=(0, 4))
+            row=1, column=0, sticky="ew", padx=16, pady=(0, 12))
+
+        # 当前清单管理单独成组：下拉框可伸缩，操作按钮保持固定尺寸。
+        list_bar = ctk.CTkFrame(card, fg_color="transparent")
+        list_bar.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 10))
+        list_bar.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(list_bar, text="当前清单", font=self.fonts["body_b"],
+                     text_color=T.TEXT).grid(row=0, column=0, sticky="w", padx=(0, 12))
+        self.list_menu = ctk.CTkOptionMenu(
+            list_bar, values=["未命名清单"], height=36, width=180,
+            font=self.fonts["body"], fg_color=T.SURFACE_2, button_color=T.BTN,
+            button_hover_color=T.BTN_HOVER, text_color=T.TEXT,
+            command=self._select_list)
+        self.list_menu.grid(row=0, column=1, sticky="ew", padx=(0, 12))
+
+        self.btn_new_list = ctk.CTkButton(
+            list_bar, text="＋ 新建", font=self.fonts["small"], height=36, width=82,
+            corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER,
+            text_color=T.TEXT, border_width=1, border_color=T.BORDER,
+            command=self._create_list)
+        self.btn_new_list.grid(row=0, column=2, padx=(0, 8))
+        self.btn_rename_list = ctk.CTkButton(
+            list_bar, text="重命名", font=self.fonts["small"], height=36, width=76,
+            corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER,
+            text_color=T.TEXT, border_width=1, border_color=T.BORDER,
+            command=self._rename_list)
+        self.btn_rename_list.grid(row=0, column=3, padx=(0, 8))
+        self.btn_delete_list = ctk.CTkButton(
+            list_bar, text="删除", font=self.fonts["small"], height=36, width=64,
+            corner_radius=T.RADIUS_SM, fg_color="transparent", hover_color=T.DANGER,
+            text_color=T.TEXT, border_width=1, border_color=T.BORDER,
+            command=self._delete_list)
+        self.btn_delete_list.grid(row=0, column=4)
+
+        edit_bar = ctk.CTkFrame(card, fg_color="transparent")
+        edit_bar.grid(row=3, column=0, sticky="ew", padx=16, pady=(0, 10))
+        edit_bar.grid_columnconfigure(1, weight=1)
+        self.btn_add_shot = ctk.CTkButton(
+            edit_bar, text="＋ 框选加截图", font=self.fonts["body"], height=36, width=124,
+            corner_radius=T.RADIUS_SM, fg_color=T.SUCCESS, hover_color=T.SUCCESS_HOVER,
+            text_color=T.ON_ACCENT, command=self._add_shot)
+        self.btn_add_shot.grid(row=0, column=0, sticky="w", padx=(0, 8))
+        self.btn_refresh = ctk.CTkButton(
+            edit_bar, text="刷新配置", font=self.fonts["body"], height=36, width=104,
+            corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER,
+            text_color=T.TEXT, border_width=1, border_color=T.BORDER,
+            command=self.refresh)
+        self.btn_refresh.grid(row=0, column=1, sticky="w")
 
         opts = ctk.CTkFrame(card, fg_color="transparent")
-        opts.grid(row=2, column=0, sticky="ew", padx=16, pady=(8, 16))
-        box1 = ctk.CTkFrame(opts, fg_color="transparent")
-        box1.pack(anchor="w")
-        self.switch_mode = ctk.CTkSwitch(box1, text="实战模式", font=self.fonts["body"],
+        opts.grid(row=4, column=0, sticky="ew", padx=16, pady=(2, 16))
+        self.switch_mode = ctk.CTkSwitch(opts, text="实战模式", font=self.fonts["body"],
                                          progress_color=T.DANGER, command=self._toggle_mode)
         self.switch_mode.pack(anchor="w")
+        self._edit_controls = [self.list_menu, self.btn_new_list, self.btn_rename_list,
+                               self.btn_delete_list, self.btn_add_shot, self.btn_refresh]
 
     # ---- 主体：截图清单（铺满；日志已移到全局右栏）----
     def _build_body(self):
@@ -573,8 +616,10 @@ class FreeClickPage(ctk.CTkFrame):
         head = ctk.CTkFrame(card, fg_color="transparent")
         head.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 8))
         head.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(head, text="截图清单（顺序即点击顺序）", font=self.fonts["h2"],
-                     text_color=T.TEXT).grid(row=0, column=0, sticky="w")
+        self.lbl_list_title = ctk.CTkLabel(
+            head, text="截图清单", font=self.fonts["h2"], text_color=T.TEXT,
+            anchor="w")
+        self.lbl_list_title.grid(row=0, column=0, sticky="ew")
         self.lbl_count = ctk.CTkLabel(head, text="", font=self.fonts["small"], text_color=T.TEXT_DIM)
         self.lbl_count.grid(row=0, column=1, sticky="e")
         self.list_frame = ctk.CTkScrollableFrame(card, fg_color="transparent")
@@ -591,7 +636,125 @@ class FreeClickPage(ctk.CTkFrame):
         dry = tc.get("dry_run", True)
         (self.switch_mode.select if not dry else self.switch_mode.deselect)()
         self._render_mode_pill(dry)
-        self._render_items(tc.get("items") or [])
+        lists = self._ensure_lists(tc)
+        self._lists = lists
+        selected = tc.get("selected_list")
+        entry = next((x for x in lists if x.get("id") == selected), lists[0])
+        self._selected_list_id = entry["id"]
+        if tc.get("selected_list") != self._selected_list_id or not tc.get("lists"):
+            tc["selected_list"] = self._selected_list_id
+            tc["lists"] = lists
+            cfg_mod.set_task_config(self.app.cfg, self.TASK_NAME, tc)
+            cfg_mod.save_config(self.app.cfg)
+        list_name = entry.get("name", "未命名清单")
+        self.list_menu.configure(values=[x.get("name", "未命名清单") for x in lists])
+        self.list_menu.set(list_name)
+        self.lbl_list_title.configure(text=f"{list_name} · 截图清单")
+        self.btn_delete_list.configure(state="disabled" if len(lists) <= 1 else "normal")
+        self._render_items(entry.get("items") or [])
+        self._set_edit_controls(not self._busy())
+
+    @staticmethod
+    def _ensure_lists(tc):
+        lists = tc.get("lists") or []
+        if not lists:
+            import uuid
+            lists = [{"id": uuid.uuid4().hex, "name": "清单 1", "items": [dict(x) for x in (tc.get("items") or [])]}]
+        else:
+            lists = [{"id": x.get("id") or __import__("uuid").uuid4().hex,
+                      "name": x.get("name") or "未命名清单", "items": [dict(i) for i in (x.get("items") or [])]}
+                     for x in lists]
+        return lists
+
+    def _current_list(self):
+        return next((x for x in self._lists if x.get("id") == self._selected_list_id), None)
+
+    def _save_lists(self):
+        tc = cfg_mod.task_config(self.app.cfg, self.TASK_NAME)
+        tc["lists"] = self._lists
+        tc["selected_list"] = self._selected_list_id
+        tc["items"] = list((self._current_list() or {}).get("items") or [])
+        cfg_mod.set_task_config(self.app.cfg, self.TASK_NAME, tc)
+        cfg_mod.save_config(self.app.cfg)
+
+    def _select_list(self, name):
+        entry = next((x for x in self._lists if x.get("name") == name), None)
+        if entry is None or entry.get("id") == self._selected_list_id:
+            return
+        self._selected_list_id = entry["id"]
+        self._save_lists()
+        self._sig = None
+        self.lbl_list_title.configure(text=f"{entry.get('name', '未命名清单')} · 截图清单")
+        self._render_items(entry.get("items") or [])
+
+    def _list_name(self, title, initial=""):
+        dlg = ctk.CTkInputDialog(text="清单名称：", title=title)
+        value = dlg.get_input()
+        value = (value or "").strip()
+        return value or None
+
+    def _create_list(self):
+        if self._busy():
+            self._log_line("运行中不能改清单，请先停止。", "warn")
+            return
+        name = self._list_name("新建清单")
+        if not name:
+            return
+        existing = {x.get("name") for x in self._lists}
+        base, n = name, 2
+        while name in existing:
+            name = f"{base} {n}"
+            n += 1
+        import uuid
+        entry = {"id": uuid.uuid4().hex, "name": name, "items": []}
+        self._lists.append(entry)
+        self._selected_list_id = entry["id"]
+        self._save_lists()
+        self.refresh()
+
+    def _rename_list(self):
+        if self._busy():
+            self._log_line("运行中不能改清单，请先停止。", "warn")
+            return
+        entry = self._current_list()
+        if not entry:
+            return
+        name = self._list_name(f"重命名清单（当前：{entry.get('name', '未命名清单')}）")
+        if not name:
+            return
+        existing = {x.get("name") for x in self._lists if x is not entry}
+        base, n = name, 2
+        while name in existing:
+            name = f"{base} {n}"
+            n += 1
+        entry["name"] = name
+        self._save_lists()
+        self.refresh()
+
+    def _delete_list(self):
+        if self._busy():
+            self._log_line("运行中不能改清单，请先停止。", "warn")
+            return
+        if len(self._lists) <= 1:
+            self._log_line("至少保留一份清单。", "warn")
+            return
+        current_idx = next((i for i, x in enumerate(self._lists)
+                            if x.get("id") == self._selected_list_id), 0)
+        self._lists = [x for x in self._lists if x.get("id") != self._selected_list_id]
+        next_idx = min(current_idx, len(self._lists) - 1)
+        self._selected_list_id = self._lists[next_idx]["id"]
+        self._save_lists()
+        self.refresh()
+
+    def _set_edit_controls(self, enabled):
+        for control in self._edit_controls:
+            state = "normal" if enabled else "disabled"
+            if enabled and control is self.btn_delete_list and len(self._lists) <= 1:
+                state = "disabled"
+            try:
+                control.configure(state=state)
+            except Exception:
+                pass
 
     def _render_items(self, items):
         sig = [(it.get("name"), it.get("template")) for it in items]
@@ -606,8 +769,9 @@ class FreeClickPage(ctk.CTkFrame):
         self.lbl_count.configure(text=f"{len(self._items)} 张")
 
         if not self._items:
-            empty = ctk.CTkLabel(self.list_frame, text="点上方「＋ 框选加截图」添加。",
-                                 font=self.fonts["body"], text_color=T.TEXT_DIM, justify="left")
+            empty = ctk.CTkLabel(self.list_frame, text="当前清单暂无截图，请使用上方「＋ 框选加截图」添加。",
+                                 font=self.fonts["body"], text_color=T.TEXT_DIM, justify="left",
+                                 anchor="w")
             empty.grid(row=0, column=0, sticky="ew", padx=12, pady=20)
             bind_wraplength(empty)
             return
@@ -760,15 +924,18 @@ class FreeClickPage(ctk.CTkFrame):
         if not vision.save_image(rel_path, crop):
             self._log_line("保存截图失败。", "error")
             return
-        tc = cfg_mod.task_config(self.app.cfg, self.TASK_NAME)
-        tc.setdefault("items", []).append({"name": name, "template": rel_path})
-        cfg_mod.set_task_config(self.app.cfg, self.TASK_NAME, tc)
+        entry = self._current_list()
+        if entry is None:
+            self._log_line("请先创建清单。", "error")
+            return
+        entry.setdefault("items", []).append({"name": name, "template": rel_path})
+        self._save_lists()
         calib.set_task_profile(self.app.cfg, self.TASK_NAME, pid)
         calib.set_template_profile(self.app.cfg, self.TASK_NAME, name, pid)
         cfg_mod.save_config(self.app.cfg)
         self._sig = None
-        self._render_items(tc["items"])
-        self._log_line(f"已添加截图：{name}（第 {len(tc['items'])} 项）", "hit")
+        self._render_items(entry["items"])
+        self._log_line(f"已添加截图：{name}（第 {len(entry['items'])} 项）", "hit")
 
     def _recalibrate(self, row):
         if self._busy():
@@ -835,10 +1002,11 @@ class FreeClickPage(ctk.CTkFrame):
 
     def _persist_items(self):
         """把内存里的清单（顺序 + 内容）写回 config，并同步内容签名。"""
-        tc = cfg_mod.task_config(self.app.cfg, self.TASK_NAME)
-        tc["items"] = [dict(it) for it in self._items]
-        cfg_mod.set_task_config(self.app.cfg, self.TASK_NAME, tc)
-        cfg_mod.save_config(self.app.cfg)
+        entry = self._current_list()
+        if entry is None:
+            return
+        entry["items"] = [dict(it) for it in self._items]
+        self._save_lists()
         self._sig = [(it.get("name"), it.get("template")) for it in self._items]
 
     def _busy(self):
@@ -864,11 +1032,13 @@ class FreeClickPage(ctk.CTkFrame):
             self.runner = None
             return
         self.btn_run.configure(text="■  停止", fg_color=T.DANGER, hover_color=T.DANGER_HOVER, state="normal")
+        self._set_edit_controls(False)
         self.app.on_task_started(self.LOG_SOURCE, self._toggle_run, self.runner)
 
     def _on_runner_finished(self):
         self.btn_run.configure(text="▶  开始自由点击", fg_color=T.ACCENT,
                                hover_color=T.ACCENT_HOVER, state="normal")
+        self._set_edit_controls(True)
 
     def _toggle_mode(self):
         live = bool(self.switch_mode.get())  # 1=实战

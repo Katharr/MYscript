@@ -182,7 +182,9 @@ DEFAULT_CONFIG = {
             "regions": {
                 "scene": None            # 识别区（相对游戏窗口 [x,y,w,h]）；留空=整窗检测（推荐）
             },
-            "items": []                  # [{name, template}]，【数组顺序 = 点击顺序】（GUI 可拖拽调序）
+            "lists": [],                 # [{id, name, items}]；每份 items 的数组顺序 = 点击顺序
+            "selected_list": None,        # 当前展开/运行的清单 id；旧版 items 会由 GUI 自动迁移
+            "items": []                  # 兼容旧配置：首次进入自由点击页自动迁移到 lists
         },
 
         # ---- 刷副本·宝图（一次性两阶段状态机；游戏自带自动战斗全托管，脚本只导航+监控+关键点击）----
