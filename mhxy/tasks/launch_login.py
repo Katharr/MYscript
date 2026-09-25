@@ -118,7 +118,7 @@ class LaunchLoginTask(Task):
         ctx.log("[%s] 已请求启动器；若出现 UAC/SmartScreen，请手动确认。" % label)
         win = self._wait_new_window(ctx, before, launcher_timeout, templates.get("start_game"), threshold)
         if win is None:
-            return "等待启动器/游戏窗口超时（可能仍在 UAC 或启动器未被窗口规则识别）"
+            return "等待 MyPCLauncher_x64r.exe 启动器窗口超时"
 
         state = "WAIT_START"
         state_at = time.time()
@@ -195,6 +195,24 @@ class LaunchLoginTask(Task):
     def _desktop_hwnds(self, ctx):
         return {self._window_hwnd(win) for win in self._desktop_windows(ctx) if self._window_hwnd(win)}
 
+    def _official_launcher_window(self, ctx):
+        """按官方启动器进程定位窗口，支持已存在或最小化的单例启动器。"""
+        title = ctx.cfg.get("window_title", "梦幻西游")
+        offset = ctx.cfg.get("window_offset", [0, 0])
+        try:
+            raw = win_mod.gw.getAllWindows()
+        except Exception:
+            return None
+        for desktop_win in raw:
+            try:
+                hwnd = int(desktop_win._hWnd)
+                image = win_mod.proc_image_path(hwnd)
+                if image and image.rsplit("\\", 1)[-1].lower() == launcher.LAUNCHER_EXE.lower():
+                    return win_mod.GameWindow(title, offset).bind(desktop_win)
+            except Exception:
+                continue
+        return None
+
     def _find_template_window(self, ctx, tpl, threshold, allowed_hwnds=None):
         if tpl is None:
             return None
@@ -211,13 +229,20 @@ class LaunchLoginTask(Task):
         deadline = started + timeout
         warned = False
         while not ctx.should_stop() and time.time() < deadline:
+            # 官方启动器是单例：可能复用已有 HWND，也可能最小化后被 ShellExecute 唤起。
+            # 所以先按 MyPCLauncher_x64r.exe 精确找窗口，不能只接受“新 HWND + 模板命中”。
+            win = self._official_launcher_window(ctx)
+            if win is not None and win.activate():
+                ctx.log("已检测到 MyPCLauncher_x64r.exe 启动器。")
+                return win
+            # 兼容未来外壳进程变化：仅把本次新增且命中开始游戏模板的窗口作为后备候选。
             new_hwnds = self._desktop_hwnds(ctx) - before
             win = self._find_template_window(ctx, start_tpl, threshold, new_hwnds)
-            if win is not None:
-                if win.activate():
-                    return win
+            if win is not None and win.activate():
+                ctx.log("已通过开始游戏模板检测到启动器。")
+                return win
             if not warned and time.time() - started >= 8:
-                ctx.log("仍未看到启动器，请确认 UAC/SmartScreen 是否尚未确认。", level="warn")
+                ctx.log("仍未检测到 MyPCLauncher_x64r.exe 启动器窗口。", level="warn")
                 warned = True
             self._interruptible_sleep(ctx, 0.5)
         return None
