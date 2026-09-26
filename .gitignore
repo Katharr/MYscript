@@ -18,6 +18,7 @@ __pycache__/
 /config.json
 /captures/
 /templates/
+/docs/
 
 # ---- 本地个人设置（每台机不同，不入库）----
 .claude/settings.local.json
