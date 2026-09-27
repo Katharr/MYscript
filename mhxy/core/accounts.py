@@ -52,7 +52,7 @@ _DATA_DIR_TTL = 20.0
 
 _lock = threading.RLock()
 _cache = {"order": []}
-_identity = {}                       # hwnd -> {fingerprint, pending, role_id, retry_at, seen_at}
+_identity = {}                       # hwnd -> {fingerprint, pending, role_id, label, retry_at, seen_at}
 _launch_sessions = {}                 # hwnd -> {role_id, profile_id, bound_at}; 仅本次一键启动会话
 _data_dir = {"path": "", "at": 0.0}
 _game_dir = ""                       # config.game_dir 覆盖（空 = 自动探测）
@@ -357,6 +357,12 @@ def launch_session(win):
         return dict(item) if item else None
 
 
+def bound_role_id(win):
+    """读取已确认的角色 ID，不截屏、不 OCR。"""
+    with _lock:
+        return _identity.get(_hwnd(win), {}).get("role_id")
+
+
 def _window_pid(hwnd):
     try:
         p = ctypes.wintypes.DWORD()
@@ -608,7 +614,8 @@ def _role_for_window(win, names, now):
             entry = _identity.setdefault(hwnd, {})
             entry["seen_at"] = now
             if rid:
-                entry.update({"fingerprint": fingerprint, "pending": None, "role_id": rid, "retry_at": 0.0})
+                entry.update({"fingerprint": fingerprint, "pending": None, "role_id": rid,
+                              "label": display_name(names.get(rid, {})), "retry_at": 0.0})
                 return rid
             # 新指纹识别失败时不覆盖已确认身份，但本轮/重试前必须显示号N。
             entry["pending"] = fingerprint
@@ -658,18 +665,31 @@ def _compute(wins):
 
 
 def labels_for(wins):
-    """按 wins 顺序返回显示名。常驻路径只抓姓名小图；指纹不变时不运行 OCR。"""
+    """显式刷新窗口身份：截取顶部标签条并 OCR。
+
+    只能由“一键登录完成”和“唤出所有游戏窗口”两个受控入口调用。识别失败不会清掉
+    已确认的 HWND 绑定，故后台窗口暂时不可读时不会退回“号N”。
+    """
     wins = list(wins)
     order = [_hwnd(w) for w in wins]
-    labels = _compute(wins)
-    out = [labels.get(h) or fallback_label(i) for i, h in enumerate(order)]
+    refreshed = _compute(wins)
     with _lock:
+        out = [refreshed.get(h) or _identity.get(h, {}).get("label") or fallback_label(i)
+               for i, h in enumerate(order)]
         _cache["order"] = list(out)
     return out
 
 
+def cached_labels_for(wins):
+    """按 wins 顺序读取已确认身份，不截屏、不 OCR、不改写绑定。"""
+    wins = list(wins)
+    with _lock:
+        return [_identity.get(_hwnd(w), {}).get("label") or fallback_label(i)
+                for i, w in enumerate(wins)]
+
+
 def prime_visible_labels(cfg):
-    """主 GUI 显示前预热当前可见窗口身份，确保脚本本身不会遮住客户端标签条。"""
+    """兼容旧调用的显式预热接口；新代码不得在 GUI 启动时调用。"""
     cfg = cfg or {}
     win_mod.set_game_process(cfg.get("window_process") or win_mod.DEFAULT_GAME_PROCESS_SPEC)
     set_game_dir(cfg.get("game_dir"))

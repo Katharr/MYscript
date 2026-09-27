@@ -715,7 +715,7 @@ def desktop_window_at_point(title_substr, offset, x, y):
     return cands[0][0]
 
 
-def wake_all_to_front(title_substr, offset=(0, 0), max_n=0):
+def wake_all_to_front(title_substr, offset=(0, 0), max_n=0, on_woken=None):
     """把所有游戏窗口（含最小化的）唤到前台：还原最小化 + 强制前置并校验。
 
     返回 (total, woken)：total=检测到的窗口数，woken=确实切到前台（GetForegroundWindow 校验通过）的窗口数。
@@ -730,6 +730,8 @@ def wake_all_to_front(title_substr, offset=(0, 0), max_n=0):
         try:
             if w.activate():
                 ok += 1
+                if callable(on_woken):
+                    on_woken(w)
         except Exception:
             pass
     return (len(wins), ok)

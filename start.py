@@ -190,8 +190,8 @@ def _launch_gui():
     except Exception:
         splash = None
 
-    # —— 阶段一：预热重库 → 启动页透明时预扫描窗口身份 → 再建主界面 ——
-    # 身份扫描必须在任何脚本界面可见前完成，否则脚本自己可能盖住某个游戏标签条。
+    # —— 阶段一：预热重库 → 再建主界面 ——
+    # 角色身份只在“一键登录完成”和“唤出所有游戏窗口”后显式刷新，启动时不扫描。
     if splash is not None:
         warm_ready = threading.Event()
         allow_scan = threading.Event()
@@ -205,14 +205,7 @@ def _launch_gui():
             finally:
                 warm_ready.set()
             allow_scan.wait()
-            try:
-                from mhxy.core import accounts
-                from mhxy.core import config as cfg_mod
-                accounts.prime_visible_labels(cfg_mod.load_config())
-            except Exception:
-                pass               # 扫描失败只退回号N，不阻断 GUI 启动
-            finally:
-                done.set()
+            done.set()
 
         threading.Thread(target=_warm_and_scan, daemon=True).start()
         scan_started = {"value": False}
@@ -234,13 +227,8 @@ def _launch_gui():
         splash["root"].after(40, _poll)
         splash["root"].mainloop()           # 预热期间显示启动页；扫描阶段透明，绝不遮挡游戏
     else:
-        # 启动页创建失败也不能放弃启动前身份扫描。
-        try:
-            from mhxy.core import accounts
-            from mhxy.core import config as cfg_mod
-            accounts.prime_visible_labels(cfg_mod.load_config())
-        except Exception:
-            pass
+        # 启动页创建失败时直接继续建主界面；身份不在启动阶段扫描。
+        pass
 
     # 关键：创建主窗口（另一个 ctk Tk 根）之前，必须先销毁启动页这个根——
     # 两个 Tk 根并存会让 customtkinter 直接崩（之前「正在准备界面」后闪退就是这个）。

@@ -66,7 +66,7 @@ class TaskContext:
         用途：多开时把日志/界面里的「号1/号2」换成真实角色名，免得对不上是哪个号。
         原理见 core/accounts 模块头（读客户端 LocalData 下的纯文本 + 登录时间戳配对，零 OCR）。"""
         try:
-            return accounts.labels_for(wins)
+            return accounts.cached_labels_for(wins)
         except Exception:
             return [accounts.fallback_label(i) for i in range(len(wins))]
 

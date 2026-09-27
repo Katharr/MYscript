@@ -169,7 +169,7 @@ class WindowPickerDialog(ctk.CTkToplevel):
 
         def read_labels():
             try:
-                labels = accounts.labels_for(wins)
+                labels = accounts.cached_labels_for(wins)
             except Exception:
                 labels = [accounts.fallback_label(i) for i in range(len(wins))]
 

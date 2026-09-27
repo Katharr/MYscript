@@ -37,7 +37,7 @@ def resolve_window_labels(title, offset, targets):
     except Exception:
         return []
     try:
-        return accounts.labels_for(wins)
+        return accounts.cached_labels_for(wins)
     except Exception:
         return [accounts.fallback_label(i) for i in range(len(wins))]
 
@@ -2683,7 +2683,8 @@ class GeneralPage(ctk.CTkFrame):
 
         def work():
             try:
-                total, ok = win_mod.wake_all_to_front(title, offset)
+                total, ok = win_mod.wake_all_to_front(
+                    title, offset, on_woken=lambda win: accounts.labels_for([win]))
             except Exception:
                 total, ok = 0, 0
 
@@ -3070,7 +3071,7 @@ class GeneralPage(ctk.CTkFrame):
             except Exception:
                 data = []
             try:
-                labels = accounts.labels_for([w for w, _r in data])
+                labels = accounts.cached_labels_for([w for w, _r in data])
             except Exception:
                 labels = [accounts.fallback_label(i) for i in range(len(data))]
             try:
@@ -4461,7 +4462,7 @@ class App(ctk.CTk):
         try:
             # 这里保留完整窗口序列，供通用页按 targets 的绝对序号复用缓存；
             # 常驻路径只抓姓名小图，指纹不变时不会运行 OCR，成本极低。
-            labels = accounts.labels_for(all_wins)
+            labels = accounts.cached_labels_for(all_wins)
         except Exception:
             labels = [accounts.fallback_label(i) for i in range(len(all_wins))]
         if targets.get("multi"):

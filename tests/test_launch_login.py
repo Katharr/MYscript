@@ -148,7 +148,7 @@ class LaunchLoginTests(unittest.TestCase):
         switch_at = next(t for t, a in events if a == "点击切换角色")
         self.assertGreaterEqual(switch_at - enter_at, 0.2)          # 先等 2~3 秒再点切换
         self.assertEqual(actions.count("重新点击切换"), 3)          # 反复回查切换，不限一次
-        self.assertEqual(actions[-1], "点击已有角色")
+        self.assertEqual([a for a in actions if not a.startswith("log:")][-1], "点击已有角色")
 
     def test_any_step_repeatedly_rechecks_previous(self):
         """通用规则验证：不是只有“切换”步反复回查，任何步没成功都反复回查上一步。"""
@@ -412,6 +412,48 @@ class LaunchLoginTests(unittest.TestCase):
         self.assertEqual(session["role_id"], "r1")
         self.assertEqual(session["profile_id"], "main")
         self.assertIn("bound_at", session)
+
+    def test_cached_labels_do_not_trigger_ocr(self):
+        win = _Window()
+        with accounts._lock:
+            accounts._identity[win._win._hWnd] = {"role_id": "r1", "label": "角色（45）"}
+        try:
+            with mock.patch("mhxy.core.accounts._compute", side_effect=AssertionError("unexpected OCR")):
+                self.assertEqual(accounts.cached_labels_for([win]), ["角色（45）"])
+        finally:
+            with accounts._lock:
+                accounts._identity.pop(win._win._hWnd, None)
+
+    def test_explicit_refresh_keeps_existing_label_when_ocr_fails(self):
+        win = _Window()
+        with accounts._lock:
+            accounts._identity[win._win._hWnd] = {"role_id": "r1", "label": "角色（45）"}
+        try:
+            with mock.patch("mhxy.core.accounts._compute", return_value={}):
+                self.assertEqual(accounts.labels_for([win]), ["角色（45）"])
+        finally:
+            with accounts._lock:
+                accounts._identity.pop(win._win._hWnd, None)
+
+    def test_login_identity_verification_binds_expected_role(self):
+        task = LaunchLoginTask()
+        logs = []
+
+        class _RunCtx:
+            def should_stop(self): return False
+            def log(self, msg, level="info"): logs.append((msg, level))
+
+        class _GameWin(_Window):
+            def activate(self): return True
+
+        game_win = _GameWin()
+        with mock.patch("mhxy.tasks.launch_login.accounts.labels_for"), \
+             mock.patch("mhxy.tasks.launch_login.accounts.bound_role_id", return_value="r1"), \
+             mock.patch("mhxy.tasks.launch_login.accounts.bind_launch_session", return_value=True) as bind:
+            self.assertTrue(task._verify_game_identity(
+                _RunCtx(), game_win, {"id": "main", "expected_role_id": "r1", "expected_role_name": "角色"}))
+        bind.assert_called_once_with(game_win, "r1", "main")
+        self.assertTrue(any(level == "hit" for _msg, level in logs))
 
 
 if __name__ == "__main__":

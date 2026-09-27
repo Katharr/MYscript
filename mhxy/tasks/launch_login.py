@@ -112,7 +112,7 @@ class LaunchLoginTask(Task):
                                        corner, corner_margin, corner_settle)
             if result == "ok":
                 placed += 1
-                ctx.log("[%s] 登录并完成窗口角色校验。" % label, level="hit")
+                ctx.log("[%s] 登录流程完成。" % label, level="hit")
             elif result == "stopped":
                 break
             else:
@@ -185,8 +185,9 @@ class LaunchLoginTask(Task):
                 if now - last_role_ocr_at >= 1.0:
                     last_role_ocr_at = now
                     if self._click_roster_role(ctx, win, profile):
-                        # 用户确认：选中角色即视为本号流程结束；随即把这个窗口摆到指定角落。
-                        self._place_after_login(ctx, win, before, corner, corner_settle, corner_margin)
+                        # 选中角色后，只有在该次新游戏窗口的顶部标签通过核验，才写入窗口身份绑定。
+                        game_win = self._place_after_login(ctx, win, before, corner, corner_settle, corner_margin)
+                        self._verify_game_identity(ctx, game_win, profile)
                         return "ok"
             else:
                 key, next_state, action = self._CLICK_STATES[state]
@@ -217,25 +218,47 @@ class LaunchLoginTask(Task):
         return "stopped"
 
     def _place_after_login(self, ctx, win, before, corner, settle_sec, margin):
-        """登录完成后把本号游戏窗口摆到指定屏幕角落。
-
-        ⚠ 目标窗口一律【按游戏客户端进程】重新定位（本次新增的那个），绝不用状态机里跟了一路的
-        `win`：那可能还停在启动器上，也可能被整屏匹配误认成脚本自己的窗口。
-        失败只告警、不影响登录结果。
-        """
-        if not corner:
-            return
+        """等待并定位本次新游戏窗口，按需归位后返回该窗口。"""
         self._interruptible_sleep(ctx, settle_sec)   # 等游戏窗口建好/外壳切换稳定再归位
-        label = self._CORNER_LABELS.get(corner, corner)
         target = self._resolve_game_window(ctx, before)
         if target is None:
-            ctx.log("窗口归位到%s失败：没找到本号新出现的游戏窗口。" % label, level="warn")
-            return
+            if corner:
+                label = self._CORNER_LABELS.get(corner, corner)
+                ctx.log("窗口归位到%s失败：没找到本号新出现的游戏窗口。" % label, level="warn")
+            return None
+        if not corner:
+            return target
+        label = self._CORNER_LABELS.get(corner, corner)
         rect = target.move_to_corner(corner, margin=margin)
         if rect is None:
             ctx.log("窗口归位到%s失败（窗口可能已最小化或被外壳约束）。" % label, level="warn")
         else:
             ctx.log("窗口已归位到%s：%s。" % (label, rect), level="hit")
+        return target
+
+    def _verify_game_identity(self, ctx, game_win, profile):
+        """一键登录后的唯一身份刷新入口：前台 OCR 核验顶部标签并写运行期绑定。"""
+        if game_win is None:
+            ctx.log("登录后未找到游戏窗口，未建立角色绑定。", level="warn")
+            return False
+        expected_id = str(profile.get("expected_role_id") or "")
+        expected_name = (profile.get("expected_role_name") or "").strip()
+        for _attempt in range(10):
+            if ctx.should_stop():
+                break
+            try:
+                if game_win.activate():
+                    accounts.labels_for([game_win])
+                    actual_id = accounts.bound_role_id(game_win)
+                    if actual_id and (not expected_id or actual_id == expected_id):
+                        accounts.bind_launch_session(game_win, actual_id, profile.get("id"))
+                        ctx.log("登录后窗口角色核验成功：%s。" % (expected_name or actual_id), level="hit")
+                        return True
+            except Exception:
+                pass
+            self._interruptible_sleep(ctx, 1.0)
+        ctx.log("登录后窗口角色核验未通过，暂显示为号N；可点“唤出所有游戏窗口”重新检测。", level="warn")
+        return False
 
     def _resolve_game_window(self, ctx, before):
         """定位本号真正进入游戏的窗口：本次新增 + 属于游戏客户端进程（MyTabCtrl/MyGame）。
