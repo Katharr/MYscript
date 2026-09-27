@@ -737,6 +737,145 @@ def wake_all_to_front(title_substr, offset=(0, 0), max_n=0, on_woken=None):
     return (len(wins), ok)
 
 
+# ---- 关闭所有游戏窗口：强杀游戏进程（见 close_all）----
+_PROCESS_TERMINATE = 0x0001
+_SYNCHRONIZE = 0x00100000
+_WAIT_TIMEOUT = 258
+_TH32CS_SNAPPROCESS = 0x00000002
+_INVALID_HANDLE = ctypes.c_void_p(-1).value
+
+
+class _PROCESSENTRY32W(ctypes.Structure):
+    """PROCESSENTRY32W：CreateToolhelp32Snapshot 的进程快照条目（只用到 PID 与 exe 名）。"""
+    _fields_ = [("dwSize", ctypes.wintypes.DWORD),
+                ("cntUsage", ctypes.wintypes.DWORD),
+                ("th32ProcessID", ctypes.wintypes.DWORD),
+                ("th32DefaultHeapID", ctypes.c_void_p),
+                ("th32ModuleID", ctypes.wintypes.DWORD),
+                ("cntThreads", ctypes.wintypes.DWORD),
+                ("th32ParentProcessID", ctypes.wintypes.DWORD),
+                ("pcPriClassBase", ctypes.wintypes.LONG),
+                ("dwFlags", ctypes.wintypes.DWORD),
+                ("szExeFile", ctypes.wintypes.WCHAR * 260)]
+
+
+_kernel32.CreateToolhelp32Snapshot.argtypes = [ctypes.wintypes.DWORD, ctypes.wintypes.DWORD]
+_kernel32.CreateToolhelp32Snapshot.restype = ctypes.wintypes.HANDLE
+_kernel32.Process32FirstW.argtypes = [ctypes.wintypes.HANDLE, ctypes.POINTER(_PROCESSENTRY32W)]
+_kernel32.Process32FirstW.restype = ctypes.wintypes.BOOL
+_kernel32.Process32NextW.argtypes = [ctypes.wintypes.HANDLE, ctypes.POINTER(_PROCESSENTRY32W)]
+_kernel32.Process32NextW.restype = ctypes.wintypes.BOOL
+_kernel32.TerminateProcess.argtypes = [ctypes.wintypes.HANDLE, ctypes.wintypes.UINT]
+_kernel32.TerminateProcess.restype = ctypes.wintypes.BOOL
+_kernel32.WaitForSingleObject.argtypes = [ctypes.wintypes.HANDLE, ctypes.wintypes.DWORD]
+_kernel32.WaitForSingleObject.restype = ctypes.wintypes.DWORD
+
+
+def game_pids():
+    """当前所有「游戏进程」的 PID 集合：exe basename 落在进程白名单 _GAME_PROCESSES 内的全部进程。
+    白名单为空（用户清掉了 config.window_process）时返回 None，调用方改用「命中窗口的 PID」。
+
+    为什么不只看窗口：新版客户端一个外壳进程挂一个号，真正的渲染进程(MyGame_x64r.exe)是它
+    没有可见顶层窗口的子进程，只按窗口 PID 杀会留下孤儿渲染进程。
+    """
+    names = _GAME_PROCESSES
+    if not names:
+        return None
+    pids = set()
+    snap = _kernel32.CreateToolhelp32Snapshot(_TH32CS_SNAPPROCESS, 0)
+    if not snap or snap == _INVALID_HANDLE:
+        return pids
+    try:
+        entry = _PROCESSENTRY32W()
+        entry.dwSize = ctypes.sizeof(_PROCESSENTRY32W)
+        if not _kernel32.Process32FirstW(snap, ctypes.byref(entry)):
+            return pids
+        while True:
+            try:
+                if os.path.basename(entry.szExeFile or "").lower() in names:
+                    pids.add(int(entry.th32ProcessID))
+            except Exception:
+                pass
+            if not _kernel32.Process32NextW(snap, ctypes.byref(entry)):
+                break
+    finally:
+        _kernel32.CloseHandle(snap)
+    return pids
+
+
+def _window_pids(title_substr, offset=(0, 0)):
+    """当前所有游戏窗口（含最小化的）所属进程的 PID 集合。"""
+    pids = set()
+    for w in locate_all(title_substr, offset, include_minimized=True):
+        try:
+            pid = ctypes.wintypes.DWORD()
+            _user32.GetWindowThreadProcessId(w.hwnd(), ctypes.byref(pid))
+            if pid.value:
+                pids.add(int(pid.value))
+        except Exception:
+            continue
+    return pids
+
+
+def _pid_alive(pid):
+    """进程是否还在跑：拿 SYNCHRONIZE 句柄 Wait(0) 判定——进程一退出，其句柄立刻置信号。
+
+    ⚠ 别用「OpenProcess 能不能成功」探活：进程已被杀、但系统里还有别的句柄引用着它时，
+    OpenProcess 仍会成功（实测：目标已从进程快照里消失，OpenProcess 却一直返回有效句柄），
+    于是「关了却说没关」。故这里必须用 WaitForSingleObject。
+    """
+    hp = _kernel32.OpenProcess(_SYNCHRONIZE | _PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+    if not hp:
+        return False
+    try:
+        return _kernel32.WaitForSingleObject(hp, 0) == _WAIT_TIMEOUT
+    finally:
+        _kernel32.CloseHandle(hp)
+
+
+def close_all(title_substr, offset=(0, 0), wait_sec=2.0):
+    """最快方式关掉所有游戏窗口：直接结束游戏进程（与任务管理器「结束进程」同一手段）。
+
+    返回 (total, killed)：total=待结束的游戏进程数，killed=确认已退出的进程数。
+
+    为什么强杀、不逐个发 WM_CLOSE：等客户端自己退出要逐窗发消息、还可能弹「确认退出」框
+    （关不掉 or 更慢）。用户拍板要「最快」，故 OpenProcess(PROCESS_TERMINATE)+TerminateProcess。
+    待杀 PID 取两来源并集：① 白名单进程名枚举到的全部游戏进程（含无窗口的渲染子进程）；
+    ② 命中窗口（含最小化）所属 PID——白名单为空时的兜底，保证仍能关掉看得见的号。
+    全部 PID 先一次性发完击杀请求（无 sleep、不等回复），再统一 WaitForSingleObject 确认退出，
+    故总耗时通常 <1s（只剩「等它真的消失」这一小段）。
+    ⚠ 非管理员脚本杀不掉以管理员运行的游戏（OpenProcess 失败）→ killed<total，调用方据此提示提权。
+    """
+    pids = game_pids()
+    pids = (set() if pids is None else set(pids)) | _window_pids(title_substr, offset)
+    if not pids:
+        return (0, 0)
+    handles = []
+    for pid in pids:
+        try:
+            hp = _kernel32.OpenProcess(_PROCESS_TERMINATE | _SYNCHRONIZE, False, int(pid))
+            if not hp:
+                continue
+            handles.append(hp)
+            _kernel32.TerminateProcess(hp, 1)
+        except Exception:
+            pass
+    if not handles:
+        return (len(pids), 0)          # 一个都打不开：权限不够（游戏以管理员运行时必然如此）
+    deadline = time.time() + max(0.0, float(wait_sec))
+    killed = 0
+    for hp in handles:
+        left = max(0, int((deadline - time.time()) * 1000))
+        try:
+            if _kernel32.WaitForSingleObject(hp, left) == 0:   # WAIT_OBJECT_0 = 已退出
+                killed += 1
+        except Exception:
+            pass
+    for hp in handles:
+        _kernel32.CloseHandle(hp)
+    return (len(pids), killed)
+
+
 def resolve_targets(title_substr, offset, targets):
     """按 targets 配置从 locate_all 结果里选出要操作的窗口列表（纯函数，供任务与 GUI 共用）。
 

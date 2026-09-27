@@ -2611,6 +2611,7 @@ class GeneralPage(ctk.CTkFrame):
         self.btn_team = None
         self.btn_disband = None     # 「一键解散」按钮（_refresh_body 每次重建）
         self.btn_wake = None        # 「唤出所有游戏窗口」按钮（_refresh_body 每次重建）
+        self.btn_close = None       # 「关闭所有游戏窗口」按钮（_refresh_body 每次重建）
         self.btn_float = None       # 「收起为悬浮日志窗」按钮（_refresh_body 每次重建）
         self.btn_leader = None      # 行内队长ID按钮（_refresh_body 每次重建）
         self._leader_thumbs = []    # 行内队长ID缩略图防 GC
@@ -2640,7 +2641,7 @@ class GeneralPage(ctk.CTkFrame):
         return c
 
     # ------------------------------------------------------------------
-    # 窗口 / 界面工具：① 唤出所有游戏窗口 ② 收起为悬浮日志窗
+    # 窗口 / 界面工具：① 唤出所有游戏窗口 ② 关闭所有游戏窗口（红，需确认，强杀进程）③ 收起为悬浮日志窗
     #   —— 都是「盯脚本跑」这个场景的工具：多开窗口被压住时唤一次；把界面收成细长悬浮窗，
     #      摆到游戏窗口边角上边跑边看日志。
     #      「收起」现在【任意模块脚本一开始跑就自动发生】（App.on_task_started），本按钮是手动入口。
@@ -2658,6 +2659,11 @@ class GeneralPage(ctk.CTkFrame):
                                       fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER, text_color=T.ON_ACCENT,
                                       command=self._bring_windows_front)
         self.btn_wake.pack(side="left")
+        self.btn_close = ctk.CTkButton(act, text="✕  关闭所有游戏窗口", font=self.fonts["btn"],
+                                       height=40, width=180, corner_radius=T.RADIUS_SM,
+                                       fg_color=T.DANGER, hover_color=T.DANGER_HOVER, text_color=T.ON_ACCENT,
+                                       command=self._close_all_windows)
+        self.btn_close.pack(side="left", padx=(8, 0))
         self.btn_float = ctk.CTkButton(act, text="📋  收起为悬浮日志窗", font=self.fonts["btn"],
                                        height=40, width=180, corner_radius=T.RADIUS_SM,
                                        fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
@@ -2702,6 +2708,109 @@ class GeneralPage(ctk.CTkFrame):
                 self._log_line(f"唤出游戏窗口：检测到 {total} 个，{ok} 个成功切到前台。", lvl)
                 self.app.toast(f"已唤出 {total} 个游戏窗口（{ok} 个切到前台）")
                 self.app._game_connected = None   # 窗口状态变了，强制下一轮 tick 刷新药丸
+
+            try:
+                self.app.ui_post(apply)
+            except Exception:
+                pass
+
+        threading.Thread(target=work, daemon=True).start()
+
+    # ------------------------------------------------------------------
+    # 关闭所有游戏窗口：确认 → 先停全部自动任务 → 强杀全部游戏进程（最快的关法）
+    #   ⚠ 必须确认（用户拍板）：按钮太顺手会被误点，而强杀会丢游戏内未保存的进度。
+    # ------------------------------------------------------------------
+    def _close_all_windows(self):
+        """「关闭所有游戏窗口」入口：先弹确认框，确认后才真关。"""
+        self._ask_close_windows(self._do_close_all_windows)
+
+    def _ask_close_windows(self, on_ok):
+        """确认弹窗：红色「确认关闭」在右，Esc / 取消都只是关掉弹窗、不动游戏。"""
+        dlg = ctk.CTkToplevel(self.app)
+        dlg.title("关闭所有游戏窗口")
+        dlg.geometry("460x210")
+        dlg.configure(fg_color=T.BG)
+        dlg.transient(self.app)
+        ctk.CTkLabel(dlg, text="关闭所有游戏窗口？", font=self.fonts["title"],
+                     text_color=T.TEXT).pack(anchor="w", padx=20, pady=(18, 0))
+        warn = ctk.CTkLabel(dlg, text="将强制结束全部游戏进程，游戏内未保存的进度会丢失；正在跑的任务会先停止。",
+                            font=self.fonts["small"], text_color=T.WARN, justify="left")
+        warn.pack(fill="x", padx=20, pady=(6, 0))
+        bind_wraplength(warn, padding=40)
+
+        bar = ctk.CTkFrame(dlg, fg_color="transparent")
+        bar.pack(fill="x", padx=20, pady=(18, 16), side="bottom")
+
+        def _ok():
+            try:
+                dlg.grab_release()
+            except Exception:
+                pass
+            dlg.destroy()
+            on_ok()
+
+        ctk.CTkButton(bar, text="确认关闭", font=self.fonts["btn"], width=120, height=38,
+                      corner_radius=T.RADIUS_SM, fg_color=T.DANGER, hover_color=T.DANGER_HOVER,
+                      text_color=T.ON_ACCENT, command=_ok).pack(side="right")
+        ctk.CTkButton(bar, text="取消", font=self.fonts["btn"], width=96, height=38,
+                      corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER,
+                      text_color=T.TEXT, border_width=1, border_color=T.BORDER,
+                      command=dlg.destroy).pack(side="right", padx=(0, 8))
+        dlg.bind("<Escape>", lambda _e: dlg.destroy())
+
+        def _show():
+            try:
+                x = self.app.winfo_rootx() + max(0, (self.app.winfo_width() - 460) // 2)
+                y = self.app.winfo_rooty() + max(0, (self.app.winfo_height() - 210) // 3)
+                dlg.geometry(f"460x210+{x}+{y}")
+                dlg.lift()
+                dlg.grab_set()
+            except Exception:
+                pass
+
+        dlg.after(80, _show)
+
+    def _do_close_all_windows(self):
+        """停掉所有自动任务后强杀全部游戏进程（放后台线程，避免卡界面）。"""
+        cfg = self.cfg = cfg_mod.load_config()
+        self.app.cfg = cfg
+        title = cfg.get("window_title", "梦幻西游")
+        offset = cfg.get("window_offset", [0, 0])
+        btn = getattr(self, "btn_close", None)
+        stopped = self.app.stop_all_tasks()
+        if btn is not None:
+            try:
+                btn.configure(state="disabled", text="⏳  正在关闭…")
+            except Exception:
+                pass
+
+        def work():
+            try:
+                total, killed = win_mod.close_all(title, offset)
+            except Exception:
+                total, killed = 0, 0
+
+            def apply():
+                if btn is not None:
+                    try:
+                        btn.configure(state="normal", text="✕  关闭所有游戏窗口")
+                    except Exception:
+                        pass
+                self.app._game_connected = None   # 窗口没了，强制下一轮 tick 刷新药丸
+                if not total:
+                    self.app.toast(f"没检测到游戏窗口（标题含「{title}」），游戏没开")
+                    self._log_line("关闭窗口：没检测到游戏进程（游戏没开？）", "warn")
+                    return
+                if killed >= total:
+                    self._log_line(f"关闭窗口：已停止任务 {stopped} 个，{killed} 个游戏进程全部关闭。", "info")
+                    self.app.toast(f"已关闭 {killed} 个游戏窗口（停止任务 {stopped} 个）")
+                else:
+                    hint = "" if win_mod.is_admin() else "请用管理员身份运行脚本"
+                    if not hint:
+                        hint = "可能有进程未响应，可再点一次"
+                    self._log_line(f"关闭窗口：已停止任务 {stopped} 个，只关掉 {killed}/{total} 个游戏进程"
+                                   + f"（{hint}）", "warn")
+                    self.app.toast(f"只关掉 {killed}/{total} 个游戏窗口：{hint}")
 
             try:
                 self.app.ui_post(apply)
