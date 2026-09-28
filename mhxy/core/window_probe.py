@@ -7,6 +7,7 @@
 2. 依赖方向单向：本模块只提供底层证据与规则，window.py、accounts.py 在其上层。
 3. 可注入、可测：窗口枚举器和进程快照函数均可传入，测试不需要访问真实桌面。
 4. 只给证据，不做动作：本模块不会绑定、激活或点击任何窗口。
+5. 启动判定只将快照证据归类，不改变启动流程；调用方负责处理结果。
 """
 
 import ctypes
@@ -326,3 +327,44 @@ def list_game_windows(title_substr, process_spec, *, include_minimized=False,
         running=bool(process_names and process_exes.intersection(process_names)),
         launcher_running=_LAUNCHER_PROCESS in process_exes,
     )
+
+
+def startup_decision(cfg, *, enumerator=None, process_lister=None):
+    """按一次窗口/进程快照决定启动路径，返回 ``"has"`` / ``"none"`` / ``"unknown"``。
+
+    ``unknown`` 保留探测失败这一事实，由调用方安全地按已有窗口路径处理并记录日志。
+    ``list_game_windows`` 为其他调用者隔离底层异常；这里通过包装器观察异常，避免将
+    探测失败误归为真零窗口。``launcher_running`` 仅是证据，不参与此判定。
+    """
+    title = cfg.get("window_title", "梦幻西游")
+    process_spec = cfg.get("window_process") or DEFAULT_GAME_PROCESS_SPEC
+    failures = []
+
+    def observe(source, fallback):
+        source = source or fallback
+
+        def wrapped():
+            try:
+                return source()
+            except Exception:
+                failures.append(True)
+                raise
+
+        return wrapped
+
+    try:
+        result = list_game_windows(
+            title,
+            process_spec,
+            include_minimized=True,
+            enumerator=observe(enumerator, _default_enumerator),
+            process_lister=observe(process_lister, list_processes),
+        )
+    except Exception:
+        return "unknown"
+
+    if failures:
+        return "unknown"
+    if result.visible or result.minimized or result.running:
+        return "has"
+    return "none"

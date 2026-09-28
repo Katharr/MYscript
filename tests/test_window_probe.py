@@ -113,6 +113,82 @@ class WindowProbeTests(unittest.TestCase):
         ordered = sorted(windows, key=probe.position_sort_key)
         self.assertEqual(ordered, [windows[2], windows[1], windows[3], windows[0]])
 
+    def test_startup_decision_has_for_visible_window(self):
+        calls = {"enumerator": 0, "process_lister": 0}
+
+        def enumerator():
+            calls["enumerator"] += 1
+            return [_Window()]
+
+        def process_lister():
+            calls["process_lister"] += 1
+            return []
+
+        result = probe.startup_decision(
+            {"window_title": "梦幻西游", "window_process": "MyTabCtrl_x64r.exe"},
+            enumerator=enumerator,
+            process_lister=process_lister,
+        )
+        self.assertEqual(result, "has")
+        self.assertEqual(calls, {"enumerator": 1, "process_lister": 1})
+
+    def test_startup_decision_has_for_minimized_window(self):
+        result = probe.startup_decision(
+            {"window_process": "MyTabCtrl_x64r.exe"},
+            enumerator=lambda: [_Window(minimized=True, width=20, height=20)],
+            process_lister=lambda: [],
+        )
+        self.assertEqual(result, "has")
+
+    def test_startup_decision_has_for_running_process(self):
+        result = probe.startup_decision(
+            {"window_process": "MyGame_x64r.exe"},
+            enumerator=lambda: [],
+            process_lister=lambda: [{"pid": 1, "exe": "mygame_x64r.exe"}],
+        )
+        self.assertEqual(result, "has")
+
+    def test_startup_decision_none_without_window_or_process(self):
+        result = probe.startup_decision(
+            {"window_process": "MyGame_x64r.exe"},
+            enumerator=lambda: [],
+            process_lister=lambda: [],
+        )
+        self.assertEqual(result, "none")
+
+    def test_startup_decision_unknown_when_probe_raises(self):
+        def broken_enumerator():
+            raise RuntimeError("desktop unavailable")
+
+        result = probe.startup_decision(
+            {"window_process": "MyGame_x64r.exe"},
+            enumerator=broken_enumerator,
+            process_lister=lambda: [],
+        )
+        self.assertEqual(result, "unknown")
+
+    def test_startup_decision_defaults_process_spec(self):
+        result = probe.startup_decision(
+            {},
+            enumerator=lambda: [],
+            process_lister=lambda: [{"pid": 1, "exe": "mygame_x64r.exe"}],
+        )
+        self.assertEqual(result, "has")
+
+    def test_startup_decision_uses_cfg_process_spec_not_window_global(self):
+        from mhxy.core import window as win_mod
+
+        win_mod.set_game_process("other.exe")
+        try:
+            result = probe.startup_decision(
+                {"window_process": "CustomGame.exe"},
+                enumerator=lambda: [],
+                process_lister=lambda: [{"pid": 1, "exe": "customgame.exe"}],
+            )
+        finally:
+            win_mod.set_game_process(probe.DEFAULT_GAME_PROCESS_SPEC)
+        self.assertEqual(result, "has")
+
 
 if __name__ == "__main__":
     unittest.main()
