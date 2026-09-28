@@ -33,14 +33,14 @@ class QuickStartPanel(ctk.CTkFrame):
         self._log_history = []
 
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(2, weight=1)
+        # 上半区保持紧凑，日志容器吃掉其后的全部空间。
         self.grid_rowconfigure(5, weight=1)
         self._build()
         self.refresh()
 
     def _build(self):
         head = ctk.CTkFrame(self, fg_color="transparent")
-        head.grid(row=0, column=0, sticky="ew", padx=T.SP_5, pady=(T.SP_5, T.SP_2))
+        head.grid(row=0, column=0, sticky="ew", padx=T.SP_4, pady=(T.SP_4, T.SP_1))
         head.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(head, text="梦幻 · 时空 助手", font=self.fonts["title"],
                      text_color=T.TEXT).grid(row=0, column=0, sticky="w")
@@ -50,25 +50,35 @@ class QuickStartPanel(ctk.CTkFrame):
         ctk.CTkFrame(self, height=1, fg_color=T.BORDER).grid(
             row=1, column=0, sticky="ew", padx=T.SP_5, pady=(0, T.SP_2))
 
-        self.profile_list = ctk.CTkScrollableFrame(self, fg_color="transparent", corner_radius=0)
-        self.profile_list.grid(row=2, column=0, sticky="nsew", padx=T.SP_4, pady=(0, T.SP_2))
+        # CTkScrollableFrame 会受内容请求尺寸影响，直接设 height 不能可靠限高。
+        # 由禁止尺寸传播的外层承载，确保日志区域能取得窗口下半区。
+        self.profile_host = ctk.CTkFrame(self, height=72, fg_color="transparent")
+        self.profile_host.grid(row=2, column=0, sticky="ew", padx=T.SP_4, pady=(0, T.SP_2))
+        self.profile_host.grid_propagate(False)
+        self.profile_host.grid_columnconfigure(0, weight=1)
+        self.profile_host.grid_rowconfigure(0, weight=1)
+        self.profile_list = ctk.CTkScrollableFrame(
+            self.profile_host, fg_color="transparent", corner_radius=0,
+        )
+        self.profile_list.grid(row=0, column=0, sticky="nsew")
         self.profile_list.grid_columnconfigure(0, weight=1)
+        self.profile_list.grid_columnconfigure(1, weight=1)
         T.tune_scroll_speed(self.profile_list)
 
         controls = ctk.CTkFrame(self, fg_color="transparent")
-        controls.grid(row=3, column=0, sticky="ew", padx=T.SP_5, pady=(T.SP_2, T.SP_2))
+        controls.grid(row=3, column=0, sticky="ew", padx=T.SP_5, pady=(T.SP_1, T.SP_2))
         controls.grid_columnconfigure(0, weight=1)
         self.btn_run = ctk.CTkButton(
-            controls, text="⚡  一键启动", font=self.fonts["btn"], height=46,
+            controls, text="⚡  一键启动", font=self.fonts["btn"], height=40,
             corner_radius=T.RADIUS_SM, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
             text_color=T.ON_ACCENT, command=self._toggle_run)
         self.btn_run.grid(row=0, column=0, sticky="ew", pady=(0, T.SP_2))
 
         ctk.CTkFrame(self, height=1, fg_color=T.BORDER).grid(
-            row=4, column=0, sticky="ew", padx=T.SP_5, pady=(T.SP_2, T.SP_2))
+            row=4, column=0, sticky="ew", padx=T.SP_5, pady=(T.SP_1, T.SP_1))
 
         bottom = ctk.CTkFrame(self, fg_color="transparent")
-        bottom.grid(row=5, column=0, sticky="nsew", padx=T.SP_5, pady=(0, T.SP_4))
+        bottom.grid(row=5, column=0, sticky="nsew", padx=T.SP_5, pady=(0, T.SP_3))
         bottom.grid_columnconfigure(0, weight=1)
         bottom.grid_rowconfigure(1, weight=1)
         self.lbl_status = ctk.CTkLabel(bottom, text="状态：待启动", font=self.fonts["small"],
@@ -136,18 +146,21 @@ class QuickStartPanel(ctk.CTkFrame):
         return merged
 
     def _render_profile(self, index, profile):
-        row = ctk.CTkFrame(self.profile_list, fg_color=T.SURFACE, corner_radius=T.RADIUS_SM,
-                           border_width=1, border_color=T.BORDER)
-        row.grid(row=index, column=0, sticky="ew", padx=T.SP_1, pady=T.SP_1)
-        row.grid_columnconfigure(1, weight=1)
+        """以双列紧凑复选项呈现档案，避免少量档案也占满启动窗。"""
         enabled = ctk.BooleanVar(value=profile.get("enabled", True))
-        ctk.CTkCheckBox(row, text="", variable=enabled, width=28,
-                        command=lambda i=index, v=enabled: self._set_enabled(i, v.get())).grid(
-                            row=0, column=0, sticky="w", padx=(T.SP_3, T.SP_1), pady=T.SP_2)
-        label = ctk.CTkLabel(row, text=profile.get("label") or "未命名档案", font=self.fonts["body"],
-                             text_color=T.TEXT, justify="left")
-        label.grid(row=0, column=1, sticky="ew", padx=(0, T.SP_3), pady=T.SP_2)
-        T.bind_wraplength(label)
+        item = ctk.CTkCheckBox(
+            self.profile_list,
+            text=profile.get("label") or "未命名档案",
+            variable=enabled,
+            width=184,
+            height=30,
+            font=self.fonts["body"],
+            text_color=T.TEXT,
+            fg_color=T.ACCENT,
+            hover_color=T.ACCENT_HOVER,
+            command=lambda i=index, v=enabled: self._set_enabled(i, v.get()),
+        )
+        item.grid(row=index // 2, column=index % 2, sticky="ew", padx=T.SP_2, pady=T.SP_1)
 
     def _set_enabled(self, index, enabled):
         """直接写回 account_launch.profiles，不另建小窗状态。"""
