@@ -178,10 +178,57 @@ def test_list_row_geometry():
           None if got is None else (got.join_x, got.join_y))
 
 
+def _draw_two_cards(join1_tint=(60, 200, 255)):
+    """合成「一排放两张活动卡」的列表：卡1（秘境降妖，图标可被模板认出）+ 卡2（别的活动，图标不同）。
+    两张卡右侧各有一颗「参加」；join1_tint 用来把卡1那颗按钮调淡一点（模拟底色差异让它掉分），
+    好复现用户实测的 bug：卡1那颗分略低、卡2那颗更远却分更高 → 旧逻辑（取全局最高分）点到卡2。"""
+    w, h = 1000, 600
+    img = np.full((h, w, 3), 44, np.uint8)
+    img[:, :, 2] = 59
+
+    def box(cx, cy, sw, sh, color):
+        x0, y0 = cx - sw // 2, cy - sh // 2
+        cv2.rectangle(img, (x0, y0), (x0 + sw, y0 + sh), color, -1)
+        cv2.rectangle(img, (x0, y0), (x0 + sw, y0 + sh), (255, 255, 255), 1)
+
+    box(150, 200, 60, 48, (30, 120, 220))       # 卡1 图标（秘境降妖）
+    for k in (14, 28, 42):                      # 卡1 图标里的几笔深色斜纹
+        cv2.line(img, (150 - 30 + k, 200 + 20), (150 - 30 + k, 200 - 20), (25, 60, 120), 3)
+    box(420, 200, 30, 15, join1_tint)           # 卡1 右侧的「参加」
+    box(620, 200, 60, 48, (200, 140, 40))       # 卡2 图标（另一个活动，与卡1不同色）
+    box(840, 200, 30, 15, (60, 200, 255))       # 卡2 右侧的「参加」（更远，但分数更高）
+    return img
+
+
+def test_join_nearest():
+    """回归：同排两张卡各有一颗「参加」时，必须取【离条目最近】的那颗，而不是分数最高的邻卡那颗。
+    （用户实测 bug：秘境降妖认出卡片后，点到了右边另一个活动的「参加」。）"""
+    print("[4] list_row：同排两张卡 → 取离条目最近的「参加」")
+    clean = _draw_two_cards()
+    anchor = crop(clean, CARD, CARD_SIZE)
+    join = crop(clean, JOIN, JOIN_SIZE)
+
+    scene = _draw_two_cards(join1_tint=(95, 185, 240))   # 卡1 那颗调淡 → 卡2 那颗分数更高
+    est = vision.best_score(scene, anchor)[1]
+    near_j = vision.best_score(scene[max(0, est[1] - 40):est[1] + 40, 380:460], join)
+    far_j = vision.best_score(scene[160:240, 800:880], join)
+    print(f"  记录  条目 @{est}，卡1 的参加 {near_j[0]:.3f}，卡2 的参加 {far_j[0]:.3f}"
+          f"（旧逻辑取最高分会点卡2={far_j[0] > near_j[0]}）")
+
+    got = list_row.locate_card(scene, [0, 0, 1000, 600], anchor, join, 0.85,
+                               calib_size=None, cfg={"join_min_score": 0.6}, window_rect=None)
+    check("同排两张卡：取离条目最近的那颗「参加」",
+          got is not None and got.join_x is not None
+          and near(got.join_x, JOIN[0], 6) and near(got.join_y, JOIN[1], 6),
+          f"got={None if got is None else (got.join_x, got.join_y, round(got.join_score, 3))} "
+          f"exp={JOIN}")
+
+
 def main():
     test_scaled_scene()
     test_threshold()
     test_list_row_geometry()
+    test_join_nearest()
     print("\n全部通过")
     return 0
 
