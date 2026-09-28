@@ -258,6 +258,23 @@ class LaunchLoginTests(unittest.TestCase):
         self.assertEqual(int(img[60, 60].sum()), 0)          # 洞内被涂黑
         self.assertEqual(int(img[200, 200].sum()), 255 * 3)  # 洞外不变
 
+    def test_scene_uses_current_game_window_not_desktop(self):
+        task = LaunchLoginTask()
+
+        class _GameWin:
+            def rect(self):
+                return [100, 200, 800, 600]
+
+        scene = object()
+        with mock.patch.object(task, "_is_game_window", return_value=True), \
+             mock.patch("mhxy.tasks.launch_login.win_mod.grab", return_value=object()) as grab, \
+             mock.patch("mhxy.tasks.launch_login.win_mod.mask_rects") as mask_rects, \
+             mock.patch("mhxy.tasks.launch_login.win_mod.ScaledScene", return_value=scene):
+            self.assertIs(task._scene(_Ctx(DEFAULT_CONFIG), _GameWin()), scene)
+
+        grab.assert_called_once_with([100, 200, 800, 600])
+        mask_rects.assert_not_called()
+
     def test_place_after_login_uses_game_window_and_warns_when_missing(self):
         task = LaunchLoginTask()
         moved = []

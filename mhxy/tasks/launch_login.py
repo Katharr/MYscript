@@ -159,6 +159,12 @@ class LaunchLoginTask(Task):
         wait_min = switch_cfg["wait_min"]
         wait_max = switch_cfg["wait_max"]
         while not ctx.should_stop():
+            # 启动器点击后会新建游戏外壳。接管本次新增的游戏窗口后，后续识别必须只在
+            # 该窗口内进行，不能再扫整张桌面而误命中已登录的其它号。
+            if state != "WAIT_START":
+                game_win = self._resolve_game_window(ctx, before)
+                if game_win is not None:
+                    win = game_win
             if win.rect() is None:
                 # 点击“开始游戏”后，启动器可能销毁原 HWND 并新建游戏外壳；按下一状态
                 # 的模板接管新窗口，而不是把正常窗口转换误报为登录窗口关闭。
@@ -388,17 +394,31 @@ class LaunchLoginTask(Task):
         except Exception:
             return None
 
-    def _scene(self, _ctx, _win):
-        # 模板从屏幕上框选得到，直接按真实屏幕像素匹配，绝不按启动器或游戏窗口尺寸缩放。
-        rect = self._screen_rect()
+    def _is_game_window(self, ctx, win):
+        """当前窗口是否已是游戏外壳，而非仍在登录启动器阶段。"""
+        hwnd = self._window_hwnd(win)
+        if not hwnd:
+            return False
+        try:
+            games = win_mod.locate_all(ctx.cfg.get("window_title", "梦幻西游"),
+                                       ctx.cfg.get("window_offset", [0, 0]))
+        except Exception:
+            return False
+        return any(self._window_hwnd(game) == hwnd for game in games)
+
+    def _scene(self, ctx, win):
+        # 启动器阶段的界面可能在新建外壳前转换，仍需整屏找模板；一旦已接管游戏窗口，
+        # 只截当前窗口，避免其它号或桌面窗口的同类按钮被误识别。
+        game_window = self._is_game_window(ctx, win)
+        rect = win.rect() if game_window else self._screen_rect()
         if not rect or rect[2] <= 0 or rect[3] <= 0:
             return None
         image = win_mod.grab(rect)
         if image is None:
             return None
-        # 挖掉脚本自己的窗口：悬浮日志窗置顶，日志文字里含「开始游戏/进入游戏/切换/已有角色」，
-        # 不挖掉就会被模板匹配命中，把脚本自己的窗口当成游戏窗口（实测踩过）。
-        win_mod.mask_rects(image, rect, win_mod.own_window_rects())
+        if not game_window:
+            # 启动器整屏识别时挖掉脚本自身窗口，避免日志文字被匹配为流程按钮。
+            win_mod.mask_rects(image, rect, win_mod.own_window_rects())
         return win_mod.ScaledScene(rect, None, img=image)
 
     def _match(self, ctx, win, tpl, threshold):
