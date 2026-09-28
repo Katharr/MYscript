@@ -52,26 +52,44 @@ def _elevate(executable):
         return False
 
 
-def _deps_present():
-    """廉价探测依赖是否齐全：只用 find_spec 定位模块，**不执行/不加载**它们
-    （cv2/numpy/customtkinter 的真正开销在 import 时加载原生 DLL，这里完全避开）。
-    全部能定位才返回 True。"""
+def _missing_dep_modules():
+    """返回当前 Python 环境中找不到的依赖 import 名，探测过程不加载原生库。"""
     try:
-        for m in _DEP_MODULES:
-            if importlib.util.find_spec(m) is None:
-                return False
-        return True
+        return [m for m in _DEP_MODULES if importlib.util.find_spec(m) is None]
     except (ImportError, ValueError):
-        return False
+        # Python 环境本身异常时按依赖不完整处理，交给 pip 给出明确错误。
+        return list(_DEP_MODULES)
+
+
+def _deps_present():
+    """廉价探测依赖是否齐全，不执行/加载任何实际依赖模块。"""
+    return not _missing_dep_modules()
 
 
 def ensure_deps():
-    """依赖缺失时联网安装。注意：探测用 _deps_present()（廉价），这里只负责装。"""
-    print("首次运行，正在安装依赖，请稍候（只需这一次）……\n")
-    ret = subprocess.call([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"])
+    """征得用户同意后，安装当前 Python 环境缺失的 requirements 依赖。"""
+    missing = _missing_dep_modules()
+    print("检测到以下依赖未安装：{}".format(", ".join(missing) if missing else "无法确认"))
+    while True:
+        answer = input("是否联网安装/更新所需依赖？[y/n]: ").strip().lower()
+        if answer in ("y", "yes"):
+            break
+        if answer in ("n", "no"):
+            print("已取消安装，程序未启动。")
+            return False
+        print("请输入 y 或 n。")
+
+    print("\n正在安装所需依赖，请稍候……\n")
+    ret = subprocess.call([
+        sys.executable, "-m", "pip", "install", "--disable-pip-version-check", "-r", "requirements.txt"
+    ])
     if ret != 0:
-        print("\n依赖安装失败：请确认已联网、Python 安装正常。")
+        print("\n依赖安装失败：请确认网络连接、pip 与 Python 环境正常。")
         return False
+    if not _deps_present():
+        print("\n依赖安装完成，但仍有模块无法加载：{}".format(", ".join(_missing_dep_modules())))
+        return False
+    print("\n依赖已就绪。")
     return True
 
 
