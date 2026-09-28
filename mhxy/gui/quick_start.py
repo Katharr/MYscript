@@ -215,10 +215,27 @@ class QuickStartPanel(ctk.CTkFrame):
     def _enter_full_if_game_ready(self):
         if self._has_game_window():
             self.app.enter_full()
+            self.app.after_idle(self._center_full_window)
             return True
         self._set_status("状态：未检测到游戏窗口")
         self._sync_run_button()
         return False
+
+    def _center_full_window(self):
+        """一键启动完成后把已展开的主界面居中到当前屏幕工作区。"""
+        try:
+            self.app.update_idletasks()
+            width = max(1, self.app.winfo_width())
+            height = max(1, self.app.winfo_height())
+            work = win_mod.monitor_work_area(self.app.winfo_id())
+            if work is None:
+                return
+            left, top, right, bottom = work
+            x = left + max(0, (right - left - width) // 2)
+            y = top + max(0, (bottom - top - height) // 2)
+            self.app.geometry("+%d+%d" % (x, y))
+        except Exception:
+            pass
 
     def _stop_and_wait_for_window(self):
         if self.runner is not None and self.runner.is_running():

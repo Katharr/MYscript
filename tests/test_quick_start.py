@@ -192,6 +192,20 @@ class QuickStartPanelTests(unittest.TestCase):
         self.assertEqual(stub.status, ["状态：未检测到游戏窗口"])
         stub._sync_run_button.assert_called_once_with()
 
+    def test_center_full_window_uses_current_work_area(self):
+        stub = _PanelStub()
+        stub.app.winfo_width.return_value = 1360
+        stub.app.winfo_height.return_value = 720
+        stub.app.winfo_id.return_value = 123
+
+        with mock.patch("mhxy.gui.quick_start.win_mod.monitor_work_area",
+                        return_value=(0, 0, 1920, 1032)) as work_area:
+            QuickStartPanel._center_full_window(stub)
+
+        stub.app.update_idletasks.assert_called_once_with()
+        work_area.assert_called_once_with(123)
+        stub.app.geometry.assert_called_once_with("+280+156")
+
     def test_pump_enters_full_only_after_game_window_ready(self):
         stub = _PanelStub()
         stub._launched = True
