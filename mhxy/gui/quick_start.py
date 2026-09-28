@@ -31,6 +31,7 @@ class QuickStartPanel(ctk.CTkFrame):
         self._launched = False
         self._profile_count = 0
         self._log_history = []
+        self._cal_dialog = None
 
         self.grid_columnconfigure(0, weight=1)
         # 上半区保持紧凑，日志容器吃掉其后的全部空间。
@@ -72,7 +73,14 @@ class QuickStartPanel(ctk.CTkFrame):
             controls, text="⚡  一键启动", font=self.fonts["btn"], height=40,
             corner_radius=T.RADIUS_SM, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
             text_color=T.ON_ACCENT, command=self._toggle_run)
-        self.btn_run.grid(row=0, column=0, sticky="ew", pady=(0, T.SP_2))
+        self.btn_run.grid(row=0, column=0, sticky="ew")
+        # 零窗口时小窗是【唯一】入口，而流程标定原来只在完整界面的「启动登录」页——没有游戏窗口
+        # 就进不去，标定按钮失效时用户彻底没救。故这里给一键启动配一个同源的标定入口。
+        self.btn_calibrate = ctk.CTkButton(
+            controls, text="标定", font=self.fonts["body"], height=40, width=84,
+            corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
+            border_width=1, border_color=T.BORDER, command=self._open_calibrate)
+        self.btn_calibrate.grid(row=0, column=1, sticky="e", padx=(T.SP_2, 0))
 
         ctk.CTkFrame(self, height=1, fg_color=T.BORDER).grid(
             row=4, column=0, sticky="ew", padx=T.SP_5, pady=(T.SP_1, T.SP_1))
@@ -200,7 +208,42 @@ class QuickStartPanel(ctk.CTkFrame):
             return
         self._launched = True
         self.btn_run.configure(text="■  停止", state="normal", fg_color=T.DANGER, hover_color=T.DANGER_HOVER)
+        self._sync_calibrate_button()
         self._move_away_from_launcher()
+
+    def _sync_calibrate_button(self):
+        """运行中禁掉标定：标定要抢前台截图，和正在跑的启动流程会互相干扰。"""
+        try:
+            self.btn_calibrate.configure(state="disabled" if self._launched else "normal")
+        except Exception:
+            pass
+
+    def _open_calibrate(self):
+        """一键启动的流程标定（与「启动登录」页的「流程标定」同源，写同一份配置）。
+
+        标定「开始游戏」这类启动器按钮时，先把启动器摆到桌面上（没有就在下面提示），再点本按钮框选。
+        """
+        dialog = getattr(self, "_cal_dialog", None)
+        if dialog is not None:
+            try:
+                if dialog.winfo_exists():
+                    dialog.lift()
+                    dialog.focus_force()
+                    return
+            except Exception:
+                pass
+        from .calibrate_dialog import CalibrateDialog
+
+        def _done():
+            self._cal_dialog = None
+            self.refresh()
+            self.append("标定完成，配置已更新。", "info")
+
+        try:
+            self._cal_dialog = CalibrateDialog(self.app, task_name=LaunchLoginTask.name, on_done=_done)
+        except Exception as e:
+            self._cal_dialog = None
+            self.append("打开标定向导失败：%s" % e, "error")
 
     def _move_away_from_launcher(self):
         """启动后靠右下且取消置顶，避免物理遮挡启动器按钮。"""
@@ -270,6 +313,7 @@ class QuickStartPanel(ctk.CTkFrame):
             self._track_progress(msg)
         if self._launched and not self.runner.is_running():
             self._launched = False
+            self._sync_calibrate_button()
             self._enter_full_if_game_ready()
 
     def append(self, msg, level="info", source=None):

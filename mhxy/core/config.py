@@ -175,7 +175,11 @@ DEFAULT_CONFIG = {
                 # 窗口归位（用户拍板顺序：左上→右上→右下→左下；多于 4 个号时循环）
                 "corner_order": ["top_left", "top_right", "bottom_right", "bottom_left"],
                 "corner_margin_px": 0,           # 距屏幕边缘留白
-                "corner_settle_sec": 2.0         # 点完角色后等多久再归位（等窗口稳定）
+                "corner_settle_sec": 2.0,        # 点完角色后等多久再归位（等窗口稳定）
+                # 按钮的「文字兜底」：模板连续认不出来多久后改用 OCR 认按钮文字，之后每隔多久试一次。
+                # 启动器是远端网页（官方随时可能换外观），光靠模板会一夜失效，故留这条通道。
+                "ocr_fallback_after_sec": 6.0,
+                "ocr_fallback_interval_sec": 6.0
             },
             "regions": {},
             "templates": {

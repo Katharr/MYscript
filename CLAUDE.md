@@ -81,6 +81,8 @@ mhxy/
     inventory.py InventoryOrganizer：整理背包（翻包裹逐物使用/丢弃/出售）的可复用编排，只依赖 ctx；详见 memory organize-bag-task
   tasks/  可插拔任务
     base.py     Task 基类 + 注册表（register/get_task/all_tasks）+ _make_rotation()（包多开轮转）+ dungeon_tasks()
+    launch_login.py  LaunchLoginTask（一键启动登录）：串行开启动器→登录→核验角色；按钮识别=模板 + **OCR 文字兜底**
+                      （启动器是远端 WebView2 页、外观随时会变，模板失效时按「开始游戏」等文字点，见 _click_by_text）
     sniper.py   SniperTask（秒装备）：preflight() 自检 + run() 主循环；刷新=每轮重进货架 _enter_shelf()
     freeclick.py     FreeClickTask（自由点击）：自己框一批截图当模板，按清单顺序循环识别→点击；
                       一轮内每项最多点一次（用户拍板 A 方案），顺序在页面上按住行左侧拖动调整（见 FreeClickPage）
@@ -100,7 +102,8 @@ mhxy/
     app.py              主窗口：侧边导航 + 通用页(置顶,默认)/各任务Page/SettingsPage/AboutPage；
                         任务启动成功后统一走 App.on_task_started（记运行态 + 自动收起为悬浮窗）——
                         各页启动入口**必须**在 preflight 通过后调它，失败路径别调（否则收起却看不到错误）
-    quick_start.py      零游戏窗口时的紧凑一键启动面板（档案勾选、启动、就地日志、完成自动展开）
+    quick_start.py      零游戏窗口时的紧凑一键启动面板（档案勾选、启动、流程标定、就地日志、完成自动展开）；
+                        零窗口时它是**唯一**入口，故流程标定必须留在这里（启动/运行中禁用）
     roi_overlay.py      全屏框选组件（纯 tk，冻结截图上拖框，返回屏幕绝对 ROI）
     float_log.py        悬浮运行日志窗（任意模块脚本一开跑就【自动】收起成它；通用页另有手动入口）：
                         细长条、可拖动缩放、可选置顶；顶部「■ 停止 / ▶ 开始」状态按钮随

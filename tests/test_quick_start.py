@@ -38,6 +38,7 @@ class _PanelStub:
         self.app = mock.Mock()
         self.refresh = mock.Mock()
         self._launched = False
+        self._sync_calibrate_button = lambda: None
 
     def _set_status(self, text):
         self.status.append(text)
@@ -223,6 +224,81 @@ class QuickStartPanelTests(unittest.TestCase):
         stub.append.assert_called_once_with("[角色] 开始处理（1/1）。", "info")
         stub._track_progress.assert_called_once_with("[角色] 开始处理（1/1）。")
         stub._enter_full_if_game_ready.assert_called_once_with()
+
+
+class QuickStartCalibrationTests(unittest.TestCase):
+    """零窗口时小窗是唯一入口：一键启动的标定必须也能在小窗里做。"""
+
+    def test_open_calibrate_uses_launch_login_task(self):
+        stub = _PanelStub()
+        stub._cal_dialog = None
+        opened = {}
+
+        class _Dialog:
+            def __init__(self, app, task_name=None, on_done=None):
+                opened["app"], opened["task_name"], opened["on_done"] = app, task_name, on_done
+
+        with mock.patch("mhxy.gui.calibrate_dialog.CalibrateDialog", _Dialog):
+            QuickStartPanel._open_calibrate(stub)
+
+        self.assertIs(opened["app"], stub.app)
+        self.assertEqual(opened["task_name"], "launch_login")
+        self.assertIsInstance(stub._cal_dialog, _Dialog)
+
+    def test_open_calibrate_raises_existing_dialog_instead_of_duplicating(self):
+        stub = _PanelStub()
+        existing = mock.Mock()
+        stub._cal_dialog = existing
+
+        with mock.patch("mhxy.gui.calibrate_dialog.CalibrateDialog") as dialog_cls:
+            QuickStartPanel._open_calibrate(stub)
+
+        dialog_cls.assert_not_called()
+        existing.lift.assert_called_once_with()
+        existing.focus_force.assert_called_once_with()
+
+    def test_open_calibrate_failure_is_reported_not_raised(self):
+        stub = _PanelStub()
+        stub._cal_dialog = None
+        stub.append = mock.Mock()
+
+        with mock.patch("mhxy.gui.calibrate_dialog.CalibrateDialog",
+                        side_effect=RuntimeError("boom")):
+            QuickStartPanel._open_calibrate(stub)
+
+        self.assertIsNone(stub._cal_dialog)
+        self.assertTrue(stub.append.call_args[0][0].startswith("打开标定向导失败"))
+        self.assertEqual(stub.append.call_args[0][1], "error")
+
+    def test_calibrate_button_disabled_while_launch_running(self):
+        stub = _PanelStub()
+        stub.btn_calibrate = _Button()
+        sync = QuickStartPanel._sync_calibrate_button
+        stub._launched = True
+        sync(stub)
+        self.assertEqual(stub.btn_calibrate.calls[-1]["state"], "disabled")
+
+        stub._launched = False
+        sync(stub)
+        self.assertEqual(stub.btn_calibrate.calls[-1]["state"], "normal")
+
+    def test_done_callback_refreshes_and_logs(self):
+        stub = _PanelStub()
+        stub._cal_dialog = None
+        stub.append = mock.Mock()
+        captured = {}
+
+        class _Dialog:
+            def __init__(self, app, task_name=None, on_done=None):
+                captured["on_done"] = on_done
+
+        with mock.patch("mhxy.gui.calibrate_dialog.CalibrateDialog", _Dialog):
+            QuickStartPanel._open_calibrate(stub)
+        captured["on_done"]()
+
+        self.assertIsNone(stub._cal_dialog)
+        stub.refresh.assert_called_once_with()
+        self.assertIn("标定完成", stub.append.call_args[0][0])
 
 
 if __name__ == "__main__":

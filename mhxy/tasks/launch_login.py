@@ -40,6 +40,21 @@ class LaunchLoginTask(Task):
         "WAIT_EXISTING": ("existing_role", "WAIT_ROLE", "点击已有角色"),
     }
 
+    # 每步按钮上的文字：模板没命中时用它做 OCR 兜底（见 _click_by_text）。
+    _STEP_TEXT = {"点击开始游戏": "开始游戏", "点击进入游戏": "进入游戏",
+                  "点击切换角色": "切换", "点击已有角色": "已有角色"}
+    # 文字兜底只接受「像按钮那一条」的文字块：太大=正文/标题，太小=噪点。
+    _TEXT_BOX = {"min_height": 16, "max_height": 64, "min_width": 30, "max_width": 360,
+                 "min_ratio": 1.2, "max_ratio": 9.0}
+    _MISS_LOG_INTERVAL = 5.0            # 「本步没认出来」的日志节流（每轮都会重试，不能刷屏）
+
+    def __init__(self):
+        # 识别失败诊断 / 文字兜底的节流状态（_run_profile 每档案会重置一次）。
+        self._ocr_after = 6.0
+        self._ocr_interval = 6.0
+        self._miss_since, self._miss_logged = {}, {}
+        self._ocr_first, self._ocr_last = {}, {}
+
     _CORNER_LABELS = {"top_left": "左上", "top_right": "右上",
                       "bottom_right": "右下", "bottom_left": "左下"}
 
@@ -133,6 +148,12 @@ class LaunchLoginTask(Task):
         label = profile.get("label") or profile.get("expected_role_name") or "档案"
         if dry_run:
             return "演练模式不启动程序"
+        # 每档案重置「没认出来」与文字兜底的节流状态（见 _note_miss / _click_by_text）。
+        loop_cfg = ctx.task_cfg(self.name).get("loop") or {}
+        self._ocr_after = max(0.0, float(loop_cfg.get("ocr_fallback_after_sec", 6.0)))
+        self._ocr_interval = max(2.0, float(loop_cfg.get("ocr_fallback_interval_sec", 6.0)))
+        self._miss_since, self._miss_logged = {}, {}
+        self._ocr_first, self._ocr_last = {}, {}
 
         # 启动器可能是独立标题/进程，不能沿用游戏窗口白名单。记录全桌面 HWND 基线后，
         # 仅接受本次启动新出现且命中“开始游戏”模板的窗口。
@@ -144,6 +165,7 @@ class LaunchLoginTask(Task):
         ctx.log("[%s] 已请求启动器；若出现 UAC/SmartScreen，请手动确认。" % label)
         win = self._wait_new_window(ctx, before, launcher_timeout, templates.get("start_game"), threshold)
         if win is None:
+            self._dump_debug(ctx, "launcher")
             return "等待 MyPCLauncher_x64r.exe 启动器窗口超时"
 
         state = "WAIT_START"
@@ -173,6 +195,7 @@ class LaunchLoginTask(Task):
                 if replacement is not None:
                     win = replacement
                 elif time.time() - state_at > timeout:
+                    self._dump_debug(ctx, state)
                     return "%s 超时（登录窗口已转换但未识别到下一界面）" % state
                 else:
                     self._interruptible_sleep(ctx, 0.35)
@@ -219,6 +242,7 @@ class LaunchLoginTask(Task):
                     self._click_template(ctx, win, prev_tpl, threshold, "重新点击" + prev_action)
                     continue
             if elapsed > timeout:
+                self._dump_debug(ctx, state)
                 return "%s 超时" % state
             self._interruptible_sleep(ctx, 0.35)
         return "stopped"
@@ -316,49 +340,92 @@ class LaunchLoginTask(Task):
         return {self._window_hwnd(win) for win in self._desktop_windows(ctx) if self._window_hwnd(win)}
 
     def _official_launcher_window(self, ctx):
-        """按官方启动器进程定位窗口，支持已存在或最小化的单例启动器。"""
+        """按官方启动器进程定位窗口，支持已存在或最小化的单例启动器。
+
+        ⚠ 必须排除「0 尺寸的隐藏顶层窗」：启动器是 WebView2 外壳，同进程下通常还有若干又小又不可见
+        的顶层窗口。若随手返回其中一个，随后 activate()/rect()/点击全都会落空——现象正是
+        「启动器明明开着，脚本却没反应」。故这里只认尺寸够大的窗口，可见的优先于最小化的。
+        """
         title = ctx.cfg.get("window_title", "梦幻西游")
         offset = ctx.cfg.get("window_offset", [0, 0])
         try:
             raw = win_mod.gw.getAllWindows()
         except Exception:
             return None
+        candidates = []
         for desktop_win in raw:
             try:
                 hwnd = int(desktop_win._hWnd)
+                if not hwnd or win_mod.is_own_window(hwnd):
+                    continue
                 image = win_mod.proc_image_path(hwnd)
-                if image and image.rsplit("\\", 1)[-1].lower() == launcher.LAUNCHER_EXE.lower():
-                    return win_mod.GameWindow(title, offset).bind(desktop_win)
+                if not image or image.rsplit("\\", 1)[-1].lower() != launcher.LAUNCHER_EXE.lower():
+                    continue
+                width, height = int(desktop_win.width or 0), int(desktop_win.height or 0)
+                if width <= 200 or height <= 160:
+                    continue
+                minimized = bool(getattr(desktop_win, "isMinimized", False))
+                candidates.append((minimized, -(width * height), desktop_win))
             except Exception:
                 continue
-        return None
+        if not candidates:
+            return None
+        candidates.sort(key=lambda item: (item[0], item[1]))
+        return win_mod.GameWindow(title, offset).bind(candidates[0][2])
 
     def _find_template_window(self, ctx, tpl, threshold, allowed_hwnds=None):
+        """在桌面窗口里找「命中该模板」的那个窗口，返回窗口对象；找不到返回 None。
+
+        命中点用 to_screen() 换回屏幕坐标后再与窗口矩形比对，故返回的是【真正压着这个按钮】的窗口
+        （非游戏窗口的场景是整屏，命中落在别的窗口上时不会被误当成目标）。
+        """
         if tpl is None:
             return None
+        fallback = None
         for win in self._desktop_windows(ctx):
             hwnd = self._window_hwnd(win)
             if allowed_hwnds is not None and hwnd not in allowed_hwnds:
                 continue
-            if self._match(ctx, win, tpl, threshold):
+            scene = self._scene(ctx, win)
+            hit = scene.match(tpl, threshold) if scene is not None else None
+            if hit is None:
+                continue
+            xy = scene.to_screen(hit[0], hit[1])
+            rect = win.rect()
+            if rect and rect[0] <= xy[0] <= rect[0] + rect[2] and rect[1] <= xy[1] <= rect[1] + rect[3]:
                 return win
-        return None
+            if fallback is None:
+                fallback = win
+        return fallback
 
     def _wait_new_window(self, ctx, before, timeout, start_tpl, threshold):
         started = time.time()
         deadline = started + timeout
         warned = False
+        activate_warned = False
         while not ctx.should_stop() and time.time() < deadline:
             # 官方启动器是单例：可能复用已有 HWND，也可能最小化后被 ShellExecute 唤起。
             # 所以先按 MyPCLauncher_x64r.exe 精确找窗口，不能只接受“新 HWND + 模板命中”。
             win = self._official_launcher_window(ctx)
-            if win is not None and win.activate():
+            if win is not None:
+                # ⚠ 这里【不再】用 activate() 当准入门槛：切前台失败时若直接丢弃这个窗口，整条流程
+                # 会一声不响地空转到超时（日志里连「开始游戏」这一步都不会出现）。改成记一次告警后
+                # 照常返回，由点击步骤继续重试切前台并明确报错。
+                if not win.activate() and not activate_warned:
+                    ctx.log("已找到启动器窗口，但未能切到前台；点击前会继续重试。", level="warn")
+                    activate_warned = True
                 ctx.log("已检测到 MyPCLauncher_x64r.exe 启动器。")
                 return win
-            # 兼容未来外壳进程变化：仅把本次新增且命中开始游戏模板的窗口作为后备候选。
+            # 兼容未来外壳进程变化：优先「本次新增且命中开始游戏模板」的窗口；启动器本来就已经开着
+            # （单例复用不会有新 HWND）时，再放宽到全部桌面窗口。
             new_hwnds = self._desktop_hwnds(ctx) - before
-            win = self._find_template_window(ctx, start_tpl, threshold, new_hwnds)
-            if win is not None and win.activate():
+            win = (self._find_template_window(ctx, start_tpl, threshold, new_hwnds)
+                   or self._find_template_window(ctx, start_tpl, threshold, None))
+            if win is not None:
+                if not win.activate() and not activate_warned:
+                    ctx.log("已通过开始游戏模板找到启动窗口，但未能切到前台；点击前会继续重试。",
+                            level="warn")
+                    activate_warned = True
                 ctx.log("已通过开始游戏模板检测到启动器。")
                 return win
             if not warned and time.time() - started >= 8:
@@ -421,15 +488,21 @@ class LaunchLoginTask(Task):
             win_mod.mask_rects(image, rect, win_mod.own_window_rects())
         return win_mod.ScaledScene(rect, None, img=image)
 
-    def _match(self, ctx, win, tpl, threshold):
-        if tpl is None:
-            return None
-        scene = self._scene(ctx, win)
-        return scene.match(tpl, threshold) if scene is not None else None
-
     def _click_template(self, ctx, win, tpl, threshold, action):
-        result = self._match(ctx, win, tpl, threshold)
-        if result is None or not win.activate():
+        """识别并点击某一步的按钮。命中才点；**没命中、切不到前台都留下明确日志**。
+
+        为什么必须留日志：这一步原本只在成功时打印，识别失败时整条流程一声不响地空转到超时，
+        用户看到的只是「启动器开了却没点开始游戏、日志里也没有这一步」，完全无从下手。
+        另外识别失败到一定时长后会启用【文字兜底】（见 _click_by_text）——启动器是远端 WebView2
+        页面，按钮外观会随官方更新变，模板一旦失效就再没有第二条通道。
+        """
+        scene = self._scene(ctx, win)
+        result = scene.match(tpl, threshold) if scene is not None else None
+        if result is None:
+            self._note_miss(ctx, action, tpl, scene, threshold)
+            return self._click_by_text(ctx, win, scene, action)
+        if not win.activate():
+            self._note_activate_failed(ctx, action)
             return False
         scene = self._scene(ctx, win)
         result = scene.match(tpl, threshold) if scene is not None else None
@@ -439,6 +512,96 @@ class LaunchLoginTask(Task):
         ctx.log("%s（%.3f）。" % (action, result[2]), level="hit")
         ctx.mouse.click(xy[0], xy[1])
         return True
+
+    # ---- 识别失败时的诊断与文字兜底 ----
+    def _note_miss(self, ctx, action, tpl, scene, threshold):
+        """本步没认出来：节流记一次日志，并带上本次最高匹配分（判断「模板彻底失效」还是「差一点」）。"""
+        now = time.time()
+        first = self._miss_since.setdefault(action, now)
+        if now - self._miss_logged.get(action, 0.0) < self._MISS_LOG_INTERVAL:
+            return
+        self._miss_logged[action] = now
+        score = 0.0
+        try:
+            best, _where = vision.best_score(scene.img if scene is not None else None, tpl)
+            score = float(best)
+        except Exception:
+            pass
+        ctx.log("%s：未识别到按钮（已等 %.0f 秒，本次最高匹配分 %.3f，阈值 %.2f）。"
+                % (action, now - first, score, float(threshold)), level="warn")
+
+    def _note_activate_failed(self, ctx, action):
+        """认出来了但切不到前台：也必须说出来，否则表现和「没认出来」一模一样。"""
+        now = time.time()
+        if now - self._miss_logged.get("fg:" + action, 0.0) < self._MISS_LOG_INTERVAL:
+            return
+        self._miss_logged["fg:" + action] = now
+        ctx.log("%s：已识别到按钮，但未能切到前台（本轮不点击，继续重试）。" % action, level="warn")
+
+    def _click_by_text(self, ctx, win, scene, action):
+        """文字兜底：模板认不出来时，用 OCR 找按钮上的文字并点击（见 core/accounts.locate_text）。
+
+        只在【本步认不出来】持续 `ocr_fallback_after_sec` 之后、且每隔 `ocr_fallback_interval_sec`
+        才试一次（OCR 比模板匹配贵得多）。命中点还必须落在目标（启动器）窗口内、且文字块形状像按钮，
+        避免点到公告里的同名字。切不到前台就不点——宁可继续重试，也不把点击落到别的窗口上。
+        """
+        text = self._STEP_TEXT.get(str(action).replace("重新点击", "点击"))
+        if not text or scene is None:
+            return False
+        now = time.time()
+        if now - self._ocr_first.setdefault(action, now) < getattr(self, "_ocr_after", 6.0):
+            return False
+        if now - self._ocr_last.get(action, 0.0) < getattr(self, "_ocr_interval", 6.0):
+            return False
+        self._ocr_last[action] = now
+        try:
+            status = accounts.ocr_status()
+        except Exception:
+            status = ""
+        if status.startswith("unavailable"):
+            # OCR 引擎起不来（依赖缺失等）时必须说清楚，否则「文字也没找到」会把人误导到模板上。
+            if now - self._miss_logged.get("ocr:" + action, 0.0) >= self._MISS_LOG_INTERVAL:
+                self._miss_logged["ocr:" + action] = now
+                ctx.log("文字兜底不可用：%s。" % status, level="warn")
+            return False
+        box_cfg = self._TEXT_BOX
+        hit = accounts.locate_text(scene.img, [text], min_height=box_cfg["min_height"],
+                                   max_height=box_cfg["max_height"], min_width=box_cfg["min_width"],
+                                   max_width=box_cfg["max_width"])
+        if hit is None:
+            ctx.log("文字识别也没找到【%s】。" % text, level="warn")
+            return False
+        cx, cy, score, width, height, _matched = hit
+        if height <= 0 or not (box_cfg["min_ratio"] <= width / float(height) <= box_cfg["max_ratio"]):
+            return False
+        xy = scene.to_screen(cx, cy)
+        rects = []
+        for candidate in (win, self._official_launcher_window(ctx)):
+            rect = candidate.rect() if candidate is not None else None
+            if rect and rect[2] > 200 and rect[3] > 160:
+                rects.append(rect)
+        if rects and not any(r[0] <= xy[0] <= r[0] + r[2] and r[1] <= xy[1] <= r[1] + r[3]
+                             for r in rects):
+            ctx.log("文字识别命中【%s】但不在目标窗口内，忽略。" % text, level="warn")
+            return False
+        if win is not None and not win.activate():
+            self._note_activate_failed(ctx, action)
+            return False
+        ctx.log("文字识别命中【%s】（%.3f），已点击。" % (text, score), level="hit")
+        ctx.mouse.click(xy[0], xy[1])
+        return True
+
+    def _dump_debug(self, ctx, tag):
+        """超时现场落盘：把整屏存进 captures/，供事后判断是模板失效、按钮被挡还是窗口没到前台。"""
+        try:
+            rect = self._screen_rect()
+            image = win_mod.grab(rect) if rect else None
+            if image is None:
+                return
+            name = self._save_capture(image, "launch_stuck_%s" % tag)
+            ctx.log("已保存超时现场截图：captures/%s" % name, level="warn")
+        except Exception:
+            pass
 
     def _click_roster_role(self, ctx, win, profile):
         """在“已有角色”页 OCR 找到档案下拉框选定的角色名并点击。"""
