@@ -62,11 +62,14 @@ def resolve_profile(cfg, size, app=None):
 
 
 def grab_roi_on_app(app, cfg, prompt, with_crop=False, toast=None, alpha_windows=None,
-                    allow_desktop_windows=False):
+                    allow_desktop_windows=False, track_profile=True):
     """在【当前屏幕】框选一块区域，返回 (rel_roi, crop, pid)；失败/取消返回 (None, None, None)。
     不激活/不切前台：你把哪个号摆在前面就标到哪个，框完按落点反查参照窗口算相对坐标。
     pid = 本次标定所属的「尺寸组」号（按参照窗口尺寸 resolve_profile：同尺寸复用、
     否则新建并设为激活组；已满 3 组时引导用户替换一个旧组）。
+    track_profile=False：不碰尺寸组（pid 返回 None）。**启动登录必须用它**——那套标定是整屏坐标、
+    运行时根本不按窗口尺寸归一化（launch_login._scene 传 calib_size=None），若照旧建组，每标一次
+    启动器就占掉一个尺寸组（实测已占满 3 个，用户再标就卡在「组已满」）。
     toast: 可选回调 toast(msg, color)；alpha_windows: 框选期间临时隐身的窗口（默认仅 app）。
     allow_desktop_windows=True 仅给独立启动器标定用，允许其不匹配游戏窗口白名单。"""
     title = cfg.get("window_title", "梦幻西游")
@@ -125,12 +128,15 @@ def grab_roi_on_app(app, cfg, prompt, with_crop=False, toast=None, alpha_windows
         return None, None, None
     # 记下「这一套标定图是在多大的窗口下标定的」：同尺寸复用已有组、否则新建并设为激活组，
     # 同时同步 targets.base_size 镜像（唯一写入口，见 core/calib_profiles.py 模块头）。
-    pid = resolve_profile(cfg, [wr[2], wr[3]], app=app)
-    if pid is None:
-        if toast:
-            toast("尺寸组已满，本次未保存；请先在「通用/工具」删一个旧组。", T.WARN)
-        return None, None, None
-    cfg_mod.save_config(cfg)
+    # 启动登录这类整屏坐标标定不参与尺寸组（见 track_profile 说明）。
+    pid = None
+    if track_profile:
+        pid = resolve_profile(cfg, [wr[2], wr[3]], app=app)
+        if pid is None:
+            if toast:
+                toast("尺寸组已满，本次未保存；请先在「通用/工具」删一个旧组。", T.WARN)
+            return None, None, None
+        cfg_mod.save_config(cfg)
     rel = [roi_abs[0] - wr[0], roi_abs[1] - wr[1], roi_abs[2], roi_abs[3]]
     return rel, crop, pid
 
@@ -155,8 +161,9 @@ def calibrate_template_direct(app, task_name, key, name, toast=None):
     tc = cfg_mod.task_config(cfg, task_name)
     tc.setdefault("templates", {})[key] = rel_path
     cfg_mod.set_task_config(cfg, task_name, tc)
-    calib.set_task_profile(cfg, task_name, pid)
-    calib.set_template_profile(cfg, task_name, key, pid)
+    if pid is not None:                  # 整屏坐标标定（pid=None）不吃尺寸组，见 grab_roi_on_app
+        calib.set_task_profile(cfg, task_name, pid)
+        calib.set_template_profile(cfg, task_name, key, pid)
     cfg_mod.save_config(cfg)
     return True
 
@@ -376,7 +383,23 @@ class CalibrateDialog(ctk.CTkToplevel):
         # 这里多传 self 让对话框自身也一并隐身，且复用 self.cfg（_save() 随后会回存 task_config）。
         return grab_roi_on_app(self.app, self.cfg, prompt, with_crop=with_crop,
                                toast=self._toast, alpha_windows=(self.app, self),
-                                allow_desktop_windows=(self.task_name == "launch_login"))
+                               allow_desktop_windows=(self.task_name == "launch_login"),
+                               track_profile=(self.task_name != "launch_login"))
+
+    @staticmethod
+    def _record_profile(cfg, task_name, key, pid):
+        """记录「这一项属于哪个尺寸组」。pid 为 None（整屏坐标标定，见 grab_roi_on_app）时跳过。"""
+        if pid is None:
+            return False
+        calib.set_task_profile(cfg, task_name, pid)
+        if key:
+            calib.set_template_profile(cfg, task_name, key, pid)
+        return True
+
+    @staticmethod
+    def _profile_note(pid):
+        """toast 尾巴：有尺寸组就报组号，没有就不提（别显示「尺寸组 None」）。"""
+        return f"（尺寸组 {calib.label_for(pid)}）" if pid is not None else ""
 
     # ---- 区域标定 ----
     def _calibrate_region(self, key, name):
@@ -384,10 +407,10 @@ class CalibrateDialog(ctk.CTkToplevel):
         if rel is None:
             return
         self.tc.setdefault("regions", {})[key] = rel
-        calib.set_task_profile(self.cfg, self.task_name, pid)
+        self._record_profile(self.cfg, self.task_name, None, pid)
         self._save()
         self._refresh()
-        self._toast(f"已记录 {name}：{rel}（尺寸组 {calib.label_for(pid)}）", T.SUCCESS)
+        self._toast(f"已记录 {name}：{rel}{self._profile_note(pid)}", T.SUCCESS)
 
     # ---- 标志模板标定（裁图存盘）----
     def _calibrate_template(self, key, name):
@@ -402,11 +425,10 @@ class CalibrateDialog(ctk.CTkToplevel):
             self._toast("保存模板图失败。", T.DANGER)
             return
         self.tc.setdefault("templates", {})[key] = rel_path
-        calib.set_task_profile(self.cfg, self.task_name, pid)
-        calib.set_template_profile(self.cfg, self.task_name, key, pid)
+        self._record_profile(self.cfg, self.task_name, key, pid)
         self._save()
         self._refresh()
-        self._toast(f"已记录模板 {name}（尺寸组 {calib.label_for(pid)}）", T.SUCCESS)
+        self._toast(f"已记录模板 {name}{self._profile_note(pid)}", T.SUCCESS)
 
     # ---- 添加装备（watchlist）----
     def _add_item(self):
@@ -425,8 +447,7 @@ class CalibrateDialog(ctk.CTkToplevel):
             return
         self.tc.setdefault("watchlist", []).append(
             {"name": name, "template": rel_path, "max_price": None})
-        calib.set_task_profile(self.cfg, self.task_name, pid)
-        calib.set_template_profile(self.cfg, self.task_name, name, pid)
+        self._record_profile(self.cfg, self.task_name, name, pid)
         self._save()
         self._refresh()
         self._toast(f"已添加装备：{name}", T.SUCCESS)

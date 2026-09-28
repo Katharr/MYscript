@@ -473,5 +473,350 @@ class LaunchLoginTests(unittest.TestCase):
         self.assertTrue(any(level == "hit" for _msg, level in logs))
 
 
+class LaunchLoginDiagnosticsTests(unittest.TestCase):
+    """识别失败不再静默：每步必须有日志、切前台失败要说明、模板失效要有文字兜底。"""
+
+    def _cfg(self):
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        cfg["account_launch"]["profiles"] = [{
+            "id": "main", "label": "主号", "enabled": True,
+            "expected_role_id": "r1", "expected_role_name": "角色",
+        }]
+        tc = cfg["tasks"]["launch_login"]
+        tc["dry_run"] = False
+        tc["templates"] = {key: key + ".png" for key in tc["templates"]}
+        return cfg
+
+    class _Ctx:
+        def __init__(self, cfg, logs):
+            self.cfg = cfg
+            self.logs = logs
+            self.mouse = mock.Mock()
+
+        def task_cfg(self, name):
+            return self.cfg["tasks"][name]
+
+        def should_stop(self):
+            return False
+
+        def log(self, msg, level="info"):
+            self.logs.append((level, msg))
+
+    class _Win:
+        def __init__(self, rect=(100, 100, 800, 600), activate=True):
+            self._rect, self._activate = rect, activate
+            self.activations = 0
+
+        def rect(self):
+            return list(self._rect)
+
+        def activate(self):
+            self.activations += 1
+            return self._activate
+
+    class _Scene:
+        """假场景：match 返回固定命中（或 None），坐标原样映射（屏幕坐标）。"""
+
+        def __init__(self, hit=None, img=None):
+            self._hit, self.img = hit, img
+
+        def match(self, _tpl, _threshold):
+            return self._hit
+
+        def to_screen(self, x, y):
+            return (x, y)
+
+    def test_missing_button_is_logged_with_best_score(self):
+        cfg = self._cfg()
+        logs = []
+        task = LaunchLoginTask()
+        task._miss_since, task._miss_logged = {}, {}
+        task._ocr_first, task._ocr_last = {}, {}
+        task._ocr_after = 999.0          # 本次只验证「没认出来要留日志」，不走文字兜底
+        scene = self._Scene(hit=None)
+        with mock.patch.object(task, "_scene", return_value=scene), \
+             mock.patch("mhxy.tasks.launch_login.vision.best_score", return_value=(0.62, None)), \
+             mock.patch("mhxy.tasks.launch_login.accounts.locate_text", return_value=None):
+            clicked = task._click_template(self._Ctx(cfg, logs), self._Win(), object(), 0.85, "点击开始游戏")
+        self.assertFalse(clicked)
+        warns = [msg for level, msg in logs if level == "warn"]
+        self.assertTrue(any("未识别到按钮" in msg and "0.620" in msg for msg in warns), warns)
+
+    def test_template_hit_but_foreground_failed_is_logged(self):
+        cfg = self._cfg()
+        logs = []
+        task = LaunchLoginTask()
+        task._miss_since, task._miss_logged = {}, {}
+        scene = self._Scene(hit=(10, 10, 0.9))
+        with mock.patch.object(task, "_scene", return_value=scene):
+            clicked = task._click_template(self._Ctx(cfg, logs), self._Win(activate=False), object(),
+                                           0.85, "点击开始游戏")
+        self.assertFalse(clicked)
+        self.assertTrue(any(level == "warn" and "未能切到前台" in msg for level, msg in logs), logs)
+
+    def test_text_fallback_clicks_button_when_template_stale(self):
+        """模板认不出来（官方更新了启动器外观）时，靠 OCR 认「开始游戏」文字把这一步走通。"""
+        cfg = self._cfg()
+        logs = []
+        task = LaunchLoginTask()
+        task._miss_since, task._miss_logged = {}, {}
+        task._ocr_first, task._ocr_last = {}, {}
+        task._ocr_after, task._ocr_interval = 0.0, 0.0
+        win = self._Win(rect=(100, 100, 800, 600))
+        scene = self._Scene(hit=None)
+        ctx = self._Ctx(cfg, logs)
+        with mock.patch.object(task, "_scene", return_value=scene), \
+             mock.patch.object(task, "_official_launcher_window", return_value=win), \
+             mock.patch("mhxy.tasks.launch_login.vision.best_score", return_value=(0.4, None)), \
+             mock.patch("mhxy.tasks.launch_login.accounts.ocr_status", return_value="not_loaded"), \
+             mock.patch("mhxy.tasks.launch_login.accounts.locate_text",
+                        return_value=(500, 300, 0.95, 120, 30, "开始游戏")):
+            clicked = task._click_template(ctx, win, object(), 0.85, "点击开始游戏")
+        self.assertTrue(clicked)
+        ctx.mouse.click.assert_called_once_with(500, 300)
+        self.assertTrue(any(level == "hit" and "文字识别命中【开始游戏】" in msg for level, msg in logs), logs)
+
+    def test_text_fallback_reports_missing_ocr_engine(self):
+        """OCR 引擎起不来时要说清楚原因，别让「文字也没找到」把人误导到模板上。"""
+        cfg = self._cfg()
+        logs = []
+        task = LaunchLoginTask()
+        task._miss_since, task._miss_logged = {}, {}
+        task._ocr_first, task._ocr_last = {}, {}
+        task._ocr_after, task._ocr_interval = 0.0, 0.0
+        with mock.patch.object(task, "_scene", return_value=self._Scene(hit=None)), \
+             mock.patch.object(task, "_official_launcher_window", return_value=None), \
+             mock.patch("mhxy.tasks.launch_login.accounts.ocr_status",
+                        return_value="unavailable: no module"), \
+             mock.patch("mhxy.tasks.launch_login.accounts.locate_text") as locate:
+            clicked = task._click_template(self._Ctx(cfg, logs), self._Win(), object(), 0.85,
+                                           "点击开始游戏")
+        self.assertFalse(clicked)
+        locate.assert_not_called()
+        self.assertTrue(any(level == "warn" and "文字兜底不可用" in msg for level, msg in logs), logs)
+
+    def test_text_fallback_rejects_hit_outside_target_window(self):
+        """OCR 命中在目标窗口之外（例如公告/别的窗口里的同名字）绝不允许点击。"""
+        cfg = self._cfg()
+        logs = []
+        task = LaunchLoginTask()
+        task._miss_since, task._miss_logged = {}, {}
+        task._ocr_first, task._ocr_last = {}, {}
+        task._ocr_after, task._ocr_interval = 0.0, 0.0
+        win = self._Win(rect=(100, 100, 300, 200))
+        ctx = self._Ctx(cfg, logs)
+        with mock.patch.object(task, "_scene", return_value=self._Scene(hit=None)), \
+             mock.patch.object(task, "_official_launcher_window", return_value=None), \
+             mock.patch("mhxy.tasks.launch_login.accounts.ocr_status", return_value="not_loaded"), \
+             mock.patch("mhxy.tasks.launch_login.accounts.locate_text",
+                        return_value=(900, 900, 0.95, 120, 30, "开始游戏")):
+            clicked = task._click_template(ctx, win, object(), 0.85, "点击开始游戏")
+        self.assertFalse(clicked)
+        ctx.mouse.click.assert_not_called()
+
+    def test_launcher_window_found_even_if_foreground_fails(self):
+        """切前台失败不再丢弃窗口（原实现会静默空转到超时，日志里连这一步都没有）。"""
+        cfg = self._cfg()
+        logs = []
+        task = LaunchLoginTask()
+        ctx = self._Ctx(cfg, logs)
+        win = self._Win(activate=False)
+        with mock.patch.object(task, "_official_launcher_window", return_value=win):
+            got = task._wait_new_window(ctx, set(), 5.0, object(), 0.85)
+        self.assertIs(got, win)
+        self.assertTrue(any("已检测到 MyPCLauncher_x64r.exe 启动器" in msg for _lv, msg in logs), logs)
+        self.assertTrue(any(level == "warn" and "未能切到前台" in msg for level, msg in logs), logs)
+
+    def test_official_launcher_window_skips_zero_sized_hidden_windows(self):
+        """同进程下 WebView2 外壳还有 0 尺寸隐藏顶层窗；选错它会导致切前台/点击全落空。"""
+        task = LaunchLoginTask()
+        hidden = _FakeNative(11, 0, 0)
+        real = _FakeNative(22, 1350, 900)
+        ctx = _Ctx(self._cfg())
+        with mock.patch("mhxy.tasks.launch_login.win_mod.gw.getAllWindows",
+                        return_value=[hidden, real]), \
+             mock.patch("mhxy.tasks.launch_login.win_mod.proc_image_path",
+                        return_value="C:\\game\\" + launcher.LAUNCHER_EXE), \
+             mock.patch("mhxy.tasks.launch_login.win_mod.is_own_window", return_value=False):
+            got = task._official_launcher_window(ctx)
+        self.assertIsNotNone(got)
+        self.assertEqual(got.hwnd(), 22)
+
+    def test_official_launcher_window_ignores_only_hidden_windows(self):
+        task = LaunchLoginTask()
+        hidden = _FakeNative(11, 0, 0)
+        with mock.patch("mhxy.tasks.launch_login.win_mod.gw.getAllWindows", return_value=[hidden]), \
+             mock.patch("mhxy.tasks.launch_login.win_mod.proc_image_path",
+                        return_value="C:\\game\\" + launcher.LAUNCHER_EXE), \
+             mock.patch("mhxy.tasks.launch_login.win_mod.is_own_window", return_value=False):
+            self.assertIsNone(task._official_launcher_window(_Ctx(self._cfg())))
+
+    def test_find_template_window_prefers_window_under_hit(self):
+        task = LaunchLoginTask()
+        left, right = self._Win(rect=(0, 0, 100, 100)), self._Win(rect=(100, 100, 800, 600))
+        scene = self._Scene(hit=(150, 150, 0.9))
+        with mock.patch.object(task, "_desktop_windows", return_value=[left, right]), \
+             mock.patch.object(task, "_scene", return_value=scene):
+            got = task._find_template_window(_Ctx(self._cfg()), object(), 0.85)
+        self.assertIs(got, right)
+
+    def test_scene_masks_only_own_windows_above_the_target(self):
+        """挖洞只能挖确实压在启动器上面的自家窗口：按矩形一刀切会把启动器自己的像素涂黑，
+        那正是「小窗和启动器矩形相交 → 永远认不出开始游戏，挪开窗口就好」的根因。"""
+        task = LaunchLoginTask()
+
+        class _Win:
+            class _Native:
+                _hWnd = 77
+            _win = _Native()
+
+            def rect(self):
+                return [0, 0, 800, 600]
+
+        with mock.patch.object(task, "_is_game_window", return_value=False), \
+             mock.patch.object(task, "_screen_rect", return_value=[0, 0, 1000, 800]), \
+             mock.patch("mhxy.tasks.launch_login.win_mod.grab", return_value=object()), \
+             mock.patch("mhxy.tasks.launch_login.win_mod.own_window_frames",
+                        return_value=[(11, [1, 2, 3, 4]), (22, [5, 6, 7, 8])]), \
+             mock.patch("mhxy.tasks.launch_login.win_mod.is_window_above",
+                        side_effect=lambda a, b: int(a) == 11), \
+             mock.patch("mhxy.tasks.launch_login.win_mod.mask_rects") as mask, \
+             mock.patch("mhxy.tasks.launch_login.win_mod.ScaledScene", return_value=object()):
+            task._scene(_Ctx(DEFAULT_CONFIG), _Win())
+
+        mask.assert_called_once_with(mock.ANY, [0, 0, 1000, 800], [[1, 2, 3, 4]])
+
+    def test_scene_masks_nothing_when_own_window_is_behind(self):
+        task = LaunchLoginTask()
+
+        class _Win:
+            class _Native:
+                _hWnd = 77
+            _win = _Native()
+
+            def rect(self):
+                return [0, 0, 800, 600]
+
+        with mock.patch.object(task, "_is_game_window", return_value=False), \
+             mock.patch.object(task, "_screen_rect", return_value=[0, 0, 1000, 800]), \
+             mock.patch("mhxy.tasks.launch_login.win_mod.grab", return_value=object()), \
+             mock.patch("mhxy.tasks.launch_login.win_mod.own_window_frames",
+                        return_value=[(11, [1, 2, 3, 4])]), \
+             mock.patch("mhxy.tasks.launch_login.win_mod.is_window_above", return_value=False), \
+             mock.patch("mhxy.tasks.launch_login.win_mod.mask_rects") as mask, \
+             mock.patch("mhxy.tasks.launch_login.win_mod.ScaledScene", return_value=object()):
+            task._scene(_Ctx(DEFAULT_CONFIG), _Win())
+
+        mask.assert_called_once_with(mock.ANY, [0, 0, 1000, 800], [])
+
+    def test_ocr_fallback_delays_until_threshold(self):
+        """文字兜底不能一上来就跑（OCR 贵）：先等 ocr_fallback_after_sec。"""
+        cfg = self._cfg()
+        logs = []
+        task = LaunchLoginTask()
+        task._miss_since, task._miss_logged = {}, {}
+        task._ocr_first, task._ocr_last = {}, {}
+        task._ocr_after, task._ocr_interval = 30.0, 30.0
+        win = self._Win()
+        with mock.patch.object(task, "_scene", return_value=self._Scene(hit=None)), \
+             mock.patch("mhxy.tasks.launch_login.vision.best_score", return_value=(0.3, None)), \
+             mock.patch("mhxy.tasks.launch_login.accounts.locate_text") as locate:
+            clicked = task._click_template(self._Ctx(cfg, logs), win, object(), 0.85, "点击开始游戏")
+        self.assertFalse(clicked)
+        locate.assert_not_called()
+
+
+class WindowZOrderTests(unittest.TestCase):
+    """z 序判断：只用来决定「自家窗口要不要挖洞 / 要不要压下去」，判错会误涂黑目标窗口。"""
+
+    def test_is_window_above_follows_order(self):
+        from mhxy.core import window as win_mod
+        order = [10, 20, 30, 40]          # 从前到后
+        self.assertTrue(win_mod.is_window_above(10, 30, order=order))
+        self.assertFalse(win_mod.is_window_above(30, 10, order=order))
+        self.assertTrue(win_mod.is_window_above(20, 20, order=order))   # 同一个窗口算在上
+        # 两个都不在 z 序里（已销毁）→ 宁可判「没在上面」（少挖洞，别涂黑目标）
+        self.assertFalse(win_mod.is_window_above(99, 98, order=order))
+        self.assertFalse(win_mod.is_window_above(0, 30, order=order))
+
+    def test_toplevel_hwnd_returns_zero_on_bad_input(self):
+        from mhxy.core import window as win_mod
+        self.assertEqual(win_mod.toplevel_hwnd(0), 0)
+
+    def test_place_below_is_safe_without_handles(self):
+        from mhxy.core import window as win_mod
+        self.assertFalse(win_mod.place_below(0, 123))
+        self.assertFalse(win_mod.place_below(123, 0))
+
+
+class _FakeNative:
+    """pygetwindow 顶层窗口的假体（只要 _hWnd/尺寸/位置就够）。"""
+
+    def __init__(self, hwnd, width, height, left=0, top=0, minimized=False):
+        self._hWnd = hwnd
+        self.width, self.height = width, height
+        self.left, self.top = left, top
+        self.isMinimized = minimized
+
+
+class LaunchCalibrationProfileTests(unittest.TestCase):
+    """启动登录的标定不吃尺寸组：不建组、不占组，故「组已满」也不会再挡住标定。"""
+
+    def test_record_profile_skips_when_pid_missing(self):
+        from mhxy.gui.calibrate_dialog import CalibrateDialog
+        cfg = {}
+        with mock.patch("mhxy.gui.calibrate_dialog.calib.set_task_profile") as task_profile, \
+             mock.patch("mhxy.gui.calibrate_dialog.calib.set_template_profile") as tpl_profile:
+            self.assertFalse(CalibrateDialog._record_profile(cfg, "launch_login", "start_game", None))
+        task_profile.assert_not_called()
+        tpl_profile.assert_not_called()
+
+    def test_record_profile_writes_when_pid_present(self):
+        from mhxy.gui.calibrate_dialog import CalibrateDialog
+        with mock.patch("mhxy.gui.calibrate_dialog.calib.set_task_profile") as task_profile, \
+             mock.patch("mhxy.gui.calibrate_dialog.calib.set_template_profile") as tpl_profile:
+            self.assertTrue(CalibrateDialog._record_profile({}, "sniper", "key", 2))
+        task_profile.assert_called_once()
+        tpl_profile.assert_called_once()
+
+    def test_calibrate_template_saves_without_profile_tracking(self):
+        """pid=None（整屏坐标标定）时仍要存下模板图与路径——这正是小窗标定要走的路。"""
+        from mhxy.gui.calibrate_dialog import CalibrateDialog
+        saved = {}
+
+        class _Stub:
+            task_name = "launch_login"
+            cfg = {}
+            tc = {"templates": {}}
+
+            @staticmethod
+            def _record_profile(cfg, task_name, key, pid):
+                return CalibrateDialog._record_profile(cfg, task_name, key, pid)
+
+            @staticmethod
+            def _profile_note(pid):
+                return CalibrateDialog._profile_note(pid)
+
+            def _grab_roi(self, prompt, with_crop=False):
+                import numpy as np
+                return [1, 2, 3, 4], np.zeros((10, 20, 3), dtype="uint8"), None
+
+            def _save(self):
+                saved["saved"] = True
+
+            def _refresh(self):
+                pass
+
+            def _toast(self, msg, color=None):
+                saved["toast"] = msg
+
+        with mock.patch("mhxy.gui.calibrate_dialog.vision.save_image", return_value=True), \
+             mock.patch("mhxy.gui.calibrate_dialog.calib.set_template_profile") as tpl_profile:
+            CalibrateDialog._calibrate_template(_Stub(), "start_game", "开始游戏")
+        self.assertEqual(_Stub.tc["templates"]["start_game"], "templates/tm_start_game.png")
+        self.assertTrue(saved.get("saved"))
+        tpl_profile.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

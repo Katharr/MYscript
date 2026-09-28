@@ -452,6 +452,58 @@ def locate_roster_name(image_bgr, names, role_id=None, expected_name=None):
     return best
 
 
+def locate_text(image_bgr, texts, min_confidence=None, min_height=0, max_height=0,
+                min_width=0, max_width=0):
+    """OCR 在整张图里找【指定整段文字】（如启动器的「开始游戏」按钮），返回
+    ``(cx, cy, score, w, h, text)``；文字不匹配 / OCR 不可用返回 ``None``。坐标相对图片左上角。
+
+    为什么需要它（启动登录的兜底通道）：官方启动器是远端 WebView2 页面，按钮外观会随官方更新
+    变化，模板匹配一旦失效就再没有出路；而「文字」比「外观」稳定得多。这里刻意只认**整段相等**
+    的文字（_normalize_name 后相等），并支持按尺寸/长宽比过滤出「按钮那一条」，避免把公告里的
+    同名文字当按钮点掉。与角色名识别共用同一个 OCR 引擎实例（见 _get_ocr_engine），不额外占内存。
+    """
+    wanted = {_normalize_name(t) for t in (texts or [])}
+    wanted.discard("")
+    if image_bgr is None or not wanted:
+        return None
+    engine = _get_ocr_engine()
+    if engine is None:
+        return None
+    limit = _OCR_MIN_CONFIDENCE if min_confidence is None else float(min_confidence)
+    try:
+        result, _elapsed = engine(image_bgr)
+    except Exception:
+        return None
+    best = None
+    for item in result or []:
+        try:
+            box, text, confidence = item[0], str(item[1] or ""), float(item[2])
+        except (IndexError, TypeError, ValueError):
+            continue
+        if confidence < limit or _normalize_name(text) not in wanted:
+            continue
+        try:
+            xs = [float(point[0]) for point in box]
+            ys = [float(point[1]) for point in box]
+        except (TypeError, ValueError, IndexError):
+            continue
+        if not xs or not ys:
+            continue
+        x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+        w, h = int(round(x1 - x0)), int(round(y1 - y0))
+        if h < max(0, int(min_height)) or (max_height and h > int(max_height)):
+            continue
+        if w < max(0, int(min_width)) or (max_width and w > int(max_width)):
+            continue
+        # 同分取面积大的：同一段文字在启动器里通常只有主按钮最大，公告正文里的同名字更小。
+        candidate = (confidence, w * h, int(round((x0 + x1) / 2)), int(round((y0 + y1) / 2)), w, h, text)
+        if best is None or candidate[:2] > best[:2]:
+            best = candidate
+    if best is None:
+        return None
+    return (best[2], best[3], best[0], best[4], best[5], best[6])
+
+
 def _get_ocr_engine():
     """按需初始化本地 OCR，避免启动 GUI 时加载 ONNX 模型。失败后安全降级到「号N」。"""
     global _ocr_engine, _ocr_error

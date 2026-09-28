@@ -36,7 +36,8 @@
    **不再用列等分猜卡片右缘**（实测等分线会压在邻卡按钮上、切进来 2px 就点到隔壁）；
    ② 判分【只排序不切】：条目照 `match_threshold` 卡，但「参加」是 30×15 小字按钮，同一颗按钮因卡片底色/
    进度文字不同分数在 0.7~1.0 飘（实测真按钮 0.8496 被 0.85 卡掉 = 「认出运镖却找不到参加」的根因），
-   故按 `join_min_score`（默认 0.7）接受；
+   故按 `join_min_score`（默认 0.7）接受；够下限的候选里取【离条目最近、且在其右侧】的那颗
+   （同排两张卡各有一颗几乎同分的「参加」，取全局最高分会点到隔壁活动——实测秘境就这么点歪）；
    ③ 条目模板会**撞脸**（运镖图标对蹈海去图标也给 0.877），故把过阈值的条目候选都取出来、
    按「条目分 + 半个参加分」选那一对，互相印证，认错卡片时会自然落选。
    ⚠ **别改回「取最高分 + 全局阈值一刀切」，也别改回列等分**——那两条正是三个号无法同时认出的成因；
@@ -70,6 +71,9 @@ mhxy/
     accounts.py 角色名识别（OCR 客户端标签条当前角色名 + LocalData 名册核验；把界面/日志里的「号N」换成「角色名（等级）」）——见约束 10
     window_probe.py 轻量窗口证据/规则层（游戏窗口与进程快照；不依赖图像库）
     window.py   GameWindow（locate/rect/activate/坐标换算）+ grab() 截图 + set_dpi_aware()
+                + z 序工具（own_window_frames/is_window_above/place_below/toplevel_hwnd）
+                ⚠ 整屏识别挖洞只能挖【确实压在目标窗口上面】的自家窗口：按矩形一刀切会把目标窗口自己的
+                像素也涂黑（实测「小窗与启动器矩形相交→永远认不出开始游戏，挪开窗口就好」就是这条）
     vision.py   load_template / save_image / match() / frame_diff()（兼容中文路径）
     scan.py     通用「滚动查找」scroll_search()（翻列表/翻包裹统一底层）；详见 docstring + memory scroll-search-scan
     list_row.py 活动列表「卡片 → 右侧参加按钮」定位 locate_card()（见约束 7）；运镖/宝图/秘境/蹈海去共用
@@ -81,6 +85,8 @@ mhxy/
     inventory.py InventoryOrganizer：整理背包（翻包裹逐物使用/丢弃/出售）的可复用编排，只依赖 ctx；详见 memory organize-bag-task
   tasks/  可插拔任务
     base.py     Task 基类 + 注册表（register/get_task/all_tasks）+ _make_rotation()（包多开轮转）+ dungeon_tasks()
+    launch_login.py  LaunchLoginTask（一键启动登录）：串行开启动器→登录→核验角色；按钮识别=模板 + **OCR 文字兜底**
+                      （启动器是远端 WebView2 页、外观随时会变，模板失效时按「开始游戏」等文字点，见 _click_by_text）
     sniper.py   SniperTask（秒装备）：preflight() 自检 + run() 主循环；刷新=每轮重进货架 _enter_shelf()
     freeclick.py     FreeClickTask（自由点击）：自己框一批截图当模板，按清单顺序循环识别→点击；
                       一轮内每项最多点一次（用户拍板 A 方案），顺序在页面上按住行左侧拖动调整（见 FreeClickPage）
@@ -100,7 +106,8 @@ mhxy/
     app.py              主窗口：侧边导航 + 通用页(置顶,默认)/各任务Page/SettingsPage/AboutPage；
                         任务启动成功后统一走 App.on_task_started（记运行态 + 自动收起为悬浮窗）——
                         各页启动入口**必须**在 preflight 通过后调它，失败路径别调（否则收起却看不到错误）
-    quick_start.py      零游戏窗口时的紧凑一键启动面板（档案勾选、启动、就地日志、完成自动展开）
+    quick_start.py      零游戏窗口时的紧凑一键启动面板（档案勾选、启动、流程标定、就地日志、完成自动展开）；
+                        零窗口时它是**唯一**入口，故流程标定必须留在这里（启动/运行中禁用）
     roi_overlay.py      全屏框选组件（纯 tk，冻结截图上拖框，返回屏幕绝对 ROI）
     float_log.py        悬浮运行日志窗（任意模块脚本一开跑就【自动】收起成它；通用页另有手动入口）：
                         细长条、可拖动缩放、可选置顶；顶部「■ 停止 / ▶ 开始」状态按钮随

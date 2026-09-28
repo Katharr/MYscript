@@ -2,6 +2,7 @@
 """紧凑启动形态的一键启动面板。"""
 
 import re
+import time
 import uuid
 
 import customtkinter as ctk
@@ -9,6 +10,7 @@ import customtkinter as ctk
 from . import theme as T
 from ..core import accounts
 from ..core import config as cfg_mod
+from ..core import launcher
 from ..core import window as win_mod
 from ..core.runner import TaskRunner
 from ..tasks.launch_login import LaunchLoginTask
@@ -31,6 +33,8 @@ class QuickStartPanel(ctk.CTkFrame):
         self._launched = False
         self._profile_count = 0
         self._log_history = []
+        self._cal_dialog = None
+        self._dodged_at = 0.0
 
         self.grid_columnconfigure(0, weight=1)
         # 上半区保持紧凑，日志容器吃掉其后的全部空间。
@@ -72,7 +76,14 @@ class QuickStartPanel(ctk.CTkFrame):
             controls, text="⚡  一键启动", font=self.fonts["btn"], height=40,
             corner_radius=T.RADIUS_SM, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
             text_color=T.ON_ACCENT, command=self._toggle_run)
-        self.btn_run.grid(row=0, column=0, sticky="ew", pady=(0, T.SP_2))
+        self.btn_run.grid(row=0, column=0, sticky="ew")
+        # 零窗口时小窗是【唯一】入口，而流程标定原来只在完整界面的「启动登录」页——没有游戏窗口
+        # 就进不去，标定按钮失效时用户彻底没救。故这里给一键启动配一个同源的标定入口。
+        self.btn_calibrate = ctk.CTkButton(
+            controls, text="标定", font=self.fonts["body"], height=40, width=84,
+            corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
+            border_width=1, border_color=T.BORDER, command=self._open_calibrate)
+        self.btn_calibrate.grid(row=0, column=1, sticky="e", padx=(T.SP_2, 0))
 
         ctk.CTkFrame(self, height=1, fg_color=T.BORDER).grid(
             row=4, column=0, sticky="ew", padx=T.SP_5, pady=(T.SP_1, T.SP_1))
@@ -201,7 +212,42 @@ class QuickStartPanel(ctk.CTkFrame):
         self._launched = True
         self.btn_run.configure(text="■  停止", state="normal", fg_color=T.DANGER, hover_color=T.DANGER_HOVER)
         self.app.on_quick_start_started(self.runner)
+        self._sync_calibrate_button()
         self._move_away_from_launcher()
+
+    def _sync_calibrate_button(self):
+        """运行中禁掉标定：标定要抢前台截图，和正在跑的启动流程会互相干扰。"""
+        try:
+            self.btn_calibrate.configure(state="disabled" if self._launched else "normal")
+        except Exception:
+            pass
+
+    def _open_calibrate(self):
+        """一键启动的流程标定（与「启动登录」页的「流程标定」同源，写同一份配置）。
+
+        标定「开始游戏」这类启动器按钮时，先把启动器摆到桌面上（没有就在下面提示），再点本按钮框选。
+        """
+        dialog = getattr(self, "_cal_dialog", None)
+        if dialog is not None:
+            try:
+                if dialog.winfo_exists():
+                    dialog.lift()
+                    dialog.focus_force()
+                    return
+            except Exception:
+                pass
+        from .calibrate_dialog import CalibrateDialog
+
+        def _done():
+            self._cal_dialog = None
+            self.refresh()
+            self.append("标定完成，配置已更新。", "info")
+
+        try:
+            self._cal_dialog = CalibrateDialog(self.app, task_name=LaunchLoginTask.name, on_done=_done)
+        except Exception as e:
+            self._cal_dialog = None
+            self.append("打开标定向导失败：%s" % e, "error")
 
     def _move_away_from_launcher(self):
         """启动后靠右下且取消置顶，避免物理遮挡启动器按钮。"""
@@ -269,8 +315,14 @@ class QuickStartPanel(ctk.CTkFrame):
             level, msg = self.runner.log_queue.get()
             self.append(msg, level)
             self._track_progress(msg)
+        if self._launched:
+            now = time.time()
+            if now - getattr(self, "_dodged_at", 0.0) >= 0.8:
+                self._dodged_at = now
+                self._keep_behind_target()
         if self._launched and not self.runner.is_running():
             self._launched = False
+            self._sync_calibrate_button()
             self._enter_full_if_game_ready()
 
     def refresh_state(self, state):
@@ -283,6 +335,42 @@ class QuickStartPanel(ctk.CTkFrame):
         elif state.task_state == "stopped" and not self._launched:
             self._set_status("状态：已停止")
             self._sync_run_button()
+
+    # ---- 自家小窗绝不许压住「脚本要看的东西」（启动器 / 游戏号）----
+    def _target_hwnd(self):
+        """当前该让路的窗口句柄：优先官方启动器，其次第一个可见游戏窗口；都没有返回 0。"""
+        try:
+            for w in win_mod.gw.getAllWindows():
+                hwnd = int(w._hWnd)
+                if not hwnd or w.isMinimized or win_mod.is_own_window(hwnd):
+                    continue
+                image = win_mod.proc_image_path(hwnd)
+                if image and image.rsplit("\\", 1)[-1].lower() == launcher.LAUNCHER_EXE.lower():
+                    return hwnd
+        except Exception:
+            pass
+        try:
+            wins = win_mod.locate_all(self.app.cfg.get("window_title", "梦幻西游"),
+                                      self.app.cfg.get("window_offset", [0, 0]))
+        except Exception:
+            return 0
+        return wins[0].hwnd() if wins else 0
+
+    def _keep_behind_target(self):
+        """任务运行期间，把小窗压到「要看的目标窗口」下面（只改 z 序，不动位置/尺寸/焦点）。
+
+        压在它上面 = 那一片像素真的是我们的窗口，脚本再怎么标定都认不出按钮（用户实测：
+        把窗口挪开一点就正常）。这里每 0.8 秒比一次 z 序，只有真压在上面时才压下去。
+        """
+        try:
+            target = self._target_hwnd()
+            if not target:
+                return
+            mine = win_mod.toplevel_hwnd(self.app.winfo_id())
+            if mine and win_mod.is_window_above(mine, target):
+                win_mod.place_below(mine, target)
+        except Exception:
+            pass
 
     def append(self, msg, level="info", source=None):
         self._log_history.append((msg, level, source))
