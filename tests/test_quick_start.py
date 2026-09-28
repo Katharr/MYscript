@@ -77,6 +77,7 @@ class QuickStartShapeTests(unittest.TestCase):
         stub._build_log_panel = mock.Mock()
         stub._build_pages = mock.Mock()
         stub._build_pages_with_overlay = mock.Mock()
+        stub._set_state = mock.Mock()
         stub._show = mock.Mock()
         stub._prebuild_idle = mock.Mock()
         stub.after = mock.Mock()

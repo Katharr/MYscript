@@ -551,8 +551,9 @@ class SecretRealmTask(Task):
                     break
                 if wctx.window.rect() is None:
                     continue
-                if multi:
-                    wctx.window.activate()
+                # 最小化或被遮挡不算窗口消失；演练扫描前也要先还原并置前。
+                if not wctx.window.activate():
+                    continue
                 scene = self._grab_scene(wctx, regions)
                 found = []
                 for key, label in keys:

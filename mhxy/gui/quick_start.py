@@ -200,6 +200,7 @@ class QuickStartPanel(ctk.CTkFrame):
             return
         self._launched = True
         self.btn_run.configure(text="■  停止", state="normal", fg_color=T.DANGER, hover_color=T.DANGER_HOVER)
+        self.app.on_quick_start_started(self.runner)
         self._move_away_from_launcher()
 
     def _move_away_from_launcher(self):
@@ -271,6 +272,17 @@ class QuickStartPanel(ctk.CTkFrame):
         if self._launched and not self.runner.is_running():
             self._launched = False
             self._enter_full_if_game_ready()
+
+    def refresh_state(self, state):
+        """按 App 统一状态刷新紧凑形态；进度日志仍由 _track_progress 细化展示。"""
+        if state.task_state == "stopping":
+            self.btn_run.configure(text="停止中…", state="disabled")
+        elif state.task_state == "failed" and not self._launched:
+            self._set_status("状态：启动失败")
+            self._sync_run_button()
+        elif state.task_state == "stopped" and not self._launched:
+            self._set_status("状态：已停止")
+            self._sync_run_button()
 
     def append(self, msg, level="info", source=None):
         self._log_history.append((msg, level, source))

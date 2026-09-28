@@ -8,6 +8,7 @@ import os
 import queue
 import ctypes
 import threading
+from dataclasses import dataclass, replace
 
 import customtkinter as ctk
 
@@ -25,6 +26,34 @@ from ..tasks.daily import CHAINABLE
 from ..core.teaming import TEAM_REQUIRED_REGIONS, TEAM_REQUIRED_TEMPLATES
 from ..core.inventory import required_templates
 from ..core.input import get_cursor
+
+
+UI_COMPACT = "compact"
+UI_FULL = "full"
+UI_FLOATING = "floating"
+GAME_UNKNOWN = "unknown"
+GAME_READY = "ready"
+GAME_ABSENT = "absent"
+TASK_IDLE = "idle"
+TASK_RUNNING = "running"
+TASK_STOPPING = "stopping"
+TASK_COMPLETED = "completed"
+TASK_STOPPED = "stopped"
+TASK_FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class AppState:
+    """脚本的单一状态快照：界面形态、目标窗口存在性与最近任务的生命周期。
+
+    任务页仍各自维护按钮和 runner，但所有跨界面状态展示都只读此快照，避免小窗、主界面、
+    悬浮窗各自根据线程存活状态作出不一致推断。"""
+    ui_mode: str = UI_FULL
+    game_state: str = GAME_UNKNOWN
+    game_summary: str = ""
+    task_state: str = TASK_IDLE
+    task_label: str | None = None
+    active_labels: tuple = ()
 
 
 def resolve_window_labels(title, offset, targets):
@@ -4086,8 +4115,8 @@ class App(ctk.CTk):
         self.float_log = None         # 悬浮日志窗实例（None=没收起，主界面正常显示）
         self.quick_panel = None       # compact 形态的日志 sink（由 Spec 04 换成正式面板）
         self._compact_placeholder = None
-        # 任务运行态：给悬浮窗的「开始/停止」按钮用（见 on_task_started / task_state）。
-        self._task_label = None       # 最近一次启动的模块名（如「秒装备」），用作按钮上的说明
+        # 跨形态唯一状态真源。页面只管各自按钮，compact / full / floating 的展示统一从这里取。
+        self.state = AppState(ui_mode=UI_COMPACT if self._compact else UI_FULL)
         self._task_restart = None     # 最近一次启动的模块的重启入口（点悬浮窗「开始」原样重跑）
         self._started = []            # [(runner, label)]：本次会话启动过的 runner，实时判活取正在跑的
 
@@ -4148,6 +4177,7 @@ class App(ctk.CTk):
             setattr(self, attr, None)
 
         self._compact = False
+        self._set_state(ui_mode=UI_FULL)
         self.geometry("1360x720")
         self.minsize(1180, 640)
         self.resizable(True, True)
@@ -4234,6 +4264,53 @@ class App(ctk.CTk):
         if qp is not None:
             qp.append(msg, level, source)
 
+    # ---------------- 统一状态：跨小窗 / 主界面 / 悬浮窗的单一真源 ----------------
+    def _set_state(self, **changes):
+        """原子更新状态快照，并立即通知已存在的界面形态刷新。
+
+        仅在主线程调用。状态未变化不重复刷新，避免 _tick 的轮询引发无意义重绘。"""
+        current = getattr(self, "state", None)
+        if current is None:
+            return
+        updated = replace(current, **changes)
+        if updated == current:
+            return
+        self.state = updated
+        panel = getattr(self, "quick_panel", None)
+        if panel is not None:
+            try:
+                panel.refresh_state(updated)
+            except Exception:
+                pass
+        fl = getattr(self, "float_log", None)
+        if fl is not None:
+            try:
+                fl.refresh_state()
+            except Exception:
+                pass
+
+    def _sync_task_state(self):
+        """从已登记 runner 同步任务生命周期，供 _tick 和悬浮窗轮询共同调用。"""
+        alive = [(runner, label) for runner, label in self._started if self._runner_running(runner)]
+        finished = [(runner, label) for runner, label in self._started if not self._runner_running(runner)]
+        self._started = alive
+        labels = tuple(dict.fromkeys(label for _runner, label in alive))
+        if labels:
+            phase = TASK_STOPPING if any(getattr(runner, "stop_event", None) and runner.stop_event.is_set()
+                                         for runner, _label in alive) else TASK_RUNNING
+            self._set_state(task_state=phase, active_labels=labels,
+                            task_label=labels[-1] if labels else self.state.task_label)
+            return self.state
+        if finished:
+            # 最后结束的 runner 给出本轮结果；runner 的 outcome 由 TaskRunner 明确维护。
+            runner, label = finished[-1]
+            outcome = getattr(runner, "outcome", TASK_COMPLETED)
+            phase = outcome if outcome in (TASK_COMPLETED, TASK_STOPPED, TASK_FAILED) else TASK_COMPLETED
+            self._set_state(task_state=phase, task_label=label, active_labels=())
+        elif self.state.task_state in (TASK_RUNNING, TASK_STOPPING):
+            self._set_state(task_state=TASK_COMPLETED, active_labels=())
+        return self.state
+
     # ---------------- 收起为悬浮日志窗（细长条，可摆到游戏窗口边上） ----------------
     def collapse_to_float(self, auto=False):
         """把主界面收起成一条悬浮日志窗。已经收起了就把悬浮窗抬到最前（幂等，重复点不叠窗）。
@@ -4260,9 +4337,17 @@ class App(ctk.CTk):
             self.withdraw()
         except Exception:
             pass
+        self._set_state(ui_mode=UI_FLOATING)
         self.log_line("已收起为悬浮窗，点「展开主界面」还原。", "info")
 
     # ---------------- 任务运行态（悬浮窗的「开始/停止」按钮据此刷新） ----------------
+    def on_quick_start_started(self, runner):
+        """登记紧凑启动页的启动登录任务，但不切换到悬浮窗。"""
+        if runner is not None:
+            self._started = [(r, l) for r, l in self._started if self._runner_running(r)]
+            self._started.append((runner, "启动登录"))
+        self._set_state(task_state=TASK_RUNNING, task_label="启动登录", active_labels=("启动登录",))
+
     def on_task_started(self, label, restart=None, runner=None):
         """【各模块在脚本“启动成功后”调用一行】记下谁在跑、怎么再跑，并把主界面自动收起为悬浮窗。
 
@@ -4270,19 +4355,16 @@ class App(ctk.CTk):
         既不知道是哪个模块，也不知道它该怎么重新启动（各页入口不同：_toggle_run / _start_teaming /
         _start_organize …）。restart 传该模块自己的启动方法，点悬浮窗的「开始」即原样重跑。
         ⚠ preflight 失败、没真正跑起来的路径【不要】调本方法——那样会把界面收掉、用户却看不到错误。"""
-        self._task_label = label or "任务"
+        task_label = label or "任务"
         if callable(restart):
             self._task_restart = restart
         if runner is not None:
             self._started = [(r, l) for r, l in self._started if self._runner_running(r)]
-            self._started.append((runner, self._task_label))
+            self._started.append((runner, task_label))
+        self._set_state(task_state=TASK_RUNNING, task_label=task_label,
+                        active_labels=tuple(dict.fromkeys(l for _r, l in self._started)))
         self.collapse_to_float(auto=True)
-        fl = self.float_log
-        if fl is not None:
-            try:
-                fl.refresh_state()      # 别等下一拍轮询，按钮立刻变「停止」
-            except Exception:
-                pass
+        self._sync_task_state()
 
     @staticmethod
     def _runner_running(runner):
@@ -4292,14 +4374,11 @@ class App(ctk.CTk):
             return False
 
     def task_state(self):
-        """返回 (是否有任务在跑, 正在跑的模块名列表)。悬浮窗每 0.3s 调一次，顺手清掉已结束的记录。
-
-        「在跑」以 _any_running() 扫全页为兜底（万一有 runner 绕过 on_task_started 启动），
-        模块名则取本会话启动过、且此刻仍活着的那些。"""
-        alive = [(r, l) for r, l in self._started if self._runner_running(r)]
-        self._started = alive
-        labels = list(dict.fromkeys(l for _r, l in alive))
-        return (bool(labels) or self._any_running()), labels
+        """兼容悬浮窗接口，返回 (是否运行, 活跃模块名列表)。"""
+        state = self._sync_task_state()
+        running = state.task_state in (TASK_RUNNING, TASK_STOPPING)
+        # 兜底覆盖旧页面中漏接 on_task_started 的 runner；正常路径以 state.active_labels 为准。
+        return (running or self._any_running(), list(state.active_labels))
 
 
     def close_float_log(self, save=True):
@@ -4322,6 +4401,7 @@ class App(ctk.CTk):
             self.lift()
         except Exception:
             pass
+        self._set_state(ui_mode=UI_FULL)
         # 主界面重建后可能被别的窗口压着，抢一次前台（失败也无所谓，大不了用户自己点一下）
         try:
             self.after(60, self.focus_force)
@@ -4575,6 +4655,7 @@ class App(ctk.CTk):
         qp = getattr(self, "quick_panel", None)
         if qp is not None:
             qp.pump()
+        self._sync_task_state()
         # 每约 1.2s 检测一次游戏窗口（放后台线程，避免阻塞 UI 造成滑动卡顿）
         self._tick_count += 1
         if self._tick_count % 8 == 0:
@@ -4620,7 +4701,9 @@ class App(ctk.CTk):
 
         def work():
             try:
-                all_wins = win_mod.locate_all(title, offset)
+                # 最小化或被遮挡不等于窗口消失。运行任务会在实际操作前 activate()
+                # 还原并置前，这里只负责判断目标窗口句柄是否仍存在。
+                all_wins = win_mod.locate_all(title, offset, include_minimized=True)
                 found, summary = self._compute_target_state(all_wins, targets)
             except Exception:
                 found, summary = False, ""
@@ -4659,6 +4742,7 @@ class App(ctk.CTk):
         if state == self._game_connected:
             return  # 状态没变就不动控件，省掉无谓重绘
         self._game_connected = state
+        self._set_state(game_state=GAME_READY if found else GAME_ABSENT, game_summary=summary)
         for k in self.RUNNABLE_KEYS:
             p = self.pages.get(k)
             if p:
@@ -4788,6 +4872,8 @@ class App(ctk.CTk):
                 n += 1
             except Exception:
                 pass
+        if n:
+            self._sync_task_state()
         return n
 
     def _on_close(self):

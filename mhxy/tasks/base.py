@@ -113,7 +113,7 @@ class Task:
         return [ctx]
 
     def _ensure_contexts(self, ctx, contexts, multi):
-        """每轮开头校验窗口是否还在；任一失效（被关/最小化）就重新枚举选择。"""
+        """每轮开头校验窗口句柄是否还在；最小化不算失效，操作前会自动还原并置前。"""
         if contexts and all(c.window.rect() is not None for c in contexts):
             return contexts
         fresh = self._resolve_contexts(ctx, multi)
@@ -124,15 +124,15 @@ class Task:
         return fresh
 
     def _prepare_window(self, wctx, multi):
-        """操作某个号前的准备：校验窗口有效，并把它切到前台，确保点击落在这个号身上。"""
+        """操作某个号前校验句柄，并还原、置前、校验前台，确保点击不落到其他窗口。"""
         if wctx.window.rect() is None:
             return False
-        if multi:
-            # 多开必须切前台，避免点击穿透/点错号。切前台失败（被系统拒绝焦点抢占）就跳过该号本轮、下轮重试。
-            if not wctx.window.activate():
-                return False
-            if wctx.should_stop():
-                return False
+        # 单开同样必须置前：窗口可能被最小化或被其他窗口遮挡。activate() 会先还原最小化窗口，
+        # 再校验前台；失败才跳过本轮，绝不把「不可见」误当成「窗口已消失」。
+        if not wctx.window.activate():
+            return False
+        if wctx.should_stop():
+            return False
         return True
 
     def _jitter(self, base, ctx):

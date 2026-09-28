@@ -34,6 +34,19 @@ _user32.ShowWindow.argtypes = [ctypes.wintypes.HWND, ctypes.c_int]
 _user32.GetWindowThreadProcessId.argtypes = [ctypes.wintypes.HWND, ctypes.wintypes.LPDWORD]
 _user32.GetWindowThreadProcessId.restype = ctypes.wintypes.DWORD
 
+
+class _WINDOWPLACEMENT(ctypes.Structure):
+    _fields_ = [("length", ctypes.wintypes.UINT),
+                ("flags", ctypes.wintypes.UINT),
+                ("showCmd", ctypes.wintypes.UINT),
+                ("ptMinPosition", ctypes.wintypes.POINT),
+                ("ptMaxPosition", ctypes.wintypes.POINT),
+                ("rcNormalPosition", ctypes.wintypes.RECT)]
+
+
+_user32.GetWindowPlacement.argtypes = [ctypes.wintypes.HWND, ctypes.POINTER(_WINDOWPLACEMENT)]
+_user32.GetWindowPlacement.restype = ctypes.wintypes.BOOL
+
 _kernel32 = ctypes.windll.kernel32
 _kernel32.OpenProcess.argtypes = [ctypes.wintypes.DWORD, ctypes.wintypes.BOOL, ctypes.wintypes.DWORD]
 _kernel32.OpenProcess.restype = ctypes.wintypes.HANDLE
@@ -550,17 +563,45 @@ class GameWindow:
 
 
 # ---- 多窗口枚举与目标选择（多开/选择窗口基础特性）----
+def _normal_position(win):
+    """返回窗口正常还原后的 (left, top)；取不到时退回当前报告的位置。
+
+    Windows 会把最小化窗口的当前坐标报成屏幕外值。目标窗口配置按摆放位置保存序号，
+    因此包含最小化窗口时必须读 rcNormalPosition，才能不打乱原有号序。"""
+    try:
+        if not win.isMinimized:
+            return int(win.left), int(win.top)
+        placement = _WINDOWPLACEMENT()
+        placement.length = ctypes.sizeof(_WINDOWPLACEMENT)
+        hwnd = int(win._hWnd)
+        if hwnd and _user32.GetWindowPlacement(hwnd, ctypes.byref(placement)):
+            rect = placement.rcNormalPosition
+            return int(rect.left), int(rect.top)
+    except Exception:
+        pass
+    try:
+        return int(win.left), int(win.top)
+    except Exception:
+        return (0, 0)
+
+
+def _window_position_sort_key(win):
+    """按窗口正常位置排序，最小化窗口沿用其还原前的位置。"""
+    left, top = _normal_position(win)
+    return (top // 120, left)
+
+
 def locate_all(title_substr, offset=(0, 0), max_n=0, include_minimized=False):
     """枚举所有标题含 title_substr 的窗口，按屏幕位置排序后各包一个 GameWindow 返回。
 
     用于「选择窗口/多开」：用户把多个号并排摆在桌面上，这里把它们稳定地认成 号1/号2/号3…
-    排序规则：先按上边缘分行（每 120px 一带），同一行内按左边缘左→右——和肉眼「从左到右数」一致。
+    排序规则：先按正常还原位置的上边缘分行（每 120px 一带），同一行内按左边缘左→右——
+    和肉眼「从左到右数」一致；最小化窗口也沿用其还原前的位置，避免打乱已保存的号序。
     max_n>0 时最多取前 max_n 个。找不到返回空列表。
 
-    include_minimized=False（默认）：滤掉最小化的窗口——「选择窗口/标定/跑任务」都只认看得见的号，
-      最小化的窗口既不能操作也没有可信矩形。
-    include_minimized=True：连最小化的一起返回（供「唤出所有游戏窗口」用，它正是要把最小化的唤醒）；
-      此时最小化窗口的尺寸门槛也一并放宽（见 _match_basic）。
+    include_minimized=False（默认）：滤掉最小化的窗口，供「选择窗口/标定」等需要用户看见窗口的入口使用。
+    include_minimized=True：连最小化的一起返回，供运行态检测和任务目标解析使用；任务实际操作前会由
+      GameWindow.activate() 还原并置前。此时最小化窗口的尺寸门槛也一并放宽（见 _match_basic）。
     """
     found = []
     for w in gw.getAllWindows():
@@ -572,7 +613,7 @@ def locate_all(title_substr, offset=(0, 0), max_n=0, include_minimized=False):
             found.append(w)
         except Exception:
             continue
-    found.sort(key=position_sort_key)
+    found.sort(key=_window_position_sort_key)
     if max_n and max_n > 0:
         found = found[:max_n]
     return [GameWindow(title_substr, offset).bind(w) for w in found]
@@ -793,7 +834,9 @@ def resolve_targets(title_substr, offset, targets):
     找不到任何窗口返回 []。
     """
     targets = targets or {}
-    wins = locate_all(title_substr, offset)
+    # 任务目标需要把最小化窗口也视作仍存在；真正开始操作前 GameWindow.activate()
+    # 会先还原窗口再校验前台，不能因用户暂时最小化而误判窗口已经消失。
+    wins = locate_all(title_substr, offset, include_minimized=True)
     if not wins:
         return []
     if targets.get("multi"):

@@ -55,7 +55,7 @@ class RotationConfig:
       on_activate_fail: (rec)->None   activate 失败时调用（节流警告由回调内自管）。
 
     数值/开关：
-      multi:           bool   多开才 activate 切前台、才有号间 switch_delay
+      multi:           bool   所有任务执行前都会 activate；多开时额外启用号间 switch_delay
       switch_delay:    float  号间拟人化间隔基准（秒）
       tick:            float  轮间间隔基准（秒）
       overall_timeout: float  总超时（秒），0 = 不限
@@ -152,13 +152,12 @@ def run_rotation(c):
                 if action == "abort":
                     return "aborted"
                 continue  # "skip" / "done"：本轮跳过（done 由回调内置位）
-            # 操作某号前先切前台（多开必须）；失败本轮跳过、下轮重试，绝不在后台号瞎点。
-            if c.multi:
-                if not wctx.window.activate():
-                    c.on_activate_fail(rec)
-                    continue
-                if wctx.should_stop():
-                    break
+            # 每次实际执行前都要还原并置前：单开窗口也可能被最小化或被其他窗口遮挡。
+            if not wctx.window.activate():
+                c.on_activate_fail(rec)
+                continue
+            if wctx.should_stop():
+                break
             c.between_steps(rec)          # 切前台后、推进前：跨任务穿插钩子（如背包满自动整理）
             if c.should_stop():
                 break

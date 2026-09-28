@@ -486,8 +486,9 @@ class TeamFormation:
                 ctx = rec["ctx"]
                 if ctx.window.rect() is None:
                     continue
-                if multi:
-                    ctx.window.activate()
+                # 演练也要先还原并置前；最小化或被遮挡不是窗口消失。
+                if not ctx.window.activate():
+                    continue
                 rect = ctx.window.rect()
                 scene = win_mod.grab(rect) if rect else None
                 found = []
@@ -642,8 +643,9 @@ class TeamFormation:
                 ctx = rec["ctx"]
                 if ctx.window.rect() is None:
                     continue
-                if multi:
-                    ctx.window.activate()
+                # 演练也要先还原并置前；最小化或被遮挡不是窗口消失。
+                if not ctx.window.activate():
+                    continue
                 rect = ctx.window.rect()
                 scene = win_mod.grab(rect) if rect else None
                 keys = cap_keys if rec["role"] == self.ROLE_CAPTAIN else mem_keys

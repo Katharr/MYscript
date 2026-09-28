@@ -127,14 +127,14 @@ class DailyTask(Task):
                         wctx.log("目标窗口不见了，跳过该号（其余号继续）。", level="warn")
                         c["gone_warned"] = True
                     continue
-                if multi:
-                    if not wctx.window.activate():
-                        if not c["fg_warned"]:
-                            wctx.log("未能切到前台（系统拒绝焦点抢占），本轮跳过、下轮重试。", level="warn")
-                            c["fg_warned"] = True
-                        continue
-                    if ctx.should_stop():
-                        break
+                # 单开同样可能被最小化或被其他窗口遮挡；每次推进前都先还原并置前。
+                if not wctx.window.activate():
+                    if not c["fg_warned"]:
+                        wctx.log("未能切到前台（系统拒绝焦点抢占），本轮跳过、下轮重试。", level="warn")
+                        c["fg_warned"] = True
+                    continue
+                if ctx.should_stop():
+                    break
                 c["gone_warned"] = c["fg_warned"] = False
                 try:
                     wctx.maybe_auto_organize()

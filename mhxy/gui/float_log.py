@@ -147,16 +147,21 @@ class FloatLogWindow(ctk.CTkToplevel):
             running, labels = self.app.task_state()
         except Exception:
             running, labels = False, []
-        last = getattr(self.app, "_task_label", None)
+        state = getattr(self.app, "state", None)
+        last = getattr(state, "task_label", None)
+        phase = getattr(state, "task_state", "idle")
         if running:
             name = "、".join(labels[:2]) + ("…" if len(labels) > 2 else "")
-            key = ("run", name)
-            txt = f"● 运行中 · {name}" if name else "● 运行中"
-            btn, fg, hov, tc = "■  停止", T.DANGER, T.DANGER_HOVER, T.ON_ACCENT
+            stopping = phase == "stopping"
+            key = ("stopping" if stopping else "run", name)
+            txt = f"● 正在停止 · {name}" if stopping and name else (f"● 运行中 · {name}" if name else "● 运行中")
+            btn, fg, hov, tc = (("停止中…", T.DANGER, T.DANGER_HOVER, T.ON_ACCENT) if stopping
+                                else ("■  停止", T.DANGER, T.DANGER_HOVER, T.ON_ACCENT))
             title = f"运行日志 · {name}" if name else "运行日志 · 运行中"
         else:
-            key = ("idle", last)
-            txt = f"○ 待机 · 上次：{last}" if last else "○ 待机"
+            result = {"completed": "已完成", "stopped": "已停止", "failed": "失败"}.get(phase, "待机")
+            key = (phase, last)
+            txt = f"○ {result} · {last}" if last else f"○ {result}"
             btn, fg, hov, tc = "▶  开始", T.ACCENT, T.ACCENT_HOVER, T.ON_ACCENT
             title = "运行日志 · 悬浮"
         if key == self._state_cache:
@@ -164,7 +169,8 @@ class FloatLogWindow(ctk.CTkToplevel):
         self._state_cache = key
         try:
             self.lbl_state.configure(text=txt, text_color=T.SUCCESS if running else T.TEXT_DIM)
-            self.btn_state.configure(text=btn, fg_color=fg, hover_color=hov, text_color=tc)
+            self.btn_state.configure(text=btn, fg_color=fg, hover_color=hov, text_color=tc,
+                                     state="disabled" if phase == "stopping" else "normal")
         except Exception:
             pass
         if title != self._title_cache:
