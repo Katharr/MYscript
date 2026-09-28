@@ -2,10 +2,10 @@
 """
 一键打包脚本。运行：python 打包工具\build.py（或双击 打包工具\打包.bat）
 
-会调用 PyInstaller 按「梦幻秒装备.spec」打包，产出单文件 exe，
+会调用 PyInstaller 按「梦幻小助手.spec」打包，产出单文件 exe，
 并整理出可直接分发的交付文件夹（干净平铺三件套）：
-    发布\梦幻秒装备_v<版本>\
-        梦幻秒装备.exe      <- 单文件 exe（是文件，不是文件夹）
+    发布\梦幻小助手_v<版本>\
+        梦幻小助手.exe      <- 单文件 exe（是文件，不是文件夹）
         config.json         <- 项目真实配置（保留全部标定，已链接 templates；dry_run 统一置演练）
         templates/          <- 随包模板图（标定/识别要用，整目录拷过去）
 
@@ -14,7 +14,7 @@
     故 PROJECT_ROOT = 本文件父目录的父目录；spec / dist / build / 发布 全部锚定到 PROJECT_ROOT，
     且用 cwd=PROJECT_ROOT 调 PyInstaller，让 spec 里 start.py 的相对路径成立。
   - 整理交付目录时「先 rmtree 整个目录、再重建」：根除老 bug ——
-    若 交付目录\梦幻秒装备.exe 这个名字上次残留成了一个「文件夹」，shutil.copy2 会把 exe
+    若 交付目录\梦幻小助手.exe 这个名字上次残留成了一个「文件夹」，shutil.copy2 会把 exe
     塞进那个同名文件夹里形成套娃。推倒重建保证 dest 永远是干净的文件路径。
 
 数据里只有 config.json + templates 随包；captures（命中截图）运行时才生成在 exe 同级。
@@ -36,15 +36,15 @@ except Exception:
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
 
-SPEC = os.path.join(SCRIPT_DIR, "梦幻秒装备.spec")
+SPEC = os.path.join(SCRIPT_DIR, "梦幻小助手.spec")
 DIST = os.path.join(PROJECT_ROOT, "dist")
 BUILD = os.path.join(PROJECT_ROOT, "build")
 TEMPLATES_SRC = os.path.join(PROJECT_ROOT, "templates")
-EXE_NAME = "梦幻秒装备.exe"
+EXE_NAME = "梦幻小助手.exe"
 
 
 def _release_dir():
-    """交付目录名从 mhxy.__version__ 派生（如 2.2.0 -> 发布\梦幻秒装备_v2.2），防止版本漂移。"""
+    """交付目录名从 mhxy.__version__ 派生（如 2.2.0 -> 发布\梦幻小助手_v2.2），防止版本漂移。"""
     ver = "2.0"
     try:
         if PROJECT_ROOT not in sys.path:
@@ -54,12 +54,12 @@ def _release_dir():
         ver = ".".join(parts[:2]) if len(parts) >= 2 else mhxy.__version__
     except Exception as e:
         print(f"  ! 读 mhxy.__version__ 失败，交付目录退回 v{ver}：{e}")
-    return os.path.join(PROJECT_ROOT, "发布", f"梦幻秒装备_v{ver}")
+    return os.path.join(PROJECT_ROOT, "发布", f"梦幻小助手_v{ver}")
 
 
 def run():
     if not os.path.exists(SPEC):
-        print("找不到 梦幻秒装备.spec，无法打包。期望路径：", SPEC)
+        print("找不到 梦幻小助手.spec，无法打包。期望路径：", SPEC)
         return 1
 
     # 清掉上次产物，避免旧文件混入

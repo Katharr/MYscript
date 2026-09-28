@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-PyInstaller 打包配置。产出单文件、无黑窗、双击请求管理员的 dist\梦幻秒装备.exe。
+PyInstaller 打包配置。产出单文件、无黑窗、双击请求管理员的 dist\梦幻小助手.exe。
 
 为什么这么配（每条都对应一个会让 exe 跑不起来的坑）：
   - collect_all('customtkinter')：customtkinter 自带主题 json + 图片资源，
@@ -59,7 +59,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="梦幻秒装备",
+    name="梦幻小助手",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

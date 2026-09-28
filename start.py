@@ -150,7 +150,7 @@ def _make_splash():
     BG, FG, DIM, ACC, TROUGH, EDGE = "#13161c", "#e7eaf0", "#8a93a3", "#4f8cff", "#20252f", "#2a313d"
     outer = tk.Frame(splash, bg=BG, highlightbackground=EDGE, highlightthickness=1)
     outer.pack(fill="both", expand=True)
-    tk.Label(outer, text="梦幻 · 时空 助手", bg=BG, fg=FG,
+    tk.Label(outer, text="梦幻小助手", bg=BG, fg=FG,
              font=("Microsoft YaHei UI", 15, "bold")).pack(pady=(26, 4))
     status = tk.Label(outer, text="正在加载图像识别库，请稍候…", bg=BG, fg=DIM,
                       font=("Microsoft YaHei UI", 10))
@@ -190,7 +190,7 @@ def _report_fatal(stage):
             None,
             "启动失败（阶段：{}）。\n\n详细错误已写入程序目录下的 startup_error.log：\n{}\n\n{}".format(
                 stage, os.path.join(BASE, "startup_error.log"), tb[-700:]),
-            "梦幻 · 时空 助手 — 启动失败", 0x10)
+            "梦幻小助手 — 启动失败", 0x10)
     except Exception:
         pass
 

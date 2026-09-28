@@ -2572,11 +2572,11 @@ class AboutPage(ctk.CTkFrame):
         card = Card(self)
         card.pack(fill="x", padx=4)
         text = (
-            "梦幻西游 · 时空  辅助助手\n\n"
+            "梦幻小助手\n\n"
             "· 原理：截屏 + 图像识别 + 拟人化模拟点击，不读内存、不注入进程。\n"
             "· 输入走 Windows SendInput 底层接口，配合贝塞尔移动/随机抖动，尽量不像机器。\n"
             "· 模块化架构：core 基础设施 / tasks 任务 / gui 界面，便于后续扩展。\n\n"
-            "⚠ 风险提示：使用任何第三方脚本都违反《梦幻西游》用户协议，可能被封号（含永封）。\n"
+            "⚠ 风险提示：使用任何第三方脚本都可能违反目标客户端用户协议，可能被封号（含永封）。\n"
             "   请务必用小号测试，自负风险。本工具仅供学习交流。"
         )
         lbl = ctk.CTkLabel(card, text=text, font=self.fonts["body"], text_color=T.TEXT,
@@ -4059,7 +4059,7 @@ class App(ctk.CTk):
         accounts.set_launcher_path((self.cfg.get("account_launch") or {}).get("launcher_path"))
         mode = self.cfg.get("appearance", "dark")
         ctk.set_appearance_mode(mode if mode in ("dark", "light") else "dark")
-        self.title("梦幻 · 时空 助手")
+        self.title("梦幻小助手")
         if self._compact:
             self.geometry("440x420")
             self.minsize(440, 420)
@@ -4169,10 +4169,8 @@ class App(ctk.CTk):
         bar.grid_propagate(False)
         bar.grid_rowconfigure(99, weight=1)
 
-        ctk.CTkLabel(bar, text="梦幻 · 时空", font=self.fonts["title"], text_color=T.TEXT).grid(
-            row=0, column=0, sticky="w", padx=22, pady=(24, 0))
-        ctk.CTkLabel(bar, text="辅助助手", font=self.fonts["small"], text_color=T.TEXT_DIM).grid(
-            row=1, column=0, sticky="w", padx=22, pady=(0, 22))
+        ctk.CTkLabel(bar, text="梦幻小助手", font=self.fonts["title"], text_color=T.TEXT).grid(
+            row=0, column=0, sticky="w", padx=22, pady=(24, 22))
 
         self.nav_buttons = {}
         for i, (key, label) in enumerate(self.NAV):
@@ -4446,7 +4444,7 @@ class App(ctk.CTk):
         total = len(self.PAGE_CLASSES)
         ov = tk.Frame(self, bg=bg)
         ov.place(x=0, y=0, relwidth=1, relheight=1)
-        tk.Label(ov, text="梦幻 · 时空 助手", bg=bg, fg=fg,
+        tk.Label(ov, text="梦幻小助手", bg=bg, fg=fg,
                  font=("Microsoft YaHei UI", 16, "bold")).place(relx=0.5, rely=0.43, anchor="center")
         tk.Label(ov, text="正在准备界面…", bg=bg, fg=dim,
                  font=("Microsoft YaHei UI", 11)).place(relx=0.5, rely=0.51, anchor="center")

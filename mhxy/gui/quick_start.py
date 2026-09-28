@@ -42,7 +42,7 @@ class QuickStartPanel(ctk.CTkFrame):
         head = ctk.CTkFrame(self, fg_color="transparent")
         head.grid(row=0, column=0, sticky="ew", padx=T.SP_4, pady=(T.SP_4, T.SP_1))
         head.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(head, text="梦幻 · 时空 助手", font=self.fonts["title"],
+        ctk.CTkLabel(head, text="梦幻小助手", font=self.fonts["title"],
                      text_color=T.TEXT).grid(row=0, column=0, sticky="w")
         self.lbl_count = ctk.CTkLabel(head, text="", font=self.fonts["small"], text_color=T.TEXT_DIM)
         self.lbl_count.grid(row=0, column=1, sticky="e")
