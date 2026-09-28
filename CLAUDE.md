@@ -144,7 +144,7 @@ mhxy/
 > （treasure-map-task / escort-task / secret-realm-task / daily-chain-task / teaming-and-dungeon-task 等）。
 
 ## 怎么跑
-- 用户侧：双击 `启动.bat`，界面里「标定/加装备」→ 演练看 captures/ → 开「实战」开关再跑。
+- 用户侧：双击 `启动.bat`；零游戏窗口时先弹一键启动小窗，档案跑完自动展开完整界面；界面里「标定/加装备」→ 演练看 captures/ → 开「实战」开关再跑。
 - 停止：界面「停止」按钮（脚本一跑起来界面会自动收成悬浮窗，那里有同一个「■ 停止」按钮，
   停掉后变「▶ 开始」= 把上次那个模块原样重跑），或**急停热键**（默认 Ctrl+Alt+F12，设置里可改），
   或**鼠标甩到屏幕角**（默认右上角，设置 `failsafe_corner` 可改/可关）。

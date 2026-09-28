@@ -192,6 +192,8 @@ def _launch_gui():
 
     # —— 阶段一：预热重库 → 再建主界面 ——
     # 角色身份只在“一键登录完成”和“唤出所有游戏窗口”后显式刷新，启动时不扫描。
+    # 探测失败按已有窗口路径处理，避免误判为零窗口而重复启动游戏。
+    shared = {"decision": "unknown"}
     if splash is not None:
         warm_ready = threading.Event()
         allow_scan = threading.Event()
@@ -200,6 +202,12 @@ def _launch_gui():
         def _warm_and_scan():
             try:
                 import mhxy.gui.app  # noqa: F401  —— 触发 cv2/numpy/customtkinter 一次性加载
+                try:
+                    from mhxy.core import config as cfg_mod
+                    from mhxy.core import window_probe
+                    shared["decision"] = window_probe.startup_decision(cfg_mod.load_config())
+                except Exception:
+                    shared["decision"] = "unknown"
             except Exception:
                 pass               # 主线程随后再 import，会暴露真实错误
             finally:
@@ -251,9 +259,10 @@ def _launch_gui():
 
     # —— 阶段二：建主窗口；用主窗口自带的同根不透明遮罩盖住「建全部页面」的过程 ——
     from mhxy.gui.app import App
+    compact = shared["decision"] == "none"
     app = None
     try:
-        app = App()
+        app = App(compact=compact)
     except Exception:
         _report_fatal("创建主窗口 App()")
         return
@@ -262,9 +271,12 @@ def _launch_gui():
     #   「启动页没建成（splash 为 None）」时窗口就永远不显示了。踩过。
     # 建页期只跑 update_idletasks（不重绘），建完撤遮罩，全程只有一次整窗重绘。
     try:
-        app.reveal_with_overlay()
+        if compact:
+            app.reveal_compact()
+        else:
+            app.reveal_with_overlay()
     except Exception:
-        _report_fatal("建全部页面 / 亮出主窗口 reveal_with_overlay()")
+        _report_fatal("建全部页面 / 亮出主窗口")
         try:
             app.deiconify()
         except Exception:
@@ -281,6 +293,30 @@ def _launch_gui():
         app.focus_force()
     except Exception:
         pass
+
+    if shared["decision"] == "unknown":
+        app.log_line("窗口探测失败，按已有窗口处理。", "warn", "启动")
+
+    if not compact:
+        def _wake_minimized_windows():
+            try:
+                from mhxy.core import window as win_mod
+                cfg = app.cfg
+                title = cfg.get("window_title", "梦幻西游")
+                offset = cfg.get("window_offset", [0, 0])
+                wins = win_mod.locate_all(title, offset, include_minimized=True)
+                if not any(getattr(getattr(win, "_win", None), "isMinimized", False) for win in wins):
+                    return
+                total, woken = win_mod.wake_all_to_front(title, offset)
+                app.ui_post(lambda: app.log_line(
+                    "唤出游戏窗口：检测到 %d 个，%d 个成功切到前台。" % (total, woken),
+                    "info" if woken else "warn", "启动"))
+            except Exception as exc:
+                message = "唤出最小化游戏窗口失败：%s" % exc
+                app.ui_post(lambda: app.log_line(message, "warn", "启动"))
+
+        threading.Thread(target=_wake_minimized_windows, daemon=True).start()
+
     # mainloop 期间的异常（Tk 回调里抛出）同样会静默杀死窗口，一并落盘。
     try:
         app.mainloop()
