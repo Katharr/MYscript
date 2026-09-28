@@ -161,6 +161,14 @@ _user32.SetWindowPos.argtypes = [ctypes.wintypes.HWND, ctypes.wintypes.HWND,
                                  ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
                                  ctypes.wintypes.UINT]
 _user32.SetWindowPos.restype = ctypes.wintypes.BOOL
+# z 序遍历（挖洞前判断自家窗口有没有盖在目标窗口上、以及把自家窗口压到目标窗口下面）：
+# 句柄必须声明成 HWND(=void*)，否则 64 位下默认 c_int 会截断句柄。
+_user32.GetTopWindow.argtypes = [ctypes.wintypes.HWND]
+_user32.GetTopWindow.restype = ctypes.wintypes.HWND
+_user32.GetWindow.argtypes = [ctypes.wintypes.HWND, ctypes.wintypes.UINT]
+_user32.GetWindow.restype = ctypes.wintypes.HWND
+_user32.GetAncestor.argtypes = [ctypes.wintypes.HWND, ctypes.wintypes.UINT]
+_user32.GetAncestor.restype = ctypes.wintypes.HWND
 _user32.MonitorFromWindow.argtypes = [ctypes.wintypes.HWND, ctypes.wintypes.DWORD]
 _user32.MonitorFromWindow.restype = ctypes.wintypes.HANDLE
 _user32.GetMonitorInfoW.argtypes = [ctypes.wintypes.HANDLE, ctypes.c_void_p]
@@ -170,8 +178,11 @@ _user32.SystemParametersInfoW.argtypes = [ctypes.wintypes.UINT, ctypes.wintypes.
 _user32.SystemParametersInfoW.restype = ctypes.wintypes.BOOL
 
 _SWP_NOSIZE = 0x0001
+_SWP_NOMOVE = 0x0002
 _SWP_NOZORDER = 0x0004
 _SWP_NOACTIVATE = 0x0010
+_GW_HWNDNEXT = 2
+_GA_ROOT = 2
 _MONITOR_DEFAULTTONEAREST = 0x0002
 _SPI_GETWORKAREA = 0x0030
 
@@ -247,8 +258,13 @@ def is_own_window(hwnd):
         return False
 
 
-def own_window_rects():
-    """脚本自身可见窗口的屏幕矩形 [[left,top,w,h], ...]，供整屏截图挖洞用。"""
+def own_window_frames():
+    """脚本自身可见窗口 [(hwnd, [left,top,w,h]), ...]，供整屏截图挖洞用（带句柄，便于比 z 序）。
+
+    为什么要带句柄：挖洞只能挖【确实压在目标窗口上面】的自家窗口。按矩形一刀切会把目标窗口
+    自己的像素也涂黑 —— 实测就是「小窗和启动器矩形相交时，启动器的『开始游戏』被整块涂黑、
+    永远认不出来，把窗口挪开一点就正常」。见 own_window_rects / launch_login._scene。
+    """
     out = []
     try:
         wins = gw.getAllWindows()
@@ -256,14 +272,78 @@ def own_window_rects():
         return out
     for w in wins:
         try:
-            if not is_own_window(int(w._hWnd)):
+            hwnd = int(w._hWnd)
+            if not is_own_window(hwnd):
                 continue
             if w.isMinimized or w.width <= 0 or w.height <= 0:
                 continue
-            out.append([int(w.left), int(w.top), int(w.width), int(w.height)])
+            out.append((hwnd, [int(w.left), int(w.top), int(w.width), int(w.height)]))
         except Exception:
             continue
     return out
+
+
+def own_window_rects():
+    """脚本自身可见窗口的屏幕矩形 [[left,top,w,h], ...]（只坐标，见 own_window_frames）。"""
+    return [rect for _hwnd, rect in own_window_frames()]
+
+
+def top_level_z_order(limit=4000):
+    """所有顶层窗口的句柄，按 z 序【从前到后】。查不到返回 []。"""
+    order = []
+    try:
+        hwnd = _user32.GetTopWindow(None)
+        while hwnd and len(order) < limit:
+            order.append(int(hwnd))
+            hwnd = _user32.GetWindow(hwnd, _GW_HWNDNEXT)
+    except Exception:
+        return order
+    return order
+
+
+def is_window_above(hwnd_a, hwnd_b, order=None):
+    """a 是否在 z 序里【压在】b 上面（同一个窗口视为 True）。
+
+    用途：截屏挖洞前判断「自家窗口到底有没有盖在目标窗口上」。两个句柄都不在顶层 z 序里
+    （例如已销毁）时返回 False——宁可少挖，也不能把目标窗口的真实像素涂黑。
+    """
+    a, b = int(hwnd_a or 0), int(hwnd_b or 0)
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    for hwnd in (order if order is not None else top_level_z_order()):
+        hwnd = int(hwnd)
+        if hwnd == a:
+            return True
+        if hwnd == b:
+            return False
+    return False
+
+
+def toplevel_hwnd(hwnd):
+    """把任意窗口句柄提升成它的【顶层】窗口句柄。Tk 的 winfo_id() 给的不是顶层窗口，
+    拿它去比 z 序/压 z 序会落空，故统一先过一遍这个函数。取不到返回 0。"""
+    if not hwnd:
+        return 0
+    try:
+        return int(_user32.GetAncestor(int(hwnd), _GA_ROOT) or 0)
+    except Exception:
+        return 0
+
+
+def place_below(hwnd, other_hwnd):
+    """把 hwnd 压到 other_hwnd【下面】（只改 z 序，不动位置/尺寸/焦点）。成功返回 True。
+
+    用途：脚本自己的窗口绝不能盖住它需要识别的窗口（启动器/游戏号）——盖住就永远认不出来。
+    """
+    if not hwnd or not other_hwnd:
+        return False
+    try:
+        return bool(_user32.SetWindowPos(int(hwnd), int(other_hwnd), 0, 0, 0, 0,
+                                         _SWP_NOSIZE | _SWP_NOMOVE | _SWP_NOACTIVATE))
+    except Exception:
+        return False
 
 
 def mask_rects(image, base_rect, rects):

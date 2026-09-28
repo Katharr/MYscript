@@ -660,6 +660,55 @@ class LaunchLoginDiagnosticsTests(unittest.TestCase):
             got = task._find_template_window(_Ctx(self._cfg()), object(), 0.85)
         self.assertIs(got, right)
 
+    def test_scene_masks_only_own_windows_above_the_target(self):
+        """挖洞只能挖确实压在启动器上面的自家窗口：按矩形一刀切会把启动器自己的像素涂黑，
+        那正是「小窗和启动器矩形相交 → 永远认不出开始游戏，挪开窗口就好」的根因。"""
+        task = LaunchLoginTask()
+
+        class _Win:
+            class _Native:
+                _hWnd = 77
+            _win = _Native()
+
+            def rect(self):
+                return [0, 0, 800, 600]
+
+        with mock.patch.object(task, "_is_game_window", return_value=False), \
+             mock.patch.object(task, "_screen_rect", return_value=[0, 0, 1000, 800]), \
+             mock.patch("mhxy.tasks.launch_login.win_mod.grab", return_value=object()), \
+             mock.patch("mhxy.tasks.launch_login.win_mod.own_window_frames",
+                        return_value=[(11, [1, 2, 3, 4]), (22, [5, 6, 7, 8])]), \
+             mock.patch("mhxy.tasks.launch_login.win_mod.is_window_above",
+                        side_effect=lambda a, b: int(a) == 11), \
+             mock.patch("mhxy.tasks.launch_login.win_mod.mask_rects") as mask, \
+             mock.patch("mhxy.tasks.launch_login.win_mod.ScaledScene", return_value=object()):
+            task._scene(_Ctx(DEFAULT_CONFIG), _Win())
+
+        mask.assert_called_once_with(mock.ANY, [0, 0, 1000, 800], [[1, 2, 3, 4]])
+
+    def test_scene_masks_nothing_when_own_window_is_behind(self):
+        task = LaunchLoginTask()
+
+        class _Win:
+            class _Native:
+                _hWnd = 77
+            _win = _Native()
+
+            def rect(self):
+                return [0, 0, 800, 600]
+
+        with mock.patch.object(task, "_is_game_window", return_value=False), \
+             mock.patch.object(task, "_screen_rect", return_value=[0, 0, 1000, 800]), \
+             mock.patch("mhxy.tasks.launch_login.win_mod.grab", return_value=object()), \
+             mock.patch("mhxy.tasks.launch_login.win_mod.own_window_frames",
+                        return_value=[(11, [1, 2, 3, 4])]), \
+             mock.patch("mhxy.tasks.launch_login.win_mod.is_window_above", return_value=False), \
+             mock.patch("mhxy.tasks.launch_login.win_mod.mask_rects") as mask, \
+             mock.patch("mhxy.tasks.launch_login.win_mod.ScaledScene", return_value=object()):
+            task._scene(_Ctx(DEFAULT_CONFIG), _Win())
+
+        mask.assert_called_once_with(mock.ANY, [0, 0, 1000, 800], [])
+
     def test_ocr_fallback_delays_until_threshold(self):
         """文字兜底不能一上来就跑（OCR 贵）：先等 ocr_fallback_after_sec。"""
         cfg = self._cfg()
@@ -675,6 +724,29 @@ class LaunchLoginDiagnosticsTests(unittest.TestCase):
             clicked = task._click_template(self._Ctx(cfg, logs), win, object(), 0.85, "点击开始游戏")
         self.assertFalse(clicked)
         locate.assert_not_called()
+
+
+class WindowZOrderTests(unittest.TestCase):
+    """z 序判断：只用来决定「自家窗口要不要挖洞 / 要不要压下去」，判错会误涂黑目标窗口。"""
+
+    def test_is_window_above_follows_order(self):
+        from mhxy.core import window as win_mod
+        order = [10, 20, 30, 40]          # 从前到后
+        self.assertTrue(win_mod.is_window_above(10, 30, order=order))
+        self.assertFalse(win_mod.is_window_above(30, 10, order=order))
+        self.assertTrue(win_mod.is_window_above(20, 20, order=order))   # 同一个窗口算在上
+        # 两个都不在 z 序里（已销毁）→ 宁可判「没在上面」（少挖洞，别涂黑目标）
+        self.assertFalse(win_mod.is_window_above(99, 98, order=order))
+        self.assertFalse(win_mod.is_window_above(0, 30, order=order))
+
+    def test_toplevel_hwnd_returns_zero_on_bad_input(self):
+        from mhxy.core import window as win_mod
+        self.assertEqual(win_mod.toplevel_hwnd(0), 0)
+
+    def test_place_below_is_safe_without_handles(self):
+        from mhxy.core import window as win_mod
+        self.assertFalse(win_mod.place_below(0, 123))
+        self.assertFalse(win_mod.place_below(123, 0))
 
 
 class _FakeNative:

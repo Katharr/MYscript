@@ -485,7 +485,13 @@ class LaunchLoginTask(Task):
             return None
         if not game_window:
             # 启动器整屏识别时挖掉脚本自身窗口，避免日志文字被匹配为流程按钮。
-            win_mod.mask_rects(image, rect, win_mod.own_window_rects())
+            # ⚠ 只挖【确实压在启动器上面】的那些自家窗口：自家窗口在启动器【下面】时，画面里那一片
+            # 本来就是启动器的像素，按矩形一刀切会把启动器自己的内容涂黑——实测「小窗与启动器矩形
+            # 相交 → 启动器的『开始游戏』被整块涂黑 → 永远认不出来；把窗口挪开一点就好了」正是这条。
+            target = self._window_hwnd(win)
+            rects = [r for hwnd, r in win_mod.own_window_frames()
+                     if win_mod.is_window_above(hwnd, target)]
+            win_mod.mask_rects(image, rect, rects)
         return win_mod.ScaledScene(rect, None, img=image)
 
     def _click_template(self, ctx, win, tpl, threshold, action):

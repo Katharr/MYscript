@@ -70,6 +70,9 @@ mhxy/
     accounts.py 角色名识别（OCR 客户端标签条当前角色名 + LocalData 名册核验；把界面/日志里的「号N」换成「角色名（等级）」）——见约束 10
     window_probe.py 轻量窗口证据/规则层（游戏窗口与进程快照；不依赖图像库）
     window.py   GameWindow（locate/rect/activate/坐标换算）+ grab() 截图 + set_dpi_aware()
+                + z 序工具（own_window_frames/is_window_above/place_below/toplevel_hwnd）
+                ⚠ 整屏识别挖洞只能挖【确实压在目标窗口上面】的自家窗口：按矩形一刀切会把目标窗口自己的
+                像素也涂黑（实测「小窗与启动器矩形相交→永远认不出开始游戏，挪开窗口就好」就是这条）
     vision.py   load_template / save_image / match() / frame_diff()（兼容中文路径）
     scan.py     通用「滚动查找」scroll_search()（翻列表/翻包裹统一底层）；详见 docstring + memory scroll-search-scan
     list_row.py 活动列表「卡片 → 右侧参加按钮」定位 locate_card()（见约束 7）；运镖/宝图/秘境/蹈海去共用

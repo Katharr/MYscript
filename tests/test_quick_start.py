@@ -39,6 +39,7 @@ class _PanelStub:
         self.refresh = mock.Mock()
         self._launched = False
         self._sync_calibrate_button = lambda: None
+        self._keep_behind_target = lambda: None
 
     def _set_status(self, text):
         self.status.append(text)
@@ -281,6 +282,48 @@ class QuickStartCalibrationTests(unittest.TestCase):
         stub._launched = False
         sync(stub)
         self.assertEqual(stub.btn_calibrate.calls[-1]["state"], "normal")
+
+    def test_keep_behind_target_pushes_panel_below_target(self):
+        stub = _PanelStub()
+        stub.app.winfo_id.return_value = 555
+        stub._target_hwnd = lambda: 999
+        with mock.patch("mhxy.gui.quick_start.win_mod.toplevel_hwnd", return_value=111) as root, \
+             mock.patch("mhxy.gui.quick_start.win_mod.is_window_above", return_value=True), \
+             mock.patch("mhxy.gui.quick_start.win_mod.place_below") as below:
+            QuickStartPanel._keep_behind_target(stub)
+        root.assert_called_once_with(555)
+        below.assert_called_once_with(111, 999)
+
+    def test_keep_behind_target_leaves_panel_alone_when_already_below(self):
+        stub = _PanelStub()
+        stub.app.winfo_id.return_value = 555
+        stub._target_hwnd = lambda: 999
+        with mock.patch("mhxy.gui.quick_start.win_mod.toplevel_hwnd", return_value=111), \
+             mock.patch("mhxy.gui.quick_start.win_mod.is_window_above", return_value=False), \
+             mock.patch("mhxy.gui.quick_start.win_mod.place_below") as below:
+            QuickStartPanel._keep_behind_target(stub)
+        below.assert_not_called()
+
+    def test_keep_behind_target_does_nothing_without_target(self):
+        stub = _PanelStub()
+        stub._target_hwnd = lambda: 0
+        with mock.patch("mhxy.gui.quick_start.win_mod.place_below") as below:
+            QuickStartPanel._keep_behind_target(stub)
+        below.assert_not_called()
+
+    def test_pump_keeps_panel_behind_target_while_running(self):
+        stub = _PanelStub()
+        stub._launched = True
+        stub._dodged_at = 0.0
+        stub._keep_behind_target = mock.Mock()
+        runner = mock.Mock()
+        runner.log_queue = queue.Queue()
+        runner.is_running.return_value = True
+        stub.runner = runner
+
+        QuickStartPanel.pump(stub)
+
+        stub._keep_behind_target.assert_called_once_with()
 
     def test_done_callback_refreshes_and_logs(self):
         stub = _PanelStub()

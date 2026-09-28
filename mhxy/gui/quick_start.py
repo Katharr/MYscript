@@ -2,6 +2,7 @@
 """紧凑启动形态的一键启动面板。"""
 
 import re
+import time
 import uuid
 
 import customtkinter as ctk
@@ -9,6 +10,7 @@ import customtkinter as ctk
 from . import theme as T
 from ..core import accounts
 from ..core import config as cfg_mod
+from ..core import launcher
 from ..core import window as win_mod
 from ..core.runner import TaskRunner
 from ..tasks.launch_login import LaunchLoginTask
@@ -32,6 +34,7 @@ class QuickStartPanel(ctk.CTkFrame):
         self._profile_count = 0
         self._log_history = []
         self._cal_dialog = None
+        self._dodged_at = 0.0
 
         self.grid_columnconfigure(0, weight=1)
         # 上半区保持紧凑，日志容器吃掉其后的全部空间。
@@ -311,10 +314,51 @@ class QuickStartPanel(ctk.CTkFrame):
             level, msg = self.runner.log_queue.get()
             self.append(msg, level)
             self._track_progress(msg)
+        if self._launched:
+            now = time.time()
+            if now - getattr(self, "_dodged_at", 0.0) >= 0.8:
+                self._dodged_at = now
+                self._keep_behind_target()
         if self._launched and not self.runner.is_running():
             self._launched = False
             self._sync_calibrate_button()
             self._enter_full_if_game_ready()
+
+    # ---- 自家小窗绝不许压住「脚本要看的东西」（启动器 / 游戏号）----
+    def _target_hwnd(self):
+        """当前该让路的窗口句柄：优先官方启动器，其次第一个可见游戏窗口；都没有返回 0。"""
+        try:
+            for w in win_mod.gw.getAllWindows():
+                hwnd = int(w._hWnd)
+                if not hwnd or w.isMinimized or win_mod.is_own_window(hwnd):
+                    continue
+                image = win_mod.proc_image_path(hwnd)
+                if image and image.rsplit("\\", 1)[-1].lower() == launcher.LAUNCHER_EXE.lower():
+                    return hwnd
+        except Exception:
+            pass
+        try:
+            wins = win_mod.locate_all(self.app.cfg.get("window_title", "梦幻西游"),
+                                      self.app.cfg.get("window_offset", [0, 0]))
+        except Exception:
+            return 0
+        return wins[0].hwnd() if wins else 0
+
+    def _keep_behind_target(self):
+        """任务运行期间，把小窗压到「要看的目标窗口」下面（只改 z 序，不动位置/尺寸/焦点）。
+
+        压在它上面 = 那一片像素真的是我们的窗口，脚本再怎么标定都认不出按钮（用户实测：
+        把窗口挪开一点就正常）。这里每 0.8 秒比一次 z 序，只有真压在上面时才压下去。
+        """
+        try:
+            target = self._target_hwnd()
+            if not target:
+                return
+            mine = win_mod.toplevel_hwnd(self.app.winfo_id())
+            if mine and win_mod.is_window_above(mine, target):
+                win_mod.place_below(mine, target)
+        except Exception:
+            pass
 
     def append(self, msg, level="info", source=None):
         self._log_history.append((msg, level, source))
