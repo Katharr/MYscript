@@ -165,7 +165,34 @@ class QuickStartPanelTests(unittest.TestCase):
         self.assertIs(stub.app.cfg, cfg)
         stub.refresh.assert_called_once_with()
 
-    def test_pump_enters_full_after_runner_finishes(self):
+    def test_roster_profiles_append_missing_roles_disabled(self):
+        profiles = [{"id": "one", "enabled": True, "expected_role_id": "r1"}]
+        roster = {
+            "r1": {"name": "已有角色"},
+            "r2": {"name": "偶尔登录的角色"},
+        }
+
+        merged, added = QuickStartPanel._merge_roster_profiles(profiles, roster)
+
+        self.assertTrue(added)
+        self.assertEqual(len(merged), 2)
+        self.assertEqual(merged[0], profiles[0])
+        self.assertEqual(merged[1]["expected_role_id"], "r2")
+        self.assertEqual(merged[1]["expected_role_name"], "偶尔登录的角色")
+        self.assertFalse(merged[1]["enabled"])
+
+    def test_enter_full_requires_game_window(self):
+        stub = _PanelStub()
+        stub._has_game_window = mock.Mock(return_value=False)
+        stub._sync_run_button = mock.Mock()
+
+        self.assertFalse(QuickStartPanel._enter_full_if_game_ready(stub))
+
+        stub.app.enter_full.assert_not_called()
+        self.assertEqual(stub.status, ["状态：未检测到游戏窗口"])
+        stub._sync_run_button.assert_called_once_with()
+
+    def test_pump_enters_full_only_after_game_window_ready(self):
         stub = _PanelStub()
         stub._launched = True
         runner = mock.Mock()
@@ -175,12 +202,13 @@ class QuickStartPanelTests(unittest.TestCase):
         stub.runner = runner
         stub.append = mock.Mock()
         stub._track_progress = mock.Mock()
+        stub._enter_full_if_game_ready = mock.Mock(return_value=True)
 
         QuickStartPanel.pump(stub)
 
         stub.append.assert_called_once_with("[角色] 开始处理（1/1）。", "info")
         stub._track_progress.assert_called_once_with("[角色] 开始处理（1/1）。")
-        stub.app.enter_full.assert_called_once_with()
+        stub._enter_full_if_game_ready.assert_called_once_with()
 
 
 if __name__ == "__main__":

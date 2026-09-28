@@ -2,10 +2,12 @@
 """紧凑启动形态的一键启动面板。"""
 
 import re
+import uuid
 
 import customtkinter as ctk
 
 from . import theme as T
+from ..core import accounts
 from ..core import config as cfg_mod
 from ..core import window as win_mod
 from ..core.runner import TaskRunner
@@ -61,11 +63,6 @@ class QuickStartPanel(ctk.CTkFrame):
             corner_radius=T.RADIUS_SM, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
             text_color=T.ON_ACCENT, command=self._toggle_run)
         self.btn_run.grid(row=0, column=0, sticky="ew", pady=(0, T.SP_2))
-        self.btn_full = ctk.CTkButton(
-            controls, text="进入主界面", font=self.fonts["body"], height=36,
-            corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER,
-            text_color=T.TEXT, border_width=1, border_color=T.BORDER, command=self._enter_full)
-        self.btn_full.grid(row=1, column=0, sticky="ew")
 
         ctk.CTkFrame(self, height=1, fg_color=T.BORDER).grid(
             row=4, column=0, sticky="ew", padx=T.SP_5, pady=(T.SP_2, T.SP_2))
@@ -85,10 +82,10 @@ class QuickStartPanel(ctk.CTkFrame):
         self.log.configure(state="disabled")
 
     def refresh(self):
-        """从配置真源重建档案行，避免维护小窗自己的副本。"""
+        """从配置真源重建档案行，并补齐本机名册里的角色。"""
         cfg = cfg_mod.load_config()
+        profiles = self._sync_roster_profiles(cfg)
         self.app.cfg = cfg
-        profiles = (cfg.get("account_launch") or {}).get("profiles") or []
         self._profile_count = len(profiles)
         self.lbl_count.configure(text="（%d 个）" % len(profiles) if profiles else "")
         for child in self.profile_list.winfo_children():
@@ -101,6 +98,42 @@ class QuickStartPanel(ctk.CTkFrame):
             if not self._launched:
                 self._set_status("状态：待启动")
         self._sync_run_button()
+
+    @staticmethod
+    def _merge_roster_profiles(profiles, roster):
+        """将本机名册中尚未建档的角色追加为默认未勾选的档案。"""
+        merged = list(profiles)
+        known_ids = {str(profile.get("expected_role_id") or "") for profile in merged}
+        added = False
+        for role_id, record in (roster or {}).items():
+            role_id = str(role_id or "")
+            if not role_id or role_id in known_ids:
+                continue
+            name = (record.get("name") or "").strip()
+            merged.append({
+                "id": uuid.uuid4().hex,
+                "label": name or role_id,
+                "enabled": False,
+                "expected_role_id": role_id,
+                "expected_role_name": name,
+            })
+            known_ids.add(role_id)
+            added = True
+        return merged, added
+
+    def _sync_roster_profiles(self, cfg):
+        """把可读取的本机角色名册同步进启动档案。"""
+        account_cfg = cfg.setdefault("account_launch", {})
+        profiles = account_cfg.setdefault("profiles", [])
+        try:
+            roster = accounts.roster()
+        except Exception:
+            roster = {}
+        merged, added = self._merge_roster_profiles(profiles, roster)
+        if added:
+            account_cfg["profiles"] = merged
+            cfg_mod.save_config(cfg)
+        return merged
 
     def _render_profile(self, index, profile):
         row = ctk.CTkFrame(self.profile_list, fg_color=T.SURFACE, corner_radius=T.RADIUS_SM,
@@ -140,7 +173,7 @@ class QuickStartPanel(ctk.CTkFrame):
 
     def _toggle_run(self):
         if self.runner is not None and self.runner.is_running():
-            self._stop_and_enter_full()
+            self._stop_and_wait_for_window()
             return
         cfg = cfg_mod.load_config()
         self.app.cfg = cfg
@@ -169,18 +202,34 @@ class QuickStartPanel(ctk.CTkFrame):
         except Exception:
             pass
 
-    def _stop_and_enter_full(self):
+    def _has_game_window(self):
+        cfg = self.app.cfg
+        try:
+            wins = win_mod.locate_all(cfg.get("window_title", "梦幻西游"),
+                                      cfg.get("window_offset", [0, 0]),
+                                      include_minimized=True)
+        except Exception:
+            return False
+        return bool(wins)
+
+    def _enter_full_if_game_ready(self):
+        if self._has_game_window():
+            self.app.enter_full()
+            return True
+        self._set_status("状态：未检测到游戏窗口")
+        self._sync_run_button()
+        return False
+
+    def _stop_and_wait_for_window(self):
         if self.runner is not None and self.runner.is_running():
             self.runner.stop()
         self._launched = False
-        self.app.enter_full()
-
-    def _enter_full(self):
-        self._stop_and_enter_full()
+        self._enter_full_if_game_ready()
 
     def on_close(self):
-        """紧凑窗口的 X 与“进入主界面”完全同义。"""
-        self._enter_full()
+        """零窗口小窗关闭时停止任务并退出程序，不绕过启动门槛。"""
+        self.app.stop_all_tasks()
+        self.app.destroy()
 
     def pump(self):
         if self.runner is None:
@@ -191,7 +240,7 @@ class QuickStartPanel(ctk.CTkFrame):
             self._track_progress(msg)
         if self._launched and not self.runner.is_running():
             self._launched = False
-            self.app.enter_full()
+            self._enter_full_if_game_ready()
 
     def append(self, msg, level="info", source=None):
         self._log_history.append((msg, level, source))
