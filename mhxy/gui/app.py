@@ -4047,8 +4047,9 @@ class App(ctk.CTk):
     RUNNABLE_KEYS = ("general", "launch_login", "daily", "sniper", "freeclick", "treasure_map",
                      "escort", "secret_realm", "dungeon")
 
-    def __init__(self):
+    def __init__(self, compact=False):
         super().__init__()
+        self._compact = bool(compact)
         self.cfg = cfg_mod.load_config()
         # 全局窗口识别按进程名过滤（避免把终端/编辑器等同名标题窗口当游戏号）；GUI 各窗口操作据此生效。
         win_mod.set_game_process(self.cfg.get("window_process") or win_mod.DEFAULT_GAME_PROCESS_SPEC)
@@ -4058,8 +4059,13 @@ class App(ctk.CTk):
         mode = self.cfg.get("appearance", "dark")
         ctk.set_appearance_mode(mode if mode in ("dark", "light") else "dark")
         self.title("梦幻 · 时空 助手")
-        self.geometry("1360x720")
-        self.minsize(1180, 640)
+        if self._compact:
+            self.geometry("440x420")
+            self.minsize(440, 420)
+            self.resizable(False, False)
+        else:
+            self.geometry("1360x720")
+            self.minsize(1180, 640)
         self.configure(fg_color=T.BG)
         # ⚠ 绝对不要在这里 self.withdraw()。customtkinter 的 CTk 有
         # `_withdraw_called_before_window_exists` 标志：只要在窗口首次显示（第一次
@@ -4077,6 +4083,8 @@ class App(ctk.CTk):
         self._locating = False        # 防止多个后台定位线程叠加
         self._ui_queue = queue.Queue()  # 后台线程 -> 主线程的任务队列（见 App.ui_post）
         self.float_log = None         # 悬浮日志窗实例（None=没收起，主界面正常显示）
+        self.quick_panel = None       # compact 形态的日志 sink（由 Spec 04 换成正式面板）
+        self._compact_placeholder = None
         # 任务运行态：给悬浮窗的「开始/停止」按钮用（见 on_task_started / task_state）。
         self._task_label = None       # 最近一次启动的模块名（如「秒装备」），用作按钮上的说明
         self._task_restart = None     # 最近一次启动的模块的重启入口（点悬浮窗「开始」原样重跑）
@@ -4085,20 +4093,67 @@ class App(ctk.CTk):
         self.grid_columnconfigure(1, weight=1)   # 中间内容区随窗口拉伸
         self.grid_columnconfigure(2, weight=0)   # 右侧全局日志列固定宽
         self.grid_rowconfigure(0, weight=1)
-        self._build_sidebar()
-        self._build_log_panel()   # 先建日志面板：各页 _log_line 都往这写，必须先于建页
-        self._build_pages()
-        self._show("general")
+        if self._compact:
+            # 小窗不建任务页，但 _tick / 急停遍历 self.pages，故保持一个空字典。
+            self.pages = {}
+            self.reveal_compact()
+        else:
+            self._build_sidebar()
+            self._build_log_panel()   # 先建日志面板：各页 _log_line 都往这写，必须先于建页
+            self._build_pages()
+            self._show("general")
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(150, self._tick)
         self._hotkey_down = False
         self.after(60, self._poll_hotkey)
         # 界面显示后趁空闲把其余页面逐个预建好，首次切过去即秒开（每个间隔开，单帧不卡）。
-        self.after(800, self._prebuild_idle)
+        if not self._compact:
+            self.after(800, self._prebuild_idle)
         # 兜底显示：外层正常会调 reveal_with_overlay()（它建完页就亮窗口并置 _revealed）。
         # 真走到这里说明没人调（直接跑本文件 / 启动回退路径），窗口不能一直藏着。
         self.after_idle(self._ensure_revealed)
+
+    @property
+    def is_compact(self):
+        return self._compact
+
+    def reveal_compact(self):
+        """显示 compact 占位内容；Spec 04 会将其替换为正式的一键启动面板。"""
+        if not self.is_compact:
+            return
+        if self._compact_placeholder is None:
+            self._compact_placeholder = ctk.CTkLabel(
+                self, text="启动准备中", font=self.fonts["h2"], text_color=T.TEXT)
+            self._compact_placeholder.place(relx=0.5, rely=0.5, anchor="center")
+        self._ensure_revealed()
+
+    def enter_full(self):
+        """原地从 compact 展开完整界面；重复调用不产生副作用。"""
+        if not self.is_compact:
+            return
+        for attr in ("quick_panel", "_compact_placeholder"):
+            widget = getattr(self, attr, None)
+            if widget is not None:
+                try:
+                    widget.destroy()
+                except Exception:
+                    pass
+            setattr(self, attr, None)
+
+        self._compact = False
+        self.geometry("1360x720")
+        self.minsize(1180, 640)
+        self.resizable(True, True)
+        self.grid_columnconfigure(1, weight=1)
+        self.grid_columnconfigure(2, weight=0)
+        self.grid_rowconfigure(0, weight=1)
+        self._build_sidebar()
+        self._build_log_panel()
+        self._build_pages()
+        self._build_pages_with_overlay()
+        self._show("general")
+        self.after(800, self._prebuild_idle)
 
     def _build_sidebar(self):
         bar = ctk.CTkFrame(self, fg_color=T.SIDEBAR, corner_radius=0, width=210)
@@ -4161,15 +4216,17 @@ class App(ctk.CTk):
     def log_line(self, msg, level="info", source=None):
         """统一日志出口（所有页面/任务都调它）。source 非空时在行首加暗色来源标签，如「秒装备 ›」。
 
-        两个去处、同一份内容：主界面右侧的全局面板 + （若已收起的）悬浮日志窗。
-        插行/裁行的实现见 theme.append_log（两边共用，保证逐字一致）。"""
+        三个去处、同一份内容：主界面右侧的全局面板、（若已收起的）悬浮日志窗，
+        以及 compact 形态的一键启动面板。插行/裁行的实现见 theme.append_log。"""
         log = getattr(self, "log", None)
-        if log is None:
-            return
-        T.append_log(log, msg, level, source)
+        if log is not None:
+            T.append_log(log, msg, level, source)
         fl = getattr(self, "float_log", None)
         if fl is not None:
             fl.append(msg, level, source)
+        qp = getattr(self, "quick_panel", None)
+        if qp is not None:
+            qp.append(msg, level, source)
 
     # ---------------- 收起为悬浮日志窗（细长条，可摆到游戏窗口边上） ----------------
     def collapse_to_float(self, auto=False):
@@ -4362,7 +4419,7 @@ class App(ctk.CTk):
         except Exception:
             pass
 
-    def reveal_with_overlay(self):
+    def _build_pages_with_overlay(self):
         """在本窗口上盖一层同根、不透明的「正在准备界面…」遮罩，然后在其后把全部页面建好。
 
         为什么是「亮窗口 + 盖遮罩」而不是「先把窗口藏起来建完再显示」：
@@ -4429,6 +4486,10 @@ class App(ctk.CTk):
                 pass
             self._ensure_revealed()
             self._safe_update()
+
+    def reveal_with_overlay(self):
+        """完整界面的公开显示入口，保留既有调用点。"""
+        self._build_pages_with_overlay()
 
     def _prebuild_idle(self):
         """启动后趁空闲逐个把尚未创建的页面建好；每次只建一个并重排一次调度，避免单帧卡顿。"""
