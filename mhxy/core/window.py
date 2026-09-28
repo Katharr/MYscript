@@ -5,7 +5,6 @@
 """
 
 import os
-import re
 import math
 import time
 import ctypes
@@ -18,6 +17,9 @@ import mss
 import pygetwindow as gw
 
 from . import vision
+from .window_probe import (DEFAULT_GAME_PROCESS_SPEC, _proc_basename,
+                           is_game_window, parse_process_names,
+                           position_sort_key, proc_image_path, proc_path_by_pid)
 
 
 # 句柄相关的 user32 函数：必须显式声明 restype/argtypes 为 HWND(=void*)，
@@ -73,116 +75,21 @@ def _mouse_button(down):
     _user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(inp))
 
 
-# ---- 游戏窗口识别：按「进程 exe 名」过滤（标题会和别的窗口撞，进程名才稳）----
-#   背景（踩坑）：原先只按标题子串 "梦幻西游" 匹配，结果【终端/编辑器等标题里恰好含这几个字的窗口】
-#   会被误认成游戏窗口去点击（实测把 Windows Terminal 当成了「号1」，因为它的标签名含「梦幻西游」）。
-#   游戏窗口类名是【随机串】（每个窗口都不同，无法白名单），但进程 exe 名稳定，故据此过滤最可靠。
-#
-#   2026-09 客户端大更新后架构变化（脚本「识别不到窗口」的根因）：可见顶层窗口改由【标签外壳】
-#   进程 MyTabCtrl_x64r.exe 持有（类名 __my_tabctrl_winclass_<随机>，标题仍是「梦幻西游：时空」，
-#   每个游戏号一个顶层窗口）；真正的游戏进程 MyGame_x64r.exe 退居渲染子进程，只剩 1×1 不可见的
-#   GDI/IME 隐藏窗口，pygetwindow 枚举不到可用矩形。故默认两个进程名都认（新外壳 + 旧客户端，
-#   兼容回退与多版本）。若以后 exe 再改名，改 config 顶层 window_process 即可（空串=退回纯标题匹配）。
-DEFAULT_GAME_PROCESS_SPEC = "MyTabCtrl_x64r.exe,MyGame_x64r.exe"
-_GAME_PROCESSES = {"mytabctrl_x64r.exe", "mygame_x64r.exe"}
-# window_process 里多个名字的分隔符：中英文逗号/分号、竖线、空白
-_SPLIT_RE = re.compile(r"[,，;；|\s]+")
-
-
-def _parse_process_names(name):
-    """把 config.window_process 解析成「小写 exe basename 集合」。
-    接受：字符串（单个名，或用逗号/分号/竖线/空白分隔的多个名）、字符串列表/元组/集合。
-    空串/None/空集合 → None（表示不按进程过滤，退回纯标题匹配，与旧行为一致）。"""
-    if name is None:
-        return None
-    if isinstance(name, (list, tuple, set)):
-        items = [str(x) for x in name]
-    else:
-        items = _SPLIT_RE.split(str(name))
-    out = {x.strip().lower() for x in items if x.strip()}
-    return out or None
+# ---- 游戏窗口识别：规则实现在 window_probe，调用点仍保留原模块属性。----
+_GAME_PROCESSES = parse_process_names(DEFAULT_GAME_PROCESS_SPEC)
+_parse_process_names = parse_process_names
 
 
 def set_game_process(name):
-    """配置「只认这些 exe 进程的窗口」（支持多个，见 _parse_process_names）。来自 config.window_process。
-    传空/None=不按进程过滤（退回纯标题匹配，与旧行为一致）。进程名比对大小写不敏感。"""
+    """配置「只认这些 exe 进程的窗口」。空值时退回纯标题匹配。"""
     global _GAME_PROCESSES
-    _GAME_PROCESSES = _parse_process_names(name)
-
-
-def proc_image_path(hwnd):
-    """返回 hwnd 所属进程的 exe 完整路径。取不到返回 ""。
-
-    权限：只用 PROCESS_QUERY_LIMITED_INFORMATION（低完整性进程也能查高完整性进程），
-    故没提权时也能拿到游戏 exe 路径——core/accounts 靠它反推游戏安装目录。
-    （对比 Get-Process 的 .Path/MainModule 需要更高权限，对 elevated 的游戏进程会返回空。）"""
-    try:
-        pid = ctypes.wintypes.DWORD()
-        _user32.GetWindowThreadProcessId(int(hwnd), ctypes.byref(pid))
-        if not pid.value:
-            return ""
-        hp = _kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
-        if not hp:
-            return ""
-        try:
-            buf = ctypes.create_unicode_buffer(1024)
-            sz = ctypes.wintypes.DWORD(1024)
-            if not _kernel32.QueryFullProcessImageNameW(hp, 0, buf, ctypes.byref(sz)):
-                return ""
-            return buf.value or ""
-        finally:
-            _kernel32.CloseHandle(hp)
-    except Exception:
-        return ""
-
-
-def proc_path_by_pid(pid):
-    """按 PID 取进程 exe 完整路径（与 proc_image_path 同权限，但不需要窗口句柄）。取不到返回 ""。
-
-    用途：游戏窗口被最小化/已关闭、只开着启动器时，core/accounts 仍要靠进程 exe 反推 LocalData。
-    """
-    try:
-        if not pid:
-            return ""
-        hp = _kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
-        if not hp:
-            return ""
-        try:
-            buf = ctypes.create_unicode_buffer(1024)
-            sz = ctypes.wintypes.DWORD(1024)
-            if not _kernel32.QueryFullProcessImageNameW(hp, 0, buf, ctypes.byref(sz)):
-                return ""
-            return buf.value or ""
-        finally:
-            _kernel32.CloseHandle(hp)
-    except Exception:
-        return ""
-
-
-def _proc_basename(hwnd):
-    """返回 hwnd 所属进程的 exe basename（小写）。取不到返回 ""。"""
-    return os.path.basename(proc_image_path(hwnd)).lower()
+    _GAME_PROCESSES = parse_process_names(name)
 
 
 def _match_basic(w, title_substr, allow_minimized=False):
-    """游戏窗口基本判定：标题含关键字 + 尺寸够大 +（若配置了 _GAME_PROCESSES）所属进程在白名单内。
-    不在此查「最小化」——locate() 允许最小化窗口当候选并排后面，locate_all() 自行另外排除。
-
-    allow_minimized=True 时对【最小化的窗口】跳过尺寸门槛：实测最小化后系统只报一个很小的矩形
-    （本机 Tk 窗口实测 237×39），尺寸门槛会把真正要「唤出」的号滤掉。标题+进程两条仍照卡，
-    故不会把别的程序误认成游戏窗口。"""
-    try:
-        if title_substr not in (w.title or ""):
-            return False
-        if not (allow_minimized and w.isMinimized):
-            if w.width <= 100 or w.height <= 100:
-                return False
-        hwnd = w._hWnd
-    except Exception:
-        return False
-    if _GAME_PROCESSES and _proc_basename(hwnd) not in _GAME_PROCESSES:
-        return False
-    return True
+    """兼容旧入口，并把当前进程白名单显式传给底层规则。"""
+    return is_game_window(w, title_substr, _GAME_PROCESSES,
+                          allow_minimized=allow_minimized)
 
 
 def _force_foreground(hwnd, tries=3):
@@ -665,7 +572,7 @@ def locate_all(title_substr, offset=(0, 0), max_n=0, include_minimized=False):
             found.append(w)
         except Exception:
             continue
-    found.sort(key=lambda x: (int(x.top) // 120, int(x.left)))
+    found.sort(key=position_sort_key)
     if max_n and max_n > 0:
         found = found[:max_n]
     return [GameWindow(title_substr, offset).bind(w) for w in found]
@@ -688,7 +595,7 @@ def locate_desktop_windows(title_substr="", offset=(0, 0), min_size=(200, 160)):
             found.append(w)
         except Exception:
             continue
-    found.sort(key=lambda x: (int(x.top) // 120, int(x.left)))
+    found.sort(key=position_sort_key)
     return [GameWindow(title_substr, offset).bind(w) for w in found]
 
 

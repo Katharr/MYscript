@@ -32,6 +32,7 @@ import time
 import cv2
 
 from . import window as win_mod
+from .window_probe import list_processes as _proc_table
 
 
 _GAME_EXE = "mygame_x64r.exe"        # 真正跑游戏的渲染子进程（见 core/window 模块头）
@@ -64,33 +65,13 @@ _ocr_error = None
 
 
 # ----------------------------------------------------------------------
-# Win32：进程表（父子关系）+ 进程启动时刻
+# Win32：进程启动时刻（进程快照由 window_probe.list_processes 提供）
 # ----------------------------------------------------------------------
-_TH32CS_SNAPPROCESS = 0x00000002
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 _EPOCH_DELTA = 11644473600.0         # FILETIME(1601) → Unix epoch(1970) 的秒差
 
 
-class _PROCESSENTRY32W(ctypes.Structure):
-    _fields_ = [("dwSize", ctypes.wintypes.DWORD),
-                ("cntUsage", ctypes.wintypes.DWORD),
-                ("th32ProcessID", ctypes.wintypes.DWORD),
-                ("th32DefaultHeapID", ctypes.POINTER(ctypes.c_ulong)),
-                ("th32ModuleID", ctypes.wintypes.DWORD),
-                ("cntThreads", ctypes.wintypes.DWORD),
-                ("th32ParentProcessID", ctypes.wintypes.DWORD),
-                ("pcPriClassBase", ctypes.c_long),
-                ("dwFlags", ctypes.wintypes.DWORD),
-                ("szExeFile", ctypes.wintypes.WCHAR * 260)]
-
-
 _k32 = ctypes.windll.kernel32
-_k32.CreateToolhelp32Snapshot.restype = ctypes.wintypes.HANDLE
-_k32.CreateToolhelp32Snapshot.argtypes = [ctypes.wintypes.DWORD, ctypes.wintypes.DWORD]
-_k32.Process32FirstW.restype = ctypes.wintypes.BOOL
-_k32.Process32FirstW.argtypes = [ctypes.wintypes.HANDLE, ctypes.POINTER(_PROCESSENTRY32W)]
-_k32.Process32NextW.restype = ctypes.wintypes.BOOL
-_k32.Process32NextW.argtypes = [ctypes.wintypes.HANDLE, ctypes.POINTER(_PROCESSENTRY32W)]
 _k32.OpenProcess.restype = ctypes.wintypes.HANDLE
 _k32.OpenProcess.argtypes = [ctypes.wintypes.DWORD, ctypes.wintypes.BOOL, ctypes.wintypes.DWORD]
 _k32.GetProcessTimes.restype = ctypes.wintypes.BOOL
@@ -101,29 +82,6 @@ _k32.GetProcessTimes.argtypes = [ctypes.wintypes.HANDLE,
                                  ctypes.POINTER(ctypes.wintypes.FILETIME)]
 _k32.CloseHandle.restype = ctypes.wintypes.BOOL
 _k32.CloseHandle.argtypes = [ctypes.wintypes.HANDLE]
-
-
-def _proc_table():
-    """系统进程快照 → [{pid, ppid, exe(小写)}]。CreateToolhelp32Snapshot 不需要管理员。"""
-    out = []
-    try:
-        snap = _k32.CreateToolhelp32Snapshot(_TH32CS_SNAPPROCESS, 0)
-        if not snap or snap == ctypes.wintypes.HANDLE(-1).value:
-            return out
-        try:
-            entry = _PROCESSENTRY32W()
-            entry.dwSize = ctypes.sizeof(_PROCESSENTRY32W)
-            ok = _k32.Process32FirstW(snap, ctypes.byref(entry))
-            while ok:
-                out.append({"pid": int(entry.th32ProcessID),
-                            "ppid": int(entry.th32ParentProcessID),
-                            "exe": (entry.szExeFile or "").lower()})
-                ok = _k32.Process32NextW(snap, ctypes.byref(entry))
-        finally:
-            _k32.CloseHandle(snap)
-    except Exception:
-        pass
-    return out
 
 
 def _start_epoch(pid):

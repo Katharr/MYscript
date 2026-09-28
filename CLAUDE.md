@@ -68,6 +68,7 @@ mhxy/
   core/   通用基础设施（与玩法无关）
     config.py   配置读写（DEFAULT_CONFIG / load/save / task_config / set_task_config）
     accounts.py 角色名识别（OCR 客户端标签条当前角色名 + LocalData 名册核验；把界面/日志里的「号N」换成「角色名（等级）」）——见约束 10
+    window_probe.py 轻量窗口证据/规则层（游戏窗口与进程快照；不依赖图像库）
     window.py   GameWindow（locate/rect/activate/坐标换算）+ grab() 截图 + set_dpi_aware()
     vision.py   load_template / save_image / match() / frame_diff()（兼容中文路径）
     scan.py     通用「滚动查找」scroll_search()（翻列表/翻包裹统一底层）；详见 docstring + memory scroll-search-scan
