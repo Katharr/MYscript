@@ -1,8 +1,12 @@
 # -*- coding: utf-8 -*-
+import copy
+import queue
 import unittest
 from unittest import mock
 
+from mhxy.core.config import DEFAULT_CONFIG
 from mhxy.gui.app import App
+from mhxy.gui.quick_start import QuickStartPanel
 
 
 class _Widget:
@@ -19,6 +23,26 @@ class _CompactStub:
         return self._compact
 
 
+class _Button:
+    def __init__(self):
+        self.calls = []
+
+    def configure(self, **kwargs):
+        self.calls.append(kwargs)
+
+
+class _PanelStub:
+    def __init__(self):
+        self.status = []
+        self.btn_run = _Button()
+        self.app = mock.Mock()
+        self.refresh = mock.Mock()
+        self._launched = False
+
+    def _set_status(self, text):
+        self.status.append(text)
+
+
 class QuickStartShapeTests(unittest.TestCase):
     def test_compact_state_property(self):
         stub = _CompactStub()
@@ -27,21 +51,14 @@ class QuickStartShapeTests(unittest.TestCase):
         stub._compact = False
         self.assertFalse(App.is_compact.fget(stub))
 
-    def test_reveal_compact_builds_placeholder_once(self):
+    def test_reveal_compact_only_reveals_existing_panel(self):
         stub = _CompactStub()
         stub._compact = True
-        stub._compact_placeholder = None
-        stub.fonts = {"h2": object()}
         stub._ensure_revealed = mock.Mock()
 
-        with mock.patch("mhxy.gui.app.ctk.CTkLabel") as label_cls:
-            label = label_cls.return_value
-            App.reveal_compact(stub)
-            App.reveal_compact(stub)
+        App.reveal_compact(stub)
+        App.reveal_compact(stub)
 
-        label_cls.assert_called_once()
-        label.place.assert_called_once_with(relx=0.5, rely=0.5, anchor="center")
-        self.assertIs(stub._compact_placeholder, label)
         self.assertEqual(stub._ensure_revealed.call_count, 2)
 
     def test_enter_full_is_idempotent(self):
@@ -108,6 +125,62 @@ class QuickStartShapeTests(unittest.TestCase):
         append_log.assert_not_called()
         stub.float_log.append.assert_called_once_with("启动中", "info", "启动")
         stub.quick_panel.append.assert_called_once_with("启动中", "info", "启动")
+
+
+class QuickStartPanelTests(unittest.TestCase):
+    def test_track_progress_updates_status_and_ignores_noise(self):
+        stub = _PanelStub()
+
+        QuickStartPanel._track_progress(stub, "[角色] 开始处理（2/3）。")
+        QuickStartPanel._track_progress(stub, "not a launch message")
+
+        self.assertEqual(stub.status, ["状态：第 2/3 个"])
+
+    def test_run_button_tracks_enabled_profiles(self):
+        stub = _PanelStub()
+        empty = copy.deepcopy(DEFAULT_CONFIG)
+        empty["account_launch"]["profiles"] = [{"id": "one", "enabled": False}]
+        enabled = copy.deepcopy(empty)
+        enabled["account_launch"]["profiles"][0]["enabled"] = True
+
+        stub._enabled_count = lambda: QuickStartPanel._enabled_count(stub)
+        with mock.patch("mhxy.gui.quick_start.cfg_mod.load_config", side_effect=[empty, enabled]):
+            QuickStartPanel._sync_run_button(stub)
+            QuickStartPanel._sync_run_button(stub)
+
+        self.assertEqual(stub.btn_run.calls[0]["state"], "disabled")
+        self.assertEqual(stub.btn_run.calls[1]["state"], "normal")
+
+    def test_set_enabled_persists_to_config(self):
+        stub = _PanelStub()
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        cfg["account_launch"]["profiles"] = [{"id": "one", "enabled": True}]
+
+        with mock.patch("mhxy.gui.quick_start.cfg_mod.load_config", return_value=cfg), \
+             mock.patch("mhxy.gui.quick_start.cfg_mod.save_config") as save_config:
+            QuickStartPanel._set_enabled(stub, 0, False)
+
+        self.assertFalse(cfg["account_launch"]["profiles"][0]["enabled"])
+        save_config.assert_called_once_with(cfg)
+        self.assertIs(stub.app.cfg, cfg)
+        stub.refresh.assert_called_once_with()
+
+    def test_pump_enters_full_after_runner_finishes(self):
+        stub = _PanelStub()
+        stub._launched = True
+        runner = mock.Mock()
+        runner.log_queue = queue.Queue()
+        runner.log_queue.put(("info", "[角色] 开始处理（1/1）。"))
+        runner.is_running.return_value = False
+        stub.runner = runner
+        stub.append = mock.Mock()
+        stub._track_progress = mock.Mock()
+
+        QuickStartPanel.pump(stub)
+
+        stub.append.assert_called_once_with("[角色] 开始处理（1/1）。", "info")
+        stub._track_progress.assert_called_once_with("[角色] 开始处理（1/1）。")
+        stub.app.enter_full.assert_called_once_with()
 
 
 if __name__ == "__main__":

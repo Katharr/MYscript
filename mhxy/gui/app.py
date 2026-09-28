@@ -13,6 +13,7 @@ import customtkinter as ctk
 
 from . import theme as T
 from .launch_login_page import LaunchLoginPage
+from .quick_start import QuickStartPanel
 from ..core import calib_profiles as calib
 from ..core import config as cfg_mod
 from ..core import window as win_mod
@@ -4096,6 +4097,8 @@ class App(ctk.CTk):
         if self._compact:
             # 小窗不建任务页，但 _tick / 急停遍历 self.pages，故保持一个空字典。
             self.pages = {}
+            self.quick_panel = QuickStartPanel(self, self)
+            self.quick_panel.grid(row=0, column=0, columnspan=3, sticky="nsew")
             self.reveal_compact()
         else:
             self._build_sidebar()
@@ -4119,19 +4122,22 @@ class App(ctk.CTk):
         return self._compact
 
     def reveal_compact(self):
-        """显示 compact 占位内容；Spec 04 会将其替换为正式的一键启动面板。"""
+        """显示已构建的一键启动小窗。"""
         if not self.is_compact:
             return
-        if self._compact_placeholder is None:
-            self._compact_placeholder = ctk.CTkLabel(
-                self, text="启动准备中", font=self.fonts["h2"], text_color=T.TEXT)
-            self._compact_placeholder.place(relx=0.5, rely=0.5, anchor="center")
         self._ensure_revealed()
 
     def enter_full(self):
         """原地从 compact 展开完整界面；重复调用不产生副作用。"""
         if not self.is_compact:
             return
+        quick_logs = []
+        quick_panel = getattr(self, "quick_panel", None)
+        if quick_panel is not None:
+            try:
+                quick_logs = quick_panel.log_history()
+            except Exception:
+                pass
         for attr in ("quick_panel", "_compact_placeholder"):
             widget = getattr(self, attr, None)
             if widget is not None:
@@ -4150,6 +4156,8 @@ class App(ctk.CTk):
         self.grid_rowconfigure(0, weight=1)
         self._build_sidebar()
         self._build_log_panel()
+        for msg, level, source in quick_logs:
+            T.append_log(self.log, msg, level, source)
         self._build_pages()
         self._build_pages_with_overlay()
         self._show("general")
@@ -4566,6 +4574,9 @@ class App(ctk.CTk):
             p = self.pages.get(k)
             if p:
                 p.pump()
+        qp = getattr(self, "quick_panel", None)
+        if qp is not None:
+            qp.pump()
         # 每约 1.2s 检测一次游戏窗口（放后台线程，避免阻塞 UI 造成滑动卡顿）
         self._tick_count += 1
         if self._tick_count % 8 == 0:
@@ -4751,15 +4762,17 @@ class App(ctk.CTk):
             self.toast(f"{tag} 急停（当前没有正在跑的任务）")
 
     def _any_running(self):
-        """是否有任意页面的后台任务在跑（供甩角失控急停判断，避免空触发）。"""
+        """是否有任意页面或小窗任务在跑（供甩角失控急停判断，避免空触发）。"""
         for page in self.pages.values():
             for v in vars(page).values():
                 if isinstance(v, TaskRunner) and v.is_running():
                     return True
-        return False
+        qp = getattr(self, "quick_panel", None)
+        runner = getattr(qp, "runner", None)
+        return isinstance(runner, TaskRunner) and runner.is_running()
 
     def stop_all_tasks(self):
-        """遍历所有页面，停掉其上任意正在运行的 TaskRunner（runner / runner_ob 等都覆盖到）。返回停了几个。"""
+        """停掉页面及紧凑小窗中的后台任务，返回已请求停止的数量。"""
         n = 0
         for page in self.pages.values():
             for v in list(vars(page).values()):
@@ -4769,9 +4782,22 @@ class App(ctk.CTk):
                         n += 1
                     except Exception:
                         pass
+        qp = getattr(self, "quick_panel", None)
+        runner = getattr(qp, "runner", None)
+        if isinstance(runner, TaskRunner) and runner.is_running():
+            try:
+                runner.stop()
+                n += 1
+            except Exception:
+                pass
         return n
 
     def _on_close(self):
+        if self.is_compact:
+            qp = getattr(self, "quick_panel", None)
+            if qp is not None:
+                qp.on_close()
+                return
         self.stop_all_tasks()
         self.destroy()
 
