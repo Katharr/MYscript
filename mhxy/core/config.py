@@ -8,6 +8,7 @@ import os
 import sys
 import json
 import copy
+import shutil
 from pathlib import Path
 
 # 数据根目录：config.json / templates / captures 都存这里。
@@ -569,7 +570,16 @@ def load_config():
 
 
 def save_config(cfg):
+    """写盘前先把上一版留一份 config.json.bak（只留最近一版）。
+
+    代价是一次几 KB 的复制，换来「写坏了还能回到上一版」：曾发生过测试误调 save_config
+    把用户 config.json（标定 + 角色档案）整个覆盖、且无处可恢复的事故。备份失败不阻塞写盘。"""
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if CONFIG_PATH.exists():
+        try:
+            shutil.copyfile(CONFIG_PATH, CONFIG_PATH.with_name(CONFIG_PATH.name + ".bak"))
+        except OSError:
+            pass
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
 

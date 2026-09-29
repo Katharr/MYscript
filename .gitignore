@@ -16,6 +16,7 @@ __pycache__/
 # /captures/   命中截图
 # /templates/  用户自己截的装备模板图
 /config.json
+/config.json.bak
 /captures/
 /templates/
 /docs/
