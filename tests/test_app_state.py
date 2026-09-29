@@ -21,9 +21,25 @@ class _Runner:
         return self.running
 
 
-class _StateApp:
+class _TkLike:
+    """模拟 tk.Tk：自带 state(newstate=None) 方法。
+
+    CTk 的 mainloop/_windows_set_titlebar_color 会调 `self.state(...)` 复位窗口显示状态，
+    故 App 的状态快照必须叫 ui_state —— 叫 state 会把这个方法覆盖掉（真机上启动即崩）。"""
+
     def __init__(self):
-        self.state = AppState(ui_mode=UI_FULL)
+        self._tk_state = "normal"
+
+    def state(self, new_state=None):
+        if new_state is not None:
+            self._tk_state = new_state
+        return self._tk_state
+
+
+class _StateApp(_TkLike):
+    def __init__(self):
+        super().__init__()
+        self.ui_state = AppState(ui_mode=UI_FULL)
         self._started = []
         self.quick_panel = None
         self.float_log = None
@@ -42,7 +58,7 @@ class _StateApp:
         return runner.is_running()
 
     def _set_state(self, **changes):
-        self.state = replace(self.state, **changes)
+        self.ui_state = replace(self.ui_state, **changes)
 
 
 class _Task:
@@ -67,22 +83,33 @@ class AppStateTests(unittest.TestCase):
 
         App.on_task_started(app, "秒装备", restart, runner)
 
-        self.assertEqual(app.state.ui_mode, UI_FLOATING)
-        self.assertEqual(app.state.task_state, TASK_RUNNING)
-        self.assertEqual(app.state.active_labels, ("秒装备",))
+        self.assertEqual(app.ui_state.ui_mode, UI_FLOATING)
+        self.assertEqual(app.ui_state.task_state, TASK_RUNNING)
+        self.assertEqual(app.ui_state.active_labels, ("秒装备",))
         self.assertIs(app._task_restart, restart)
         self.assertEqual(app.collapse_calls, [True])
 
+    def test_state_attribute_never_shadows_tk_state_method(self):
+        """回归：状态快照叫 ui_state，Tk 的 state() 方法必须仍然可调用。
+
+        叫 self.state 时它覆盖 tk.Tk.state()，CTk 启动进 mainloop 会
+        `self.state(self._state_before_windows_set_titlebar_color)` → TypeError: 'AppState' object is not callable。"""
+        app = _StateApp()
+        App.on_task_started(app, "秒装备", lambda: None, _Runner(running=True))
+
+        self.assertEqual(app.state("normal"), "normal")   # 仍是 Tk 的 wm state，没被数据对象顶掉
+        self.assertEqual(app.ui_state.task_state, TASK_RUNNING)
+
     def test_quick_start_stays_compact_while_running(self):
         app = _StateApp()
-        app.state = replace(app.state, ui_mode=UI_COMPACT)
+        app.ui_state = replace(app.ui_state, ui_mode=UI_COMPACT)
         runner = _Runner(running=True)
 
         App.on_quick_start_started(app, runner)
 
-        self.assertEqual(app.state.ui_mode, UI_COMPACT)
-        self.assertEqual(app.state.task_state, TASK_RUNNING)
-        self.assertEqual(app.state.active_labels, ("启动登录",))
+        self.assertEqual(app.ui_state.ui_mode, UI_COMPACT)
+        self.assertEqual(app.ui_state.task_state, TASK_RUNNING)
+        self.assertEqual(app.ui_state.active_labels, ("启动登录",))
         self.assertEqual(app.collapse_calls, [])
 
     def test_sync_reports_running_then_stopping_then_stopped(self):
@@ -91,19 +118,19 @@ class AppStateTests(unittest.TestCase):
         app._started = [(runner, "秒装备")]
 
         App._sync_task_state(app)
-        self.assertEqual(app.state.task_state, TASK_RUNNING)
-        self.assertEqual(app.state.active_labels, ("秒装备",))
+        self.assertEqual(app.ui_state.task_state, TASK_RUNNING)
+        self.assertEqual(app.ui_state.active_labels, ("秒装备",))
 
         runner.stop_event.set()
         App._sync_task_state(app)
-        self.assertEqual(app.state.task_state, TASK_STOPPING)
+        self.assertEqual(app.ui_state.task_state, TASK_STOPPING)
 
         runner.running = False
         runner.outcome = "stopped"
         App._sync_task_state(app)
-        self.assertEqual(app.state.task_state, TASK_STOPPED)
-        self.assertEqual(app.state.task_label, "秒装备")
-        self.assertEqual(app.state.active_labels, ())
+        self.assertEqual(app.ui_state.task_state, TASK_STOPPED)
+        self.assertEqual(app.ui_state.task_label, "秒装备")
+        self.assertEqual(app.ui_state.active_labels, ())
 
     def test_sync_preserves_completed_or_failed_outcome(self):
         for outcome, expected in (("completed", TASK_COMPLETED), ("failed", TASK_FAILED)):
@@ -111,8 +138,8 @@ class AppStateTests(unittest.TestCase):
                 app = _StateApp()
                 app._started = [(_Runner(running=False, outcome=outcome), "运镖")]
                 App._sync_task_state(app)
-                self.assertEqual(app.state.task_state, expected)
-                self.assertEqual(app.state.task_label, "运镖")
+                self.assertEqual(app.ui_state.task_state, expected)
+                self.assertEqual(app.ui_state.task_label, "运镖")
 
     def test_state_constants_keep_ui_and_game_independent(self):
         state = AppState(ui_mode=UI_COMPACT, game_state=GAME_ABSENT)

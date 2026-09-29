@@ -4116,7 +4116,11 @@ class App(ctk.CTk):
         self.quick_panel = None       # compact 形态的日志 sink（由 Spec 04 换成正式面板）
         self._compact_placeholder = None
         # 跨形态唯一状态真源。页面只管各自按钮，compact / full / floating 的展示统一从这里取。
-        self.state = AppState(ui_mode=UI_COMPACT if self._compact else UI_FULL)
+        # ⚠ 属性名【绝不能叫 state】：tk.Tk 自带 state(newstate) 方法（wm state），CTk 的
+        # mainloop/_windows_set_titlebar_color 会调 `self.state(...)` 复位窗口显示状态；一旦被
+        # AppState 实例覆盖，启动进 mainloop 就抛 `TypeError: 'AppState' object is not callable`。
+        # 踩过（提交「统一窗口与任务状态管理」引入），故一律用 ui_state。
+        self.ui_state = AppState(ui_mode=UI_COMPACT if self._compact else UI_FULL)
         self._task_restart = None     # 最近一次启动的模块的重启入口（点悬浮窗「开始」原样重跑）
         self._started = []            # [(runner, label)]：本次会话启动过的 runner，实时判活取正在跑的
 
@@ -4269,13 +4273,13 @@ class App(ctk.CTk):
         """原子更新状态快照，并立即通知已存在的界面形态刷新。
 
         仅在主线程调用。状态未变化不重复刷新，避免 _tick 的轮询引发无意义重绘。"""
-        current = getattr(self, "state", None)
+        current = getattr(self, "ui_state", None)
         if current is None:
             return
         updated = replace(current, **changes)
         if updated == current:
             return
-        self.state = updated
+        self.ui_state = updated
         panel = getattr(self, "quick_panel", None)
         if panel is not None:
             try:
@@ -4299,17 +4303,17 @@ class App(ctk.CTk):
             phase = TASK_STOPPING if any(getattr(runner, "stop_event", None) and runner.stop_event.is_set()
                                          for runner, _label in alive) else TASK_RUNNING
             self._set_state(task_state=phase, active_labels=labels,
-                            task_label=labels[-1] if labels else self.state.task_label)
-            return self.state
+                            task_label=labels[-1] if labels else self.ui_state.task_label)
+            return self.ui_state
         if finished:
             # 最后结束的 runner 给出本轮结果；runner 的 outcome 由 TaskRunner 明确维护。
             runner, label = finished[-1]
             outcome = getattr(runner, "outcome", TASK_COMPLETED)
             phase = outcome if outcome in (TASK_COMPLETED, TASK_STOPPED, TASK_FAILED) else TASK_COMPLETED
             self._set_state(task_state=phase, task_label=label, active_labels=())
-        elif self.state.task_state in (TASK_RUNNING, TASK_STOPPING):
+        elif self.ui_state.task_state in (TASK_RUNNING, TASK_STOPPING):
             self._set_state(task_state=TASK_COMPLETED, active_labels=())
-        return self.state
+        return self.ui_state
 
     # ---------------- 收起为悬浮日志窗（细长条，可摆到游戏窗口边上） ----------------
     def collapse_to_float(self, auto=False):

@@ -147,7 +147,7 @@ class FloatLogWindow(ctk.CTkToplevel):
             running, labels = self.app.task_state()
         except Exception:
             running, labels = False, []
-        state = getattr(self.app, "state", None)
+        state = getattr(self.app, "ui_state", None)
         last = getattr(state, "task_label", None)
         phase = getattr(state, "task_state", "idle")
         if running:

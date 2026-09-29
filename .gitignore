@@ -19,6 +19,8 @@ __pycache__/
 /captures/
 /templates/
 /docs/
+# /startup_error.log  启动致命错误落盘日志（每次崩溃重写，含本机路径）
+/startup_error.log
 
 # ---- 本地个人设置（每台机不同，不入库）----
 .claude/settings.local.json
