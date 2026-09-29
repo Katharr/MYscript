@@ -25,10 +25,23 @@ def _card(master, **kw):
     return ctk.CTkFrame(master, **opts)
 
 
+def _fit_name(name, max_units=20):
+    """按显示宽度截断过长的角色名（中文按 2 个宽度单位算），避免撑破两列布局。
+
+    角色名实际很短，这里只是兜底；截断成「原名…」，不改变档案里的真实名字。"""
+    units = 0
+    for index, char in enumerate(name):
+        units += 2 if ord(char) > 127 else 1
+        if units > max_units:
+            return name[:index].rstrip() + "…"
+    return name
+
+
 class LaunchLoginPage(ctk.CTkFrame):
     TASK_NAME = "launch_login"
     LOG_SOURCE = "启动登录"
     _ROLE_REFRESH_SEC = 5.0      # 名册重读节流（进程枚举不便宜，别每帧做）
+    COLUMNS = 2                  # 启动队列列数：与小窗（QuickStartPanel）的档案排布一致
 
     def __init__(self, master, app):
         super().__init__(master, fg_color="transparent")
@@ -109,7 +122,7 @@ class LaunchLoginPage(ctk.CTkFrame):
         self.btn_add.grid(row=0, column=1, sticky="e")
         self.profile_list = ctk.CTkScrollableFrame(self, fg_color="transparent")
         self.profile_list.grid(row=3, column=0, sticky="nsew", padx=4)
-        self.profile_list.grid_columnconfigure(0, weight=1)
+        # 列宽由 _render_profiles 按 COLUMNS 统一配置（两列等宽），此处不预设。
         self.grid_rowconfigure(3, weight=1)
         T.tune_scroll_speed(self.profile_list)
 
@@ -182,58 +195,48 @@ class LaunchLoginPage(ctk.CTkFrame):
         for child in self.profile_list.winfo_children():
             child.destroy()
         self._profile_role_values = self._roles()
+        for column in range(self.COLUMNS):
+            self.profile_list.grid_columnconfigure(column, weight=1, uniform="profile")
         if not profiles:
             ctk.CTkLabel(self.profile_list, text="暂无启动档案", font=self.fonts["body"],
-                         text_color=T.TEXT_DIM).grid(row=0, column=0, sticky="ew", padx=12, pady=24)
+                         text_color=T.TEXT_DIM).grid(row=0, column=0, columnspan=self.COLUMNS,
+                                                     sticky="ew", padx=12, pady=24)
             return
         has_roster = bool(self._profile_role_values)
-        values = list(self._profile_role_values) or ["未读取到角色名册"]
         for index, profile in enumerate(profiles):
-            row = _card(self.profile_list, fg_color=T.SURFACE_2, corner_radius=T.RADIUS_SM)
-            row.grid(row=index, column=0, sticky="ew", padx=4, pady=5)
-            row.grid_columnconfigure(2, weight=1)
-            enabled = ctk.BooleanVar(value=profile.get("enabled", True))
-            ctk.CTkCheckBox(row, text="", variable=enabled, width=26,
-                            command=lambda p=profile, v=enabled: self._set_enabled(p["id"], v.get())).grid(
-                                row=0, column=0, rowspan=2, padx=(12, 6), pady=10)
-            ctk.CTkLabel(row, text=profile.get("label") or "未命名档案", font=self.fonts["body_b"],
-                         text_color=T.TEXT).grid(row=0, column=1, sticky="w", padx=(0, 10), pady=(10, 2))
-            role_var = ctk.StringVar(value=self._value_for_profile(profile, values[0]))
-            menu = ctk.CTkOptionMenu(row, values=values, variable=role_var, height=30, width=240,
-                                     font=self.fonts["small"], fg_color=T.BTN, button_color=T.SURFACE,
-                                     button_hover_color=T.BTN_HOVER, text_color=T.TEXT,
-                                     command=lambda value, pid=profile["id"]: self._set_role(pid, value))
-            menu.grid(row=0, column=2, sticky="ew", padx=(0, 10), pady=(10, 2))
-            role_name = profile.get("expected_role_name") or "未选择角色"
-            # 档案名已直接用角色名，故这里只补 role_id 做区分（同名不同服的两个号靠它分辨）。
-            role_id = str(profile.get("expected_role_id") or "") or "—"
-            ctk.CTkLabel(row, text="%s · %s" % (role_name, role_id), font=self.fonts["small"],
-                         text_color=T.TEXT_DIM).grid(
-                             row=1, column=1, columnspan=2, sticky="w", padx=(0, 10), pady=(0, 10))
-            buttons = ctk.CTkFrame(row, fg_color="transparent")
-            buttons.grid(row=0, column=3, rowspan=2, sticky="e", padx=(4, 10))
-            if not has_roster:
-                ctk.CTkButton(buttons, text="手填", font=self.fonts["small"], height=30, width=48,
-                              corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER,
-                              text_color=T.TEXT, border_width=1, border_color=T.BORDER,
-                              command=lambda p=profile: self._prompt_role_name(p)).pack(side="left", padx=2)
-            ctk.CTkButton(buttons, text="↑", font=self.fonts["body_b"], height=30, width=30,
-                          corner_radius=T.RADIUS_SM, fg_color="transparent", hover_color=T.BTN_HOVER,
-                          text_color=T.TEXT, command=lambda i=index: self._move(i, -1)).pack(side="left", padx=2)
-            ctk.CTkButton(buttons, text="↓", font=self.fonts["body_b"], height=30, width=30,
-                          corner_radius=T.RADIUS_SM, fg_color="transparent", hover_color=T.BTN_HOVER,
-                          text_color=T.TEXT, command=lambda i=index: self._move(i, 1)).pack(side="left", padx=2)
-            ctk.CTkButton(buttons, text="删除", font=self.fonts["small"], height=30, width=48,
-                          corner_radius=T.RADIUS_SM, fg_color="transparent", hover_color=T.DANGER,
-                          text_color=T.TEXT, border_width=1, border_color=T.BORDER,
-                          command=lambda pid=profile["id"]: self._delete_profile(pid)).pack(side="left", padx=2)
+            self._render_profile_cell(index, profile, has_roster)
 
-    def _value_for_profile(self, profile, fallback):
-        role_id = str(profile.get("expected_role_id") or "")
-        for value, pair in self._profile_role_values.items():
-            if pair[0] == role_id:
-                return value
-        return fallback
+    def _render_profile_cell(self, index, profile, has_roster):
+        """一格一个档案：复选框文字就是角色名，列数与小窗（QuickStartPanel）一致。
+
+        排布与小窗对齐后，档案与角色是一对一绑定的（换角色 = 删掉再加，见「＋ 新增档案」），
+        故不再有下拉框与「角色名 · role_id」副标题；排序/删除压缩成右侧的小按钮，能力不减。"""
+        cell = _card(self.profile_list, fg_color=T.SURFACE_2, corner_radius=T.RADIUS_SM)
+        cell.grid(row=index // self.COLUMNS, column=index % self.COLUMNS, sticky="ew", padx=4, pady=5)
+        cell.grid_columnconfigure(0, weight=1)
+        enabled = ctk.BooleanVar(value=profile.get("enabled", True))
+        box = ctk.CTkCheckBox(cell, text=_fit_name(profile.get("label") or "未命名档案"),
+                              variable=enabled, font=self.fonts["body"], height=30,
+                              text_color=T.TEXT, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
+                              command=lambda p=profile, v=enabled: self._set_enabled(p["id"], v.get()))
+        box.grid(row=0, column=0, sticky="ew", padx=(10, 6), pady=10)
+        buttons = ctk.CTkFrame(cell, fg_color="transparent")
+        buttons.grid(row=0, column=1, sticky="e", padx=(0, 8))
+        if not has_roster:
+            ctk.CTkButton(buttons, text="手填", font=self.fonts["small"], height=30, width=48,
+                          corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER,
+                          text_color=T.TEXT, border_width=1, border_color=T.BORDER,
+                          command=lambda p=profile: self._prompt_role_name(p)).pack(side="left", padx=2)
+        ctk.CTkButton(buttons, text="↑", font=self.fonts["body_b"], height=30, width=30,
+                      corner_radius=T.RADIUS_SM, fg_color="transparent", hover_color=T.BTN_HOVER,
+                      text_color=T.TEXT, command=lambda i=index: self._move(i, -1)).pack(side="left", padx=2)
+        ctk.CTkButton(buttons, text="↓", font=self.fonts["body_b"], height=30, width=30,
+                      corner_radius=T.RADIUS_SM, fg_color="transparent", hover_color=T.BTN_HOVER,
+                      text_color=T.TEXT, command=lambda i=index: self._move(i, 1)).pack(side="left", padx=2)
+        ctk.CTkButton(buttons, text="✕", font=self.fonts["body_b"], height=30, width=30,
+                      corner_radius=T.RADIUS_SM, fg_color="transparent", hover_color=T.DANGER,
+                      text_color=T.TEXT, border_width=1, border_color=T.BORDER,
+                      command=lambda pid=profile["id"]: self._delete_profile(pid)).pack(side="left", padx=2)
 
     def _account_cfg(self):
         cfg = cfg_mod.load_config()
@@ -353,12 +356,6 @@ class LaunchLoginPage(ctk.CTkFrame):
             self._create_profile("", name)
         else:
             self._update_profile(profile["id"], expected_role_id="", expected_role_name=name)
-
-    def _set_role(self, profile_id, value):
-        pair = self._profile_role_values.get(value)
-        if pair is None:
-            return
-        self._update_profile(profile_id, expected_role_id=pair[0], expected_role_name=pair[1])
 
     def _update_profile(self, profile_id, **updates):
         cfg = self._account_cfg()

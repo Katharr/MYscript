@@ -8,6 +8,7 @@ import os
 import sys
 import json
 import copy
+import time
 import shutil
 from pathlib import Path
 
@@ -24,6 +25,11 @@ else:
 
 PROJECT_ROOT = DATA_ROOT          # 兼容别名：vision.py / gui/app.py 仍按此拼相对路径
 CONFIG_PATH = DATA_ROOT / "config.json"
+# 世代快照目录：每写一次盘就留一份带时间戳的旧版（内容不变则跳过），
+# 出事故时能退到任意一个历史点。⚠ 别再退回「只留一份 .bak」——单份备份会被
+# 「第一次写坏、第二次再写」的连环覆盖挤掉，那正是标定被抹光后无处可恢复的成因。
+CONFIG_BACKUP_DIR = DATA_ROOT / "config_backups"
+BACKUP_KEEP = 60                     # 世代快照保留份数（每份约 20KB）
 TEMPLATES_DIR = DATA_ROOT / "templates"
 CAPTURES_DIR = DATA_ROOT / "captures"
 
@@ -558,6 +564,117 @@ def _deep_merge(base, new):
     return out
 
 
+# ---------------------------------------------------------------------------
+# 配置写盘护栏（开发侧约定，界面无感）
+# ---------------------------------------------------------------------------
+# 踩过两次的坑：某处把一个「残缺的 dict」写进了 config.json，此后界面上任何一次保存
+# 都会走 load_config()、用默认值把缺失字段补全 —— 用户花很久标好的 regions/templates
+# 全被抹成空，而旧实现只留一份 .bak，会被「第一次写坏、第二次再写」连环挤掉，无处可恢复。
+# 所以写盘只留 save_config 这一个出口，出口处做三件事：
+#   ① 顶层键不齐 = 调用方传了残缺配置 → 拒；
+#   ② 标定项比磁盘现版少一半以上 → 拒（挡住「补默认值把标定抹平」这条链）；
+#   ③ 测试进程不许写真实 config.json → 拒（含 discover -s tests 这类绕过式跑法）。
+# 拒绝时把待写内容留档到 config_backups/REJECTED-*.json 再抛异常，绝不静默丢弃。
+# 通过后先留一份带时间戳的世代快照，再原子写。真要重置配置就传 force=True。
+# ⚠ 恢复方式：把 config_backups/config-<时间戳>.json 复制回 config.json 即可（见 CLAUDE.md）。
+_REAL_CONFIG_PATH = CONFIG_PATH          # 模块加载时的真实路径：测试进程不许写它
+_CALIB_FIELDS = ("regions", "templates", "watchlist", "items", "leader_id_history")
+_MIN_LOST = 8                            # 标定缩水判定：丢的项数至少这么多才可能算事故
+_LOST_RATIO = 0.5                        # 且剩余不足原来的一半（绝对下限避免小配置误伤）
+
+
+class ConfigWriteRejected(RuntimeError):
+    """写盘被护栏拦下：这次写入会抹掉既有标定/档案，或调用方传了残缺配置。"""
+
+
+def _calib_count(cfg):
+    """数一份配置里的「用户产物」（标定区域、模板、清单）—— 这些是花时间标出来的。"""
+    if not isinstance(cfg, dict):
+        return 0
+    count = 0
+    for task in (cfg.get("tasks") or {}).values():
+        if not isinstance(task, dict):
+            continue
+        for field in _CALIB_FIELDS:
+            block = task.get(field)
+            if isinstance(block, dict):
+                count += sum(1 for value in block.values() if value)
+            elif isinstance(block, list):
+                count += sum(1 for value in block if value)
+    return count
+
+
+def _is_test_process():
+    if os.environ.get("PYTEST_CURRENT_TEST") or "pytest" in sys.modules:
+        return True
+    name = os.path.basename(sys.argv[0] or "").lower()
+    return any(token in name for token in ("test", "unittest", "pytest"))
+
+
+def _stamp():
+    """快照/留档文件名用的时间戳。带毫秒：同一秒内连写两次不会互相覆盖。"""
+    return time.strftime("%Y%m%d-%H%M%S") + "-%03d" % (int(time.time() * 1000) % 1000)
+
+
+def _reject_write(cfg, why):
+    dest = None
+    try:
+        CONFIG_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        dest = CONFIG_BACKUP_DIR / ("REJECTED-%s.json" % _stamp())
+        with open(dest, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2, default=str)
+    except (OSError, TypeError, ValueError):
+        dest = None
+    raise ConfigWriteRejected("%s（待写内容已留档：%s）" % (why, dest))
+
+
+def _check_write(cfg, force):
+    if not isinstance(cfg, dict):
+        _reject_write(cfg, "配置不是字典")
+    if force:
+        return
+    if Path(CONFIG_PATH) == _REAL_CONFIG_PATH and _is_test_process():
+        _reject_write(cfg, "测试进程试图写真实 config.json")
+    missing = sorted(set(DEFAULT_CONFIG) - set(cfg))
+    if missing:
+        _reject_write(cfg, "配置残缺，缺顶层键：%s" % "、".join(missing))
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            before = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return
+    old, new = _calib_count(before), _calib_count(cfg)
+    # 只补不夺的正常改动（改开关、加一件装备、删两个模板）一律放行：要「丢够 8 项」
+    # 且「剩不到一半」才判为事故。真要把配置清空重来，用 force=True。
+    if old - new >= _MIN_LOST and new < old * _LOST_RATIO:
+        _reject_write(cfg, "这次写盘会把标定/模板从 %d 项砍到 %d 项" % (old, new))
+
+
+def snapshot_config():
+    """给当前 config.json 留一份带时间戳的世代快照；内容与最新一份相同则跳过。
+
+    比单份 .bak 可靠：任何一次事故都能退到具体某个历史点。太旧的自动清掉。"""
+    if not CONFIG_PATH.exists():
+        return None
+    try:
+        CONFIG_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        current = CONFIG_PATH.read_bytes()
+        snaps = sorted(CONFIG_BACKUP_DIR.glob("config-*.json"),
+                       key=lambda p: p.stat().st_mtime, reverse=True)
+        if snaps and snaps[0].read_bytes() == current:
+            return None
+        dest = CONFIG_BACKUP_DIR / ("config-%s.json" % _stamp())
+        dest.write_bytes(current)
+        for old in snaps[BACKUP_KEEP - 1:]:
+            try:
+                old.unlink()
+            except OSError:
+                pass
+        return dest
+    except OSError:
+        return None
+
+
 def load_config():
     if not CONFIG_PATH.exists():
         return copy.deepcopy(DEFAULT_CONFIG)
@@ -569,19 +686,25 @@ def load_config():
     return _deep_merge(DEFAULT_CONFIG, user_cfg)
 
 
-def save_config(cfg):
-    """写盘前先把上一版留一份 config.json.bak（只留最近一版）。
+def save_config(cfg, force=False):
+    """写配置的唯一出口：先过护栏，再留世代快照，最后原子写。
 
-    代价是一次几 KB 的复制，换来「写坏了还能回到上一版」：曾发生过测试误调 save_config
-    把用户 config.json（标定 + 角色档案）整个覆盖、且无处可恢复的事故。备份失败不阻塞写盘。"""
+    ⚠ 别绕过它自己 open(config.json, "w")—— 绕过就等于把护栏、快照、原子写全丢了，
+    也正是「标定被抹掉却无处可恢复」的成因。确实要重置配置（会触发护栏）时传 force=True。
+    """
+    _check_write(cfg, force)
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    snapshot_config()
     if CONFIG_PATH.exists():
+        # 老习惯的最近一版备份保留；真正的安全网是上面的世代快照。
         try:
             shutil.copyfile(CONFIG_PATH, CONFIG_PATH.with_name(CONFIG_PATH.name + ".bak"))
         except OSError:
             pass
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+    tmp = CONFIG_PATH.with_name(CONFIG_PATH.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, CONFIG_PATH)
 
 
 def task_config(cfg, task_name):

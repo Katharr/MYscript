@@ -409,6 +409,19 @@ class LaunchLoginTests(unittest.TestCase):
         self.assertEqual(prof["expected_role_name"], "复杂角色名")
         self.assertTrue(saved["refreshed"])
 
+    def test_profile_name_only_truncated_when_too_long(self):
+        """启动队列按小窗排布（两列），过长的角色名要截断加省略号，普通名字原样显示。"""
+        from mhxy.gui.launch_login_page import _fit_name
+
+        self.assertEqual(_fit_name("小三号"), "小三号")
+        self.assertEqual(_fit_name(""), "")
+        long_name = "很" * 40
+        shown = _fit_name(long_name)
+        self.assertTrue(shown.endswith("…"))
+        self.assertLess(len(shown), len(long_name))
+        # 截断只影响显示，档案里存的仍是完整角色名
+        self.assertEqual(_fit_name("abcdefghijklmnopqrstuvwxyz"), "abcdefghijklmnopqrst…")
+
     def test_roster_ocr_returns_target_text_center(self):
         fake_engine = mock.Mock(return_value=([
             [[[10, 20], [50, 20], [50, 40], [10, 40]], "角色", 0.99],

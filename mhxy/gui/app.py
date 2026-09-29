@@ -4080,6 +4080,8 @@ class App(ctk.CTk):
     def __init__(self, compact=False):
         super().__init__()
         self._compact = bool(compact)
+        # 每次开机先留一份世代快照：出事时能退回「这次启动前的样子」（见 core/config 写盘护栏）。
+        cfg_mod.snapshot_config()
         self.cfg = cfg_mod.load_config()
         # 全局窗口识别按进程名过滤（避免把终端/编辑器等同名标题窗口当游戏号）；GUI 各窗口操作据此生效。
         win_mod.set_game_process(self.cfg.get("window_process") or win_mod.DEFAULT_GAME_PROCESS_SPEC)
