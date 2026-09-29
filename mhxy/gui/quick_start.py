@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 """紧凑启动形态的一键启动面板。"""
 
+import os
 import re
 import time
 import uuid
+from tkinter import filedialog
 
 import customtkinter as ctk
 
@@ -24,6 +26,7 @@ class QuickStartPanel(ctk.CTkFrame):
     """零游戏窗口时显示的档案选择与一键启动面板。"""
 
     LOG_SOURCE = "启动登录"
+    _ROLE_REFRESH_SEC = 5.0      # 还没档案时，每隔这么久重读一次名册（先开脚本、后开游戏的场景）
 
     def __init__(self, master, app):
         super().__init__(master, fg_color=T.BG)
@@ -35,6 +38,8 @@ class QuickStartPanel(ctk.CTkFrame):
         self._log_history = []
         self._cal_dialog = None
         self._dodged_at = 0.0
+        self._roles_checked_at = 0.0
+        self._roster_ids = set()
 
         self.grid_columnconfigure(0, weight=1)
         # 上半区保持紧凑，日志容器吃掉其后的全部空间。
@@ -84,6 +89,13 @@ class QuickStartPanel(ctk.CTkFrame):
             corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
             border_width=1, border_color=T.BORDER, command=self._open_calibrate)
         self.btn_calibrate.grid(row=0, column=1, sticky="e", padx=(T.SP_2, 0))
+        # 首次使用者没有任何线索可定位游戏目录，读不到角色名册 → 小窗（零窗口时唯一入口）
+        # 必须能自己选一次启动器，并把路径记住（见 _browse_launcher / accounts.set_launcher_path）。
+        self.btn_launcher = ctk.CTkButton(
+            controls, text="启动器…", font=self.fonts["body"], height=40, width=84,
+            corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
+            border_width=1, border_color=T.BORDER, command=self._browse_launcher)
+        self.btn_launcher.grid(row=0, column=2, sticky="e", padx=(T.SP_2, 0))
 
         ctk.CTkFrame(self, height=1, fg_color=T.BORDER).grid(
             row=4, column=0, sticky="ew", padx=T.SP_5, pady=(T.SP_1, T.SP_1))
@@ -112,7 +124,7 @@ class QuickStartPanel(ctk.CTkFrame):
         for child in self.profile_list.winfo_children():
             child.destroy()
         if not profiles:
-            self._set_status("状态：无档案")
+            self._set_status("状态：先选择游戏启动器")
         else:
             for index, profile in enumerate(profiles):
                 self._render_profile(index, profile)
@@ -143,18 +155,76 @@ class QuickStartPanel(ctk.CTkFrame):
         return merged, added
 
     def _sync_roster_profiles(self, cfg):
-        """把可读取的本机角色名册同步进启动档案。"""
+        """把可读取的本机角色名册同步进启动档案；读到名册就顺手记住游戏目录。"""
         account_cfg = cfg.setdefault("account_launch", {})
         profiles = account_cfg.setdefault("profiles", [])
         try:
             roster = accounts.roster()
         except Exception:
             roster = {}
+        self._roster_ids = {str(rid) for rid in (roster or {})}
         merged, added = self._merge_roster_profiles(profiles, roster)
         if added:
             account_cfg["profiles"] = merged
+        remembered = bool(roster) and self._remember_game_dir(cfg)
+        if added or remembered:
             cfg_mod.save_config(cfg)
         return merged
+
+    def _remember_game_dir(self, cfg):
+        """首次成功读到名册就把游戏目录记进 config.game_dir —— 以后游戏和启动器都不开也能读名册。
+
+        与完整界面「启动登录」页同源（gui/launch_login_page._remember_game_dir）：原先只有那一页会记，
+        而零窗口时小窗是唯一入口，于是首次使用者永远停在「看不到角色名」。返回 True=本次写入了。"""
+        if (cfg.get("game_dir") or "").strip():
+            return False
+        found = accounts.data_dir()
+        if not found:
+            return False
+        base = os.path.dirname(found) if os.path.basename(found).lower() == "localdata" else found
+        cfg["game_dir"] = base
+        accounts.set_game_dir(base)
+        self.app.cfg = cfg
+        return True
+
+    def _browse_launcher(self):
+        """选择游戏启动器：记住路径后即可在游戏没开时读名册拿角色名（首次使用者的唯一线索）。"""
+        try:
+            cfg = cfg_mod.load_config()
+            current = ((cfg.get("account_launch") or {}).get("launcher_path") or "").strip()
+            path = filedialog.askopenfilename(
+                parent=self.app, initialdir=(os.path.dirname(current) or None),
+                filetypes=[("启动程序", "*.exe *.lnk"), ("所有文件", "*.*")])
+        except Exception as exc:
+            self.append("打开文件选择失败：%s" % exc, "error")
+            return
+        if not path:
+            return
+        cfg.setdefault("account_launch", {})["launcher_path"] = path
+        cfg_mod.save_config(cfg)
+        self.app.cfg = cfg
+        accounts.set_launcher_path(path)
+        self.refresh()
+        if self._profile_count:
+            self.append("已记住启动器，读到 %d 个角色名。" % self._profile_count, "hit")
+        else:
+            self.append("已记住启动器，但没读到角色名册；请选游戏安装目录里的启动器。", "warn")
+            self._set_status("状态：未读到角色名册")
+
+    def _maybe_refresh_roles(self):
+        """还没档案时定期重读名册：常见「先开脚本、后开游戏/启动器」，名册是后到的。"""
+        if self._profile_count:
+            return
+        now = time.time()
+        if now - self._roles_checked_at < self._ROLE_REFRESH_SEC:
+            return
+        self._roles_checked_at = now
+        try:
+            roster = accounts.roster()
+        except Exception:
+            return
+        if {str(rid) for rid in (roster or {})} != self._roster_ids:
+            self.refresh()
 
     def _render_profile(self, index, profile):
         """以双列紧凑复选项呈现档案，避免少量档案也占满启动窗。"""
@@ -216,9 +286,11 @@ class QuickStartPanel(ctk.CTkFrame):
         self._move_away_from_launcher()
 
     def _sync_calibrate_button(self):
-        """运行中禁掉标定：标定要抢前台截图，和正在跑的启动流程会互相干扰。"""
+        """运行中禁掉标定与选启动器：两者都要抢前台截图/改配置，和正在跑的启动流程会互相干扰。"""
         try:
-            self.btn_calibrate.configure(state="disabled" if self._launched else "normal")
+            state = "disabled" if self._launched else "normal"
+            self.btn_calibrate.configure(state=state)
+            self.btn_launcher.configure(state=state)
         except Exception:
             pass
 
@@ -309,6 +381,7 @@ class QuickStartPanel(ctk.CTkFrame):
         self.app.destroy()
 
     def pump(self):
+        self._maybe_refresh_roles()
         if self.runner is None:
             return
         while not self.runner.log_queue.empty():
