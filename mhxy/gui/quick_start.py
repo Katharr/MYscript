@@ -265,11 +265,19 @@ class QuickStartPanel(ctk.CTkFrame):
         self.btn_run.configure(state="normal" if enabled else "disabled", text="⚡  一键启动",
                                fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER)
 
+    @staticmethod
+    def _prepare_launch_config(cfg):
+        """小窗一键启动是显式动作：仅对本次运行配置关闭演练，不改写全局配置文件。"""
+        task_cfg = cfg_mod.task_config(cfg, LaunchLoginTask.name)
+        task_cfg["dry_run"] = False
+        cfg_mod.set_task_config(cfg, LaunchLoginTask.name, task_cfg)
+        return cfg
+
     def _toggle_run(self):
         if self.runner is not None and self.runner.is_running():
             self._stop_and_wait_for_window()
             return
-        cfg = cfg_mod.load_config()
+        cfg = self._prepare_launch_config(cfg_mod.load_config())
         self.app.cfg = cfg
         self.runner = TaskRunner(LaunchLoginTask(), cfg)
         ok, problems = self.runner.start()

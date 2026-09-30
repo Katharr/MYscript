@@ -159,6 +159,32 @@ class QuickStartPanelTests(unittest.TestCase):
         self.assertEqual(stub.btn_run.calls[0]["state"], "disabled")
         self.assertEqual(stub.btn_run.calls[1]["state"], "normal")
 
+    def test_prepare_launch_config_forces_live_without_saving(self):
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        cfg["tasks"]["launch_login"]["dry_run"] = True
+
+        prepared = QuickStartPanel._prepare_launch_config(cfg)
+
+        self.assertIs(prepared, cfg)
+        self.assertFalse(prepared["tasks"]["launch_login"]["dry_run"])
+
+    def test_quick_start_passes_live_config_to_runner_without_saving(self):
+        stub = _PanelStub()
+        stub.runner = None
+        stub._prepare_launch_config = QuickStartPanel._prepare_launch_config
+        stub._move_away_from_launcher = mock.Mock()
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        cfg["tasks"]["launch_login"]["dry_run"] = True
+        with mock.patch("mhxy.gui.quick_start.cfg_mod.load_config", return_value=cfg), \
+             mock.patch("mhxy.gui.quick_start.cfg_mod.save_config") as save_config, \
+             mock.patch("mhxy.gui.quick_start.TaskRunner") as runner_cls:
+            runner_cls.return_value.start.return_value = (True, [])
+            QuickStartPanel._toggle_run(stub)
+
+        self.assertFalse(runner_cls.call_args.args[1]["tasks"]["launch_login"]["dry_run"])
+        stub.app.on_quick_start_started.assert_called_once_with(stub.runner)
+        save_config.assert_not_called()
+
     def test_set_enabled_persists_to_config(self):
         stub = _PanelStub()
         cfg = copy.deepcopy(DEFAULT_CONFIG)
