@@ -1,15 +1,14 @@
 # -*- coding: utf-8 -*-
-"""
-秒装备任务：循环刷新摆摊/市场列表，命中监控清单里的装备就立刻点它→购买→确认。
+"""当前商品页购买：商品模板命中即买，成功提示确认计数，Alt+A 开关刷新。
 
-设计取舍（用户已拍板）：命中即抢，不做 OCR 比价（模板匹配认不了“任意低于X价”）。
-所有点击走拟人化鼠标，间隔带抖动、偶尔走神。
+每窗口独立额度；购买结果等待期间保持该窗口前台，避免多开漏掉短暂提示。
+旧提示必须先消失才允许再次购买；结果不明停止整个任务，不猜成功或重试下单。
 """
-
 import time
 
-from ..core import vision
+from ..core import vision, rotation
 from ..core import window as win_mod
+from ..core.input import vk_of
 from .base import Task, register
 
 
@@ -17,200 +16,181 @@ from .base import Task, register
 class SniperTask(Task):
     name = "sniper"
     title = "秒装备"
-    description = "盯市场列表，目标装备一出现就秒下单"
-
-    # 标定向导用：区域项即原 REGION_ITEMS；秒装备有「装备清单」卡片，无标志模板。
+    description = "当前商品页刷新购买，买够即停"
     CALIBRATION = {
         "regions": [
-            ("listing", "货架/列表区域", "留空=整窗检测(推荐)", True),
-            ("category_button", "商品类别按钮", "左侧类别，如「奇珍异宝」"),
-            ("product_entry", "商品条目", "右侧要进的那个商品"),
-            ("buy_button", "购买按钮", "选中摊位后的「购买」"),
-            ("confirm_button", "确认购买按钮", "二次确认弹窗，没有可不标"),
+            ("listing", "商品识别区域", "框商品列表；留空用整窗", True),
+            ("buy_button", "购买按钮", "框选点击商品后出现的购买按钮"),
+            ("success", "成功提示识别区域", "框悬浮提示出现的位置；留空用整窗", True),
         ],
-        "templates": [],
-        "watchlist": True,
+        "templates": [
+            ("sniper_product", "商品模板", "只框商品图标或名称，不含价格"),
+            ("sniper_success", "购买成功提示", "只框能确认购买成功的固定内容"),
+        ],
+        "watchlist": False,
     }
+
+    def __init__(self):
+        self.progress = ()
 
     def preflight(self, ctx):
         tc = ctx.task_cfg(self.name)
         problems = []
-        regions = tc.get("regions", {})
-        # listing 留空=整窗检测，不再强制标定
-        if not regions.get("category_button"):
-            problems.append("『商品类别按钮』未标定 —— 刷新要靠它进货架")
-        if not regions.get("product_entry"):
-            problems.append("『商品条目』未标定 —— 刷新要靠它进货架")
-        watchlist = tc.get("watchlist", [])
-        if not watchlist:
-            problems.append("监控清单为空 —— 请先添加要抢的装备")
-        for it in watchlist:
-            if vision.load_template(it["template"]) is None:
-                problems.append(f"模板图丢失：{it['template']}（{it.get('name','?')}）")
+        count = tc.get("target_count", 1)
+        if isinstance(count, bool) or not isinstance(count, int) or count < 1:
+            problems.append("购买数量必须是正整数")
+        keys = ctx.hotkeys.get("open_shop", [])
+        if not keys or any(vk_of(k) is None for k in keys):
+            problems.append("商城快捷键未配置或无效")
+        if not tc.get("regions", {}).get("buy_button"):
+            problems.append("『购买按钮』未标定")
+        for key, label in (("sniper_product", "商品模板"), ("sniper_success", "购买成功提示")):
+            path = tc.get("templates", {}).get(key)
+            if not path or vision.load_template(path) is None:
+                problems.append(f"『{label}』未标定或模板图丢失")
         if not ctx.select_windows():
-            problems.append(f"没找到/没选中目标窗口（标题含「{ctx.window.title_substr}」）"
-                            "，请先打开游戏并在「选择窗口」里选好")
-        return (len(problems) == 0), problems
+            problems.append("没找到/没选中目标窗口")
+        return not problems, problems
+
+    def _publish(self, records, target):
+        self.progress = tuple((r["label"], r["count"], target, r["state"]) for r in records)
 
     def run(self, ctx):
         tc = ctx.task_cfg(self.name)
-        loop = tc["loop"]
-        regions = tc["regions"]
-        dry_run = tc.get("dry_run", True)
-
-        templates = [(it, vision.load_template(it["template"])) for it in tc["watchlist"]]
-        templates = [(it, tpl) for it, tpl in templates if tpl is not None]
-
-        threshold = loop["match_threshold"]
-        refresh_interval = loop["refresh_interval_sec"]
-        cooldown = loop["after_buy_cooldown_sec"]
-        # 命中后「下单那一下」用更激进的速度倍率（只在抢的瞬间生效，巡航点击仍保持常速拟人化）
-        snipe_speed = ctx.cfg.get("humanize", {}).get("snipe_speed", 3.0)
-        listing = regions.get("listing")        # 空=整窗检测
-        # 把每轮要用的参数打包，传给 _snipe_one_round（避免一长串形参）
-        pkg = (loop, regions, listing, templates, threshold, cooldown, snipe_speed, dry_run)
-
         multi = ctx.cfg.get("targets", {}).get("multi", False)
-        switch_delay = ctx.cfg.get("targets", {}).get("switch_delay_sec", 0.15)
-
-        if not self._is_admin():
-            ctx.log("⚠ 当前非管理员权限：游戏窗口在前台时鼠标可能无法移动/点击（UIPI 拦截）。"
-                    "请用『以管理员身份运行』重开。", level="warn")
-
         contexts = self._resolve_contexts(ctx, multi)
         if not contexts:
             ctx.log("没找到/没选中目标窗口，已停止。", level="error")
             return
+        target = tc["target_count"]
+        records = [{"ctx": c, "label": getattr(c, "label", "") or "当前窗口",
+                    "state": "识别中", "count": 0, "done": False,
+                    "dead_logged": False, "ready_at": 0, "clear_deadline": 0,
+                    "dry_logged": False} for c in contexts]
+        product = vision.load_template(tc["templates"]["sniper_product"])
+        success = vision.load_template(tc["templates"]["sniper_success"])
+        dry = tc.get("dry_run", True)
+        shop_key = "+".join(ctx.hotkeys.get("open_shop", [])).upper()
+        ctx.log(f"启动秒装备：每窗口目标 {target} 件，商城快捷键 {shop_key}。")
+        ctx.log("演练模式：只识别，不点击、不刷新、不计数。" if dry else "★ 实战模式：命中会真正购买 ★",
+                level="info" if dry else "warn")
 
-        ctx.log(f"启动完成：{('多开轮转 ' + str(len(contexts)) + ' 个号') if multi else '单号'}，"
-                f"监控 {len(templates)} 件装备，阈值 {threshold}，检测区："
-                f"{'整窗' if not listing else '手动框选'}")
-        ctx.log("演练模式（只识别不下单）" if dry_run else "★ 实战模式：命中会真正下单 ★",
-                level="warn" if not dry_run else "info")
+        self._notify_progress = lambda: self._publish(records, target)
 
-        rounds = 0
-        while not ctx.should_stop():
-            # 窗口可能被关/移动：多开时若有窗口失效就重新枚举选择
-            contexts = self._ensure_contexts(ctx, contexts, multi)
-            if not contexts:
-                self._interruptible_sleep(ctx, 2.0)
-                continue
+        def step(rec):
+            try:
+                self._step(rec, tc, product, success)
+            except Exception:
+                rec["state"] = "异常停止"
+                raise
+            finally:
+                self._publish(records, target)
 
-            for wctx in contexts:
-                if ctx.should_stop():
-                    break
-                if not self._prepare_window(wctx, multi):
-                    continue
-                wctx.mouse.maybe_idle()
-                self._snipe_one_round(wctx, pkg, refresh_interval)
-                # 多开：号与号之间留个小间隔，别太机械
-                if multi and len(contexts) > 1:
-                    self._interruptible_sleep(ctx, self._jitter(switch_delay, ctx))
+        self._publish(records, target)
+        rc = self._make_rotation(ctx, records, step, multi,
+                                 ctx.cfg.get("targets", {}).get("switch_delay_sec", 0.15),
+                                 tc["loop"].get("tick_interval_sec", 0.06))
+        # 商品页必须保持人工选定状态，禁止轮转钩子自动打开背包干扰。
+        rc.between_steps = lambda rec: None
+        rotation.run_rotation(rc)
+        if ctx.should_stop():
+            for rec in records:
+                if not rec["done"] and rec["state"] != "结果未确认":
+                    rec["state"] = "已停止"
+            self._publish(records, target)
+            ctx.log("秒装备已停止。")
+        else:
+            ctx.log("所有窗口已完成购买。")
 
-            rounds += 1
-            # 一整轮（所有号过一遍）之间留间隔（带抖动）
-            self._interruptible_sleep(ctx, self._jitter(refresh_interval, ctx))
-
-        ctx.log(f"已停止。共循环 {rounds} 轮。")
-
-    # ---- 多开轮转：窗口上下文的构建与维护 ----
-    # （_resolve_contexts / _ensure_contexts / _prepare_window 已上移 Task 基类，供逐号轮转任务共用）
-
-    def _snipe_one_round(self, ctx, pkg, refresh_interval):
-        """对单个号跑「一轮」：重进货架 → 等加载 → 识别 → 命中下单。"""
-        loop, regions, listing, templates, threshold, cooldown, snipe_speed, dry_run = pkg
-        # 刷新 = 重新进货架：点左侧类别 → 点右侧商品条目 → 等货架加载。
-        # 货架页面进去后不会自动上新，必须退出重进，所以这一步每轮都做。
-        if not self._enter_shelf(ctx, regions):
-            self._interruptible_sleep(ctx, self._jitter(refresh_interval, ctx))
-            return
-
-        # 截检测区并匹配（listing 空=整窗）。自适应等加载：画面一静止就识别。
-        list_rect = ctx.detection_rect(listing)
-        if list_rect is None:
-            self._interruptible_sleep(ctx, 0.5)
-            return
-        scene = self._wait_shelf_loaded(ctx, list_rect, loop)
+    def _match(self, ctx, region, tpl, threshold):
+        rect = ctx.detection_rect(region)
+        if rect is None:
+            raise RuntimeError("目标窗口不可用")
+        scene = win_mod.grab(rect)
         if scene is None:
+            raise RuntimeError("截图失败，已停止以避免重复购买")
+        return vision.match(scene, tpl, threshold), rect
+
+    def _step(self, rec, tc, product, success):
+        ctx = rec["ctx"]
+        if ctx.should_stop() or rec["done"]:
+            return
+        loop, regions = tc["loop"], tc["regions"]
+        threshold = loop.get("match_threshold", 0.85)
+        now = time.monotonic()
+        if now < rec["ready_at"]:
+            return
+        state = rec["state"]
+        if state == "等待关闭":
+            if not ctx.send_hotkey("open_shop"):
+                raise RuntimeError("发送商城快捷键失败")
+            rec["state"] = "等待商品页"
+            rec["ready_at"] = now + self._jitter(loop.get("shelf_load_wait_sec", 0.6), ctx)
+            return
+        if state == "等待商品页":
+            rec["state"] = "识别中"
             return
 
-        for it, tpl in templates:
+        old_hit, _ = self._match(ctx, regions.get("success"), success, threshold)
+        if old_hit is not None:
+            if not rec["clear_deadline"]:
+                rec["clear_deadline"] = now + loop.get("success_clear_timeout_sec", 5.0)
+            rec["state"] = "等待旧提示消失"
+            if now >= rec["clear_deadline"] and not tc.get("dry_run", True):
+                rec["state"] = "结果未确认"
+                ctx.log("旧成功提示持续存在，已停止，未继续购买。", level="error")
+                ctx.stop()
+            return
+        rec["clear_deadline"] = 0
+        rec["state"] = "识别中"
+        hit, rect = self._match(ctx, regions.get("listing"), product, threshold)
+        if tc.get("dry_run", True):
+            rec["state"] = "演练：商品命中" if hit else "演练：未匹配"
+            if hit and not rec["dry_logged"]:
+                ctx.log(f"[演练] 商品模板命中，相似度 {hit[2]:.3f}；不下单。", level="hit")
+            rec["dry_logged"] = hit is not None
+            rec["ready_at"] = now + 0.2
+            return
+        if hit is None:
+            ctx.mouse.maybe_idle()
             if ctx.should_stop():
-                break
-            hit = vision.match(scene, tpl, threshold)
-            if hit is None:
-                continue
-            cx, cy, score = hit
-            screen_xy = (list_rect[0] + cx, list_rect[1] + cy)
-            ctx.log(f"★ 命中【{it['name']}】相似度 {score:.3f} @ {screen_xy}", level="hit")
-            shot = self._save_capture(scene, it["name"])
-            ctx.log(f"  已存命中截图 captures/{shot}")
+                return
+            if not ctx.send_hotkey("open_shop"):
+                raise RuntimeError("发送商城快捷键失败")
+            rec["state"] = "等待关闭"
+            rec["ready_at"] = time.monotonic() + self._jitter(loop.get("shop_close_wait_sec", 0.25), ctx)
+            return
 
-            if dry_run:
-                ctx.log("  [演练] 不下单。确认无误后到设置里切换为实战。")
-            else:
-                self._buy_sequence(ctx, regions, screen_xy, snipe_speed)
-                ctx.log("  已执行购买动作序列（极速）。")
-                self._interruptible_sleep(ctx, cooldown)
-            break  # 一轮处理一件即可
-
-    # ---- 内部小工具（_is_admin/_jitter/_frame_diff/_click_region/_save_capture/_interruptible_sleep 已上移 Task 基类）----
-    def _enter_shelf(self, ctx, regions):
-        """刷新动作：点左侧类别 → 点右侧商品条目（进货架）。
-        等加载交给 _wait_shelf_loaded 自适应处理，这里只负责点击。
-        任一步缺标定或被停止则返回 False（主循环会跳过本轮识别）。"""
-        cat = regions.get("category_button")
-        prod = regions.get("product_entry")
-        if not cat or not prod:
-            ctx.log("类别/商品条目未标定，无法进货架刷新。", level="warn")
-            return False
-        if not self._click_region(ctx, cat):       # 选左侧类别（如「奇珍异宝」）
-            return False
-        ctx.mouse.sleep(0.25, 0.5)                 # 等右侧信息框切到该类别
+        # 选商品与购买之间可急停；每一购买必须完整等待结果，期间不轮转到别号。
+        speed = ctx.cfg.get("humanize", {}).get("snipe_speed", 3.0)
+        ctx.mouse.click(rect[0] + hit[0], rect[1] + hit[1], speed=speed)
+        self._interruptible_sleep(ctx, self._jitter(loop.get("after_select_wait_sec", 0.15), ctx))
         if ctx.should_stop():
-            return False
-        if not self._click_region(ctx, prod):      # 选右侧商品 → 进入它的货架
-            return False
-        return not ctx.should_stop()
-
-    def _wait_shelf_loaded(self, ctx, list_rect, loop):
-        """自适应等货架加载：先等一个最短时间，再每隔一小段截图比上一帧，
-        画面一旦静止（两帧几乎无差异）就认为加载完、立即返回该帧用于识别；
-        始终不超过 shelf_load_wait_sec（上限/超时）。被停止则返回 None。"""
-        min_w = self._jitter(loop.get("shelf_load_min_sec", 0.25), ctx)
-        max_w = max(min_w, loop.get("shelf_load_wait_sec", 1.2))
-        STABLE_DIFF = 1.5        # 两帧平均像素差低于此即视为画面静止（加载完成）
-        POLL = 0.06              # 轮询间隔
-
-        self._interruptible_sleep(ctx, min_w)
-        if ctx.should_stop():
-            return None
-        prev = win_mod.grab(list_rect)
-        deadline = time.time() + max(0.0, max_w - min_w)
-        while time.time() < deadline:
-            if ctx.should_stop():
-                return None
-            time.sleep(POLL)
-            cur = win_mod.grab(list_rect)
-            if cur is None:
-                return prev
-            if self._frame_diff(prev, cur) < STABLE_DIFF:
-                return cur       # 画面静止 → 加载完成，立即识别
-            prev = cur
-        return prev
-
-    def _buy_sequence(self, ctx, regions, hit_xy, speed=None):
-        """命中后的下单序列。speed 传入『极速』倍率，让这一连串点击尽量快——抢货成败就在这里。"""
-        ctx.mouse.click(hit_xy[0], hit_xy[1], speed=speed)      # 点中装备
-        self._snipe_sleep(0.18, speed)
-        self._click_region(ctx, regions.get("buy_button"), speed=speed)     # 购买
-        self._snipe_sleep(0.18, speed)
-        self._click_region(ctx, regions.get("confirm_button"), speed=speed) # 确认（可空）
-
-    @staticmethod
-    def _snipe_sleep(base, speed):
-        """下单中间的极短等待，按极速倍率压缩（仍留一点随机抖动，避免完全等距）。"""
-        import random
-        spd = max(0.2, float(speed)) if speed else 1.0
-        s = base / spd
-        time.sleep(max(0.0, s * (1 + random.uniform(-0.2, 0.2))))
+            return
+        # 选商品期间如出现旧提示，也不能把它计为下一次购买成功。
+        old_hit, _ = self._match(ctx, regions.get("success"), success, threshold)
+        if old_hit is not None:
+            rec["state"] = "等待旧提示消失"
+            return
+        if not self._click_region(ctx, regions.get("buy_button"), speed=speed):
+            raise RuntimeError("购买按钮不可用")
+        rec["state"] = "等待购买结果"
+        notify = getattr(self, "_notify_progress", None)
+        if notify:
+            notify()
+        deadline = time.monotonic() + loop.get("purchase_timeout_sec", 2.0)
+        while not ctx.should_stop():
+            hit, _ = self._match(ctx, regions.get("success"), success, threshold)
+            if hit is not None:
+                rec["count"] += 1
+                ctx.log(f"购买成功：{rec['count']} / {tc['target_count']}", level="hit")
+                rec["done"] = rec["count"] >= tc["target_count"]
+                rec["state"] = "已完成" if rec["done"] else "等待旧提示消失"
+                rec["clear_deadline"] = time.monotonic() + loop.get("success_clear_timeout_sec", 5.0)
+                return
+            if time.monotonic() >= deadline:
+                rec["state"] = "结果未确认"
+                ctx.log("未识别到购买成功提示，购买结果未确认，已停止。", level="error")
+                ctx.stop()
+                return
+            self._interruptible_sleep(ctx, loop.get("tick_interval_sec", 0.06))

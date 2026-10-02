@@ -282,10 +282,11 @@ class SniperPage(ctk.CTkFrame):
                       corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
                       border_width=1, border_color=T.BORDER,
                       command=lambda: self.app.open_window_picker(self.refresh)).pack(side="left", padx=(0, 8))
-        ctk.CTkButton(tools, text="标定 / 加装备", font=self.fonts["body"], height=36, width=104,
+        self.btn_calibrate = ctk.CTkButton(tools, text="标定", font=self.fonts["body"], height=36, width=104,
                       corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
                       border_width=1, border_color=T.BORDER,
-                      command=self._open_calibrate).pack(side="left", padx=(0, 8))
+                      command=self._open_calibrate)
+        self.btn_calibrate.pack(side="left", padx=(0, 8))
         ctk.CTkButton(tools, text="刷新配置", font=self.fonts["body"], height=36, width=104,
                       corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
                       border_width=1, border_color=T.BORDER,
@@ -303,31 +304,50 @@ class SniperPage(ctk.CTkFrame):
         self.switch_mode = ctk.CTkSwitch(box1, text="实战模式", font=self.fonts["body"],
                                          progress_color=T.DANGER, command=self._toggle_mode)
         self.switch_mode.pack(anchor="w")
+        self._build_quantity(opts)
 
-    # ---- 主体：监控清单（铺满；日志已移到全局右栏）----
+    # ---- 主体：模板与各号进度 ----
+    def _build_quantity(self, opts):
+        row = ctk.CTkFrame(opts, fg_color="transparent")
+        row.pack(anchor="w", pady=(12, 0))
+        ctk.CTkLabel(row, text="购买数量", font=self.fonts["body"], text_color=T.TEXT).pack(side="left", padx=(0, 12))
+        self.entry_count = ctk.CTkEntry(row, width=100, font=self.fonts["body"])
+        self.entry_count.pack(side="left")
+
+    # ---- 主体：模板与各号进度 ----
     def _build_body(self):
         body = ctk.CTkFrame(self, fg_color="transparent")
         body.grid(row=2, column=0, sticky="nsew", padx=4)
-        body.grid_columnconfigure(0, weight=1)   # 日志已移到全局右栏，主体内容独占整宽
-        body.grid_rowconfigure(0, weight=1)
-
-        # 监控清单卡片
-        left = Card(body)
-        left.grid(row=0, column=0, sticky="nsew", padx=(0, 7))
-        left.grid_rowconfigure(1, weight=1)
-        left.grid_columnconfigure(0, weight=1)
-        head = ctk.CTkFrame(left, fg_color="transparent")
-        head.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 8))
-        head.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(head, text="监控清单", font=self.fonts["h2"], text_color=T.TEXT).grid(row=0, column=0, sticky="w")
-        self.lbl_count = ctk.CTkLabel(head, text="", font=self.fonts["small"], text_color=T.TEXT_DIM)
-        self.lbl_count.grid(row=0, column=1, sticky="e")
-        self.list_frame = ctk.CTkScrollableFrame(left, fg_color="transparent")
+        body.grid_columnconfigure(0, weight=1)
+        body.grid_rowconfigure(1, weight=1)
+        assets = Card(body)
+        assets.grid(row=0, column=0, sticky="ew", pady=(0, 14))
+        assets.grid_columnconfigure((0, 1), weight=1)
+        self.template_slots = {}
+        for column, (key, name) in enumerate((("sniper_product", "商品模板"), ("sniper_success", "购买成功模板"))):
+            slot = ctk.CTkFrame(assets, fg_color="transparent")
+            slot.grid(row=0, column=column, sticky="ew", padx=16, pady=14)
+            slot.grid_columnconfigure(0, weight=1)
+            ctk.CTkLabel(slot, text=name, font=self.fonts["h2"], text_color=T.TEXT).grid(row=0, column=0, sticky="w")
+            image = ctk.CTkLabel(slot, text="未标定", height=64, text_color=T.TEXT_DIM)
+            image.grid(row=1, column=0, sticky="ew", pady=8)
+            status = ctk.CTkLabel(slot, text="", font=self.fonts["small"], text_color=T.TEXT_DIM)
+            status.grid(row=2, column=0, sticky="ew")
+            bind_wraplength(status)
+            self.template_slots[key] = (image, status)
+        self.lbl_regions = ctk.CTkLabel(assets, text="", font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
+        self.lbl_regions.grid(row=1, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 14))
+        bind_wraplength(self.lbl_regions)
+        progress = Card(body)
+        progress.grid(row=1, column=0, sticky="nsew")
+        progress.grid_columnconfigure(0, weight=1)
+        progress.grid_rowconfigure(1, weight=1)
+        ctk.CTkLabel(progress, text="购买进度", font=self.fonts["h2"], text_color=T.TEXT).grid(row=0, column=0, sticky="w", padx=16, pady=(14, 8))
+        self.list_frame = ctk.CTkScrollableFrame(progress, fg_color="transparent")
         self.list_frame.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 12))
         self.list_frame.grid_columnconfigure(0, weight=1)
         T.tune_scroll_speed(self.list_frame)
-
-        # 日志已统一到 App 右侧的全局日志面板，本页不再单独建日志框。
+        self._render_progress(())
 
     # ------------------------------------------------------------------
     # 数据刷新
@@ -335,68 +355,64 @@ class SniperPage(ctk.CTkFrame):
     def refresh(self):
         self.app.cfg = cfg_mod.load_config()
         tc = cfg_mod.task_config(self.app.cfg, self.TASK_NAME)
-        # 模式开关
         dry = tc.get("dry_run", True)
-        (self.switch_mode.select if not dry else self.switch_mode.deselect)()
-        self._render_mode_pill(dry)
-        # 清单
-        self._render_watchlist(tc.get("watchlist", []))
+        if not (self.runner and self.runner.is_running()):
+            (self.switch_mode.select if not dry else self.switch_mode.deselect)()
+            self.entry_count.delete(0, "end")
+            self.entry_count.insert(0, str(tc.get("target_count", 1)))
+            self._render_mode_pill(dry)
+        self._render_templates(tc)
 
-    def _render_watchlist(self, items):
-        # 内容没变就别重建：切页时 refresh 会反复调到这里，整段拆了重画是「切页卡顿」的来源之一。
-        sig = [(it.get("name"), it.get("template"), it.get("max_price")) for it in items]
-        if sig == getattr(self, "_wl_sig", None):
+    def _render_templates(self, tc):
+        templates = tc.get("templates", {})
+        sig = tuple((key, templates.get(key), self._template_stamp(templates.get(key))) for key in self.template_slots)
+        if sig != getattr(self, "_template_sig", None):
+            self._template_sig = sig
+            self._thumbs.clear()
+            for key, (image, status) in self.template_slots.items():
+                thumb = load_thumb(templates.get(key), self._thumbs, max_h=64)
+                image.configure(image=thumb, text="" if thumb else "未标定")
+                status.configure(text="已标定" if thumb else "未标定", text_color=T.SUCCESS if thumb else T.WARN)
+        regions = tc.get("regions", {})
+        self.lbl_regions.configure(text="  ·  ".join(
+            f"{label}：{'已标定' if regions.get(key) else ('整窗' if key != 'buy_button' else '未标定')}"
+            for key, label in (("listing", "商品区域"), ("buy_button", "购买按钮"), ("success", "成功提示区域"))))
+
+    @staticmethod
+    def _template_stamp(path):
+        if not path:
+            return None
+        try:
+            absolute = path if os.path.isabs(path) else str(cfg_mod.PROJECT_ROOT / path)
+            return os.stat(absolute).st_mtime_ns
+        except OSError:
+            return None
+
+    def _render_progress(self, snapshot):
+        if snapshot == getattr(self, "_progress_sig", None):
             return
-        self._wl_sig = sig
-        for w in self.list_frame.winfo_children():
-            w.destroy()
-        self._thumbs.clear()
-        self.lbl_count.configure(text=f"{len(items)} 件")
-
-        if not items:
-            empty = ctk.CTkLabel(self.list_frame, text="点上方「标定 / 加装备」添加。",
-                                 font=self.fonts["body"], text_color=T.TEXT_DIM, justify="left")
-            empty.grid(row=0, column=0, sticky="ew", padx=12, pady=20)
-            bind_wraplength(empty)
+        self._progress_sig = snapshot
+        for widget in self.list_frame.winfo_children():
+            widget.destroy()
+        if not snapshot:
+            ctk.CTkLabel(self.list_frame, text="待启动", font=self.fonts["body"], text_color=T.TEXT_DIM).grid(row=0, column=0, sticky="w", padx=12, pady=16)
             return
-
-        for i, it in enumerate(items):
+        for i, (label, count, target, state) in enumerate(snapshot):
             row = ctk.CTkFrame(self.list_frame, fg_color=T.SURFACE_2, corner_radius=T.RADIUS_SM)
-            row.grid(row=i, column=0, sticky="ew", pady=4, padx=4)
-            row.grid_columnconfigure(1, weight=1)
+            row.grid(row=i, column=0, sticky="ew", padx=4, pady=4)
+            row.grid_columnconfigure(0, weight=1)
+            name = ctk.CTkLabel(row, text=str(label), font=self.fonts["body_b"], text_color=T.TEXT, anchor="w")
+            name.grid(row=0, column=0, sticky="ew", padx=12, pady=(8, 0))
+            bind_wraplength(name)
+            ctk.CTkLabel(row, text=f"{count} / {target}", font=self.fonts["body_b"], text_color=T.TEXT).grid(row=0, column=1, padx=12, pady=(8, 0))
+            status = ctk.CTkLabel(row, text=str(state), font=self.fonts["small"], text_color=T.TEXT_DIM, anchor="w")
+            status.grid(row=1, column=0, columnspan=2, sticky="ew", padx=12, pady=(0, 8))
+            bind_wraplength(status)
 
-            thumb = self._load_thumb(it.get("template"))
-            if thumb is not None:
-                ctk.CTkLabel(row, text="", image=thumb).grid(row=0, column=0, padx=(10, 8), pady=8)
-            else:
-                ctk.CTkLabel(row, text="🗡", font=self.fonts["h2"]).grid(row=0, column=0, padx=(10, 8), pady=8)
-
-            info = ctk.CTkFrame(row, fg_color="transparent")
-            info.grid(row=0, column=1, sticky="w")
-            ctk.CTkLabel(info, text=it.get("name", "?"), font=self.fonts["body_b"],
-                         text_color=T.TEXT).pack(anchor="w")
-            price = it.get("max_price")
-            ptxt = "不限价（命中即抢）" if price is None else f"参考价 ≤ {price}"
-            ctk.CTkLabel(info, text=ptxt, font=self.fonts["small"], text_color=T.TEXT_DIM).pack(anchor="w")
-
-            ctk.CTkButton(row, text="删除", font=self.fonts["small"], height=28, width=52,
-                          corner_radius=T.RADIUS_SM, fg_color="transparent", hover_color=T.DANGER, text_color=T.TEXT,
-                          border_width=1, border_color=T.BORDER,
-                          command=lambda idx=i: self._delete_item(idx)).grid(row=0, column=2, padx=10)
-
-    def _load_thumb(self, template_rel):
-        # 逻辑已抽成模块级 load_thumb（多页共享）；保留本方法名兼容现有调用。
-        return load_thumb(template_rel, self._thumbs)
-
-    def _delete_item(self, idx):
-        tc = cfg_mod.task_config(self.app.cfg, self.TASK_NAME)
-        wl = tc.get("watchlist", [])
-        if 0 <= idx < len(wl):
-            removed = wl.pop(idx)
-            cfg_mod.set_task_config(self.app.cfg, self.TASK_NAME, tc)
-            cfg_mod.save_config(self.app.cfg)
-            self._log_line(f"已删除监控：{removed.get('name','?')}", "info")
-            self._render_watchlist(wl)
+    def _set_editable(self, editable):
+        state = "normal" if editable else "disabled"
+        for widget in (self.entry_count, self.switch_mode, self.btn_calibrate):
+            widget.configure(state=state)
 
     # ------------------------------------------------------------------
     # 运行控制
@@ -408,23 +424,53 @@ class SniperPage(ctk.CTkFrame):
             self.btn_run.configure(text="停止中…", state="disabled")
             return
         # 启动
+        if self._cal_dialog is not None:
+            try:
+                if self._cal_dialog.winfo_exists():
+                    self._log_line("无法启动：请先关闭标定窗口", "error")
+                    return
+            except Exception:
+                pass
+        raw_count = self.entry_count.get().strip()
+        if not raw_count.isascii() or not raw_count.isdecimal() or int(raw_count) <= 0:
+            self._log_line("无法启动：购买数量必须是正整数", "error")
+            self.entry_count.focus_set()
+            return
         self.app.cfg = cfg_mod.load_config()
+        tc = cfg_mod.task_config(self.app.cfg, self.TASK_NAME)
+        tc["target_count"] = int(raw_count)
+        tc["dry_run"] = not bool(self.switch_mode.get())
+        cfg_mod.set_task_config(self.app.cfg, self.TASK_NAME, tc)
+        try:
+            cfg_mod.save_config(self.app.cfg)
+        except Exception as e:
+            self._log_line(f"无法启动：配置保存失败：{e}", "error")
+            return
         task_cls = get_task(self.TASK_NAME)
         self.runner = TaskRunner(task_cls(), self.app.cfg)
+        self._set_editable(False)
         ok, problems = self.runner.start()
         if not ok:
             for p in problems:
                 self._log_line("无法启动：" + p, "error")
             self.runner = None
+            self._set_editable(True)
             return
+        self._render_progress(getattr(self.runner.task, "progress", ()))
         self.btn_run.configure(text="■  停止", fg_color=T.DANGER, hover_color=T.DANGER_HOVER, state="normal")
         self.app.on_task_started("秒装备", self._toggle_run, self.runner)
 
     def _on_runner_finished(self):
+        self._set_editable(True)
         self.btn_run.configure(text="▶  开始秒装备", fg_color=T.ACCENT,
                                hover_color=T.ACCENT_HOVER, state="normal")
 
     def _toggle_mode(self):
+        if self.runner and self.runner.is_running():
+            dry = cfg_mod.task_config(self.runner.cfg, self.TASK_NAME).get("dry_run", True)
+            (self.switch_mode.deselect if dry else self.switch_mode.select)()
+            return
+        self.app.cfg = cfg_mod.load_config()
         live = bool(self.switch_mode.get())  # 1=实战
         tc = cfg_mod.task_config(self.app.cfg, self.TASK_NAME)
         tc["dry_run"] = not live
@@ -443,6 +489,8 @@ class SniperPage(ctk.CTkFrame):
             self.pill_mode.configure(text="实战", fg_color=T.PILL_DANGER_BG, text_color=T.DANGER)
 
     def _open_calibrate(self):
+        if self.runner and self.runner.is_running():
+            return
         # 全程在 GUI 内完成，不再开黑窗子进程
         if getattr(self, "_cal_dialog", None) is not None:
             try:
@@ -469,8 +517,9 @@ class SniperPage(ctk.CTkFrame):
     # 日志与状态（由 App 的定时器驱动）
     # ------------------------------------------------------------------
     def pump(self):
-        """被 App._tick 周期调用：抽干日志队列、检测运行结束、刷新游戏连接药丸。"""
+        """被 App._tick 周期调用：抽干日志队列、检测运行结束、读取进度快照。"""
         if self.runner:
+            self._render_progress(getattr(self.runner.task, "progress", ()))
             q = self.runner.log_queue
             while not q.empty():
                 level, msg = q.get()
@@ -2360,10 +2409,10 @@ class SettingsPage(ctk.CTkFrame):
         ("humanize", "speed", "整体速度倍率", 0.5, 3.0, 25, 2),
         ("humanize", "snipe_speed", "命中下单极速倍率", 1.0, 6.0, 25, 1),
         ("humanize", "px_per_step", "鼠标移动步长(px)", 6, 40, 34, 0),
-        ("loop", "shelf_load_wait_sec", "货架加载最长等待(秒)", 0.2, 3.0, 28, 2),
-        ("loop", "shelf_load_min_sec", "货架加载最短等待(秒)", 0.0, 1.5, 30, 2),
-        ("loop", "refresh_interval_sec", "两轮间隔(秒)", 0.0, 3.0, 30, 2),
-        ("loop", "after_buy_cooldown_sec", "购买后冷却(秒)", 0.3, 5.0, 47, 2),
+        ("loop", "shelf_load_wait_sec", "商城打开等待(秒)", 0.2, 3.0, 28, 2),
+        ("loop", "shop_close_wait_sec", "商城关闭等待(秒)", 0.1, 1.5, 28, 2),
+        ("loop", "after_select_wait_sec", "商品选中等待(秒)", 0.05, 1.0, 19, 2),
+        ("loop", "purchase_timeout_sec", "购买结果等待(秒)", 0.5, 5.0, 45, 2),
         ("humanize", "idle_chance", "走神概率", 0.0, 0.10, 20, 3),
         ("humanize", "click_radius", "落点随机半径(px)", 0, 12, 12, 0),
         ("humanize", "interval_jitter", "间隔抖动比例", 0.0, 0.8, 16, 2),

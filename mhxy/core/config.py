@@ -198,22 +198,26 @@ DEFAULT_CONFIG = {
         },
 
         "sniper": {
-            "dry_run": True,             # true=演练只识别不下单
+            "dry_run": True,
+            "target_count": 1,           # 每个窗口独立购买额度；一次购买一件
             "loop": {
-                "refresh_interval_sec": 0.2,    # 两轮「进货架查看」之间的间隔（带抖动），别太机械【标准抢货档】
-                "shelf_load_wait_sec": 1.2,     # 等货架加载的「最长」等待（自适应：画面静止即提前结束，这是上限/超时）
-                "shelf_load_min_sec": 0.15,     # 等货架加载的「最短」等待（再快也至少等这么久，给画面起步时间）【标准抢货档】
                 "match_threshold": 0.85,
-                "after_buy_cooldown_sec": 2.0
+                "tick_interval_sec": 0.06,
+                "shop_close_wait_sec": 0.25,
+                "shelf_load_wait_sec": 0.6,
+                "after_select_wait_sec": 0.15,
+                "purchase_timeout_sec": 2.0,
+                "success_clear_timeout_sec": 5.0
             },
-            "regions": {                 # 由标定向导写入，相对游戏窗口左上角 [x,y,w,h]
-                "listing": None,         # 货架/列表识别区域
-                "category_button": None, # 左侧侧边栏的商品类别（如「奇珍异宝」）
-                "product_entry": None,   # 右侧信息框里要进的那个商品条目
+            "regions": {
+                "listing": None,
                 "buy_button": None,
-                "confirm_button": None
+                "success": None
             },
-            "watchlist": []              # [{name, template, max_price}]
+            "templates": {
+                "sniper_product": None,
+                "sniper_success": None
+            }
         },
 
         # ---- 自由点击（用户自己框一批截图当模板，按清单顺序循环识别、认到就点）----
@@ -675,6 +679,25 @@ def snapshot_config():
         return None
 
 
+def _normalize_sniper(cfg):
+    """仅迁移秒装备：保留旧首个商品模板和有效点位，弃用导航/确认流程。"""
+    tc = cfg.get("tasks", {}).get("sniper")
+    if not isinstance(tc, dict):
+        return cfg
+    legacy_mode = "watchlist" in tc or "category_button" in tc.get("regions", {})
+    legacy = tc.pop("watchlist", [])
+    if legacy_mode:
+        tc["dry_run"] = True
+    templates = tc.setdefault("templates", {})
+    if not templates.get("sniper_product") and legacy:
+        templates["sniper_product"] = legacy[0].get("template")
+    for key in ("category_button", "product_entry", "confirm_button", "refresh_button"):
+        tc.setdefault("regions", {}).pop(key, None)
+    for key in ("refresh_interval_sec", "shelf_load_min_sec", "after_buy_cooldown_sec"):
+        tc.setdefault("loop", {}).pop(key, None)
+    return cfg
+
+
 def load_config():
     if not CONFIG_PATH.exists():
         return copy.deepcopy(DEFAULT_CONFIG)
@@ -683,7 +706,7 @@ def load_config():
             user_cfg = json.load(f)
     except (json.JSONDecodeError, OSError):
         return copy.deepcopy(DEFAULT_CONFIG)
-    return _deep_merge(DEFAULT_CONFIG, user_cfg)
+    return _normalize_sniper(_deep_merge(DEFAULT_CONFIG, user_cfg))
 
 
 def save_config(cfg, force=False):
