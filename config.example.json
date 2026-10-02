@@ -240,17 +240,18 @@
         "tick_interval_sec": 0.06,
         "shop_close_wait_sec": 0.25,
         "shelf_load_wait_sec": 0.6,
-        "after_select_wait_sec": 0.15,
         "purchase_timeout_sec": 2.0,
         "success_clear_timeout_sec": 5.0
       },
       "regions": {
         "listing": null,
-        "buy_button": null,
+        "purchase": null,
         "success": null
       },
       "templates": {
         "sniper_product": null,
+        "sniper_buy": null,
+        "sniper_buy_confirm": null,
         "sniper_success": null
       }
     },

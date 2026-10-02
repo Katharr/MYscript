@@ -205,17 +205,18 @@ DEFAULT_CONFIG = {
                 "tick_interval_sec": 0.06,
                 "shop_close_wait_sec": 0.25,
                 "shelf_load_wait_sec": 0.6,
-                "after_select_wait_sec": 0.15,
                 "purchase_timeout_sec": 2.0,
                 "success_clear_timeout_sec": 5.0
             },
             "regions": {
                 "listing": None,
-                "buy_button": None,
+                "purchase": None,
                 "success": None
             },
             "templates": {
                 "sniper_product": None,
+                "sniper_buy": None,
+                "sniper_buy_confirm": None,
                 "sniper_success": None
             }
         },
@@ -691,7 +692,7 @@ def _normalize_sniper(cfg):
     templates = tc.setdefault("templates", {})
     if not templates.get("sniper_product") and legacy:
         templates["sniper_product"] = legacy[0].get("template")
-    for key in ("category_button", "product_entry", "confirm_button", "refresh_button"):
+    for key in ("category_button", "product_entry", "confirm_button", "refresh_button", "buy_button"):
         tc.setdefault("regions", {}).pop(key, None)
     for key in ("refresh_interval_sec", "shelf_load_min_sec", "after_buy_cooldown_sec"):
         tc.setdefault("loop", {}).pop(key, None)

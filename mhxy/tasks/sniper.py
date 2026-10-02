@@ -20,11 +20,13 @@ class SniperTask(Task):
     CALIBRATION = {
         "regions": [
             ("listing", "商品识别区域", "框商品列表；留空用整窗", True),
-            ("buy_button", "购买按钮", "框选点击商品后出现的购买按钮"),
+            ("purchase", "购买按钮识别区域", "框两次购买按钮所在区域；留空用整窗", True),
             ("success", "成功提示识别区域", "框悬浮提示出现的位置；留空用整窗", True),
         ],
         "templates": [
             ("sniper_product", "商品模板", "只框商品图标或名称，不含价格"),
+            ("sniper_buy", "第一次购买按钮模板", "只框第一次购买按钮文字或按钮本体"),
+            ("sniper_buy_confirm", "第二次购买按钮模板", "只框第二次购买按钮文字或按钮本体"),
             ("sniper_success", "购买成功提示", "只框能确认购买成功的固定内容"),
         ],
         "watchlist": False,
@@ -42,9 +44,13 @@ class SniperTask(Task):
         keys = ctx.hotkeys.get("open_shop", [])
         if not keys or any(vk_of(k) is None for k in keys):
             problems.append("商城快捷键未配置或无效")
-        if not tc.get("regions", {}).get("buy_button"):
-            problems.append("『购买按钮』未标定")
-        for key, label in (("sniper_product", "商品模板"), ("sniper_success", "购买成功提示")):
+        if not tc.get("regions", {}).get("purchase"):
+            # 留空=整窗匹配，允许按钮位置变化。
+            pass
+        for key, label in (("sniper_product", "商品模板"),
+                           ("sniper_buy", "第一次购买按钮模板"),
+                           ("sniper_buy_confirm", "第二次购买按钮模板"),
+                           ("sniper_success", "购买成功提示")):
             path = tc.get("templates", {}).get(key)
             if not path or vision.load_template(path) is None:
                 problems.append(f"『{label}』未标定或模板图丢失")
@@ -68,6 +74,8 @@ class SniperTask(Task):
                     "dead_logged": False, "ready_at": 0, "clear_deadline": 0,
                     "dry_logged": False} for c in contexts]
         product = vision.load_template(tc["templates"]["sniper_product"])
+        buy_button = vision.load_template(tc["templates"]["sniper_buy"])
+        buy_confirm = vision.load_template(tc["templates"]["sniper_buy_confirm"])
         success = vision.load_template(tc["templates"]["sniper_success"])
         dry = tc.get("dry_run", True)
         shop_key = "+".join(ctx.hotkeys.get("open_shop", [])).upper()
@@ -79,7 +87,7 @@ class SniperTask(Task):
 
         def step(rec):
             try:
-                self._step(rec, tc, product, success)
+                self._step(rec, tc, product, buy_button, buy_confirm, success)
             except Exception:
                 rec["state"] = "异常停止"
                 raise
@@ -111,7 +119,7 @@ class SniperTask(Task):
             raise RuntimeError("截图失败，已停止以避免重复购买")
         return vision.match(scene, tpl, threshold), rect
 
-    def _step(self, rec, tc, product, success):
+    def _step(self, rec, tc, product, buy_button, buy_confirm, success):
         ctx = rec["ctx"]
         if ctx.should_stop() or rec["done"]:
             return
@@ -161,19 +169,30 @@ class SniperTask(Task):
             rec["ready_at"] = time.monotonic() + self._jitter(loop.get("shop_close_wait_sec", 0.25), ctx)
             return
 
-        # 选商品与购买之间可急停；每一购买必须完整等待结果，期间不轮转到别号。
         speed = ctx.cfg.get("humanize", {}).get("snipe_speed", 3.0)
         ctx.mouse.click(rect[0] + hit[0], rect[1] + hit[1], speed=speed)
-        self._interruptible_sleep(ctx, self._jitter(loop.get("after_select_wait_sec", 0.15), ctx))
         if ctx.should_stop():
             return
-        # 选商品期间如出现旧提示，也不能把它计为下一次购买成功。
-        old_hit, _ = self._match(ctx, regions.get("success"), success, threshold)
-        if old_hit is not None:
-            rec["state"] = "等待旧提示消失"
+
+        # 选中商品后立刻匹配第一次购买按钮，不用固定坐标。
+        speed = ctx.cfg.get("humanize", {}).get("snipe_speed", 3.0)
+        first_buy, buy_rect = self._match(ctx, regions.get("purchase"), buy_button, threshold)
+        if first_buy is None:
+            rec["state"] = "第一次购买按钮未匹配"
+            ctx.log("商品已选中，但未立即匹配到第一次购买按钮，已停止。", level="error")
+            ctx.stop()
             return
-        if not self._click_region(ctx, regions.get("buy_button"), speed=speed):
-            raise RuntimeError("购买按钮不可用")
+        ctx.mouse.click(buy_rect[0] + first_buy[0], buy_rect[1] + first_buy[1], speed=speed)
+
+        # 第一次购买点击后立刻匹配第二次购买按钮，匹配到后立即点击。
+        second_buy, confirm_rect = self._match(ctx, regions.get("purchase"), buy_confirm, threshold)
+        if second_buy is None:
+            rec["state"] = "第二次购买按钮未匹配"
+            ctx.log("第一次购买已点击，但未立即匹配到第二次购买按钮，已停止。", level="error")
+            ctx.stop()
+            return
+        ctx.mouse.click(confirm_rect[0] + second_buy[0], confirm_rect[1] + second_buy[1], speed=speed)
+
         rec["state"] = "等待购买结果"
         notify = getattr(self, "_notify_progress", None)
         if notify:

@@ -324,9 +324,13 @@ class SniperPage(ctk.CTkFrame):
         assets.grid(row=0, column=0, sticky="ew", pady=(0, 14))
         assets.grid_columnconfigure((0, 1), weight=1)
         self.template_slots = {}
-        for column, (key, name) in enumerate((("sniper_product", "商品模板"), ("sniper_success", "购买成功模板"))):
+        for column, (key, name) in enumerate((
+                ("sniper_product", "商品模板"),
+                ("sniper_buy", "第一次购买按钮模板"),
+                ("sniper_buy_confirm", "第二次购买按钮模板"),
+                ("sniper_success", "购买成功模板"))):
             slot = ctk.CTkFrame(assets, fg_color="transparent")
-            slot.grid(row=0, column=column, sticky="ew", padx=16, pady=14)
+            slot.grid(row=column // 2, column=column % 2, sticky="ew", padx=16, pady=14)
             slot.grid_columnconfigure(0, weight=1)
             ctk.CTkLabel(slot, text=name, font=self.fonts["h2"], text_color=T.TEXT).grid(row=0, column=0, sticky="w")
             image = ctk.CTkLabel(slot, text="未标定", height=64, text_color=T.TEXT_DIM)
@@ -336,7 +340,7 @@ class SniperPage(ctk.CTkFrame):
             bind_wraplength(status)
             self.template_slots[key] = (image, status)
         self.lbl_regions = ctk.CTkLabel(assets, text="", font=self.fonts["small"], text_color=T.TEXT_DIM, justify="left")
-        self.lbl_regions.grid(row=1, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 14))
+        self.lbl_regions.grid(row=2, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 14))
         bind_wraplength(self.lbl_regions)
         progress = Card(body)
         progress.grid(row=1, column=0, sticky="nsew")
@@ -376,7 +380,7 @@ class SniperPage(ctk.CTkFrame):
         regions = tc.get("regions", {})
         self.lbl_regions.configure(text="  ·  ".join(
             f"{label}：{'已标定' if regions.get(key) else ('整窗' if key != 'buy_button' else '未标定')}"
-            for key, label in (("listing", "商品区域"), ("buy_button", "购买按钮"), ("success", "成功提示区域"))))
+            for key, label in (("listing", "商品区域"), ("purchase", "购买按钮区域"), ("success", "成功提示区域"))))
 
     @staticmethod
     def _template_stamp(path):
@@ -2411,7 +2415,6 @@ class SettingsPage(ctk.CTkFrame):
         ("humanize", "px_per_step", "鼠标移动步长(px)", 6, 40, 34, 0),
         ("loop", "shelf_load_wait_sec", "商城打开等待(秒)", 0.2, 3.0, 28, 2),
         ("loop", "shop_close_wait_sec", "商城关闭等待(秒)", 0.1, 1.5, 28, 2),
-        ("loop", "after_select_wait_sec", "商品选中等待(秒)", 0.05, 1.0, 19, 2),
         ("loop", "purchase_timeout_sec", "购买结果等待(秒)", 0.5, 5.0, 45, 2),
         ("humanize", "idle_chance", "走神概率", 0.0, 0.10, 20, 3),
         ("humanize", "click_radius", "落点随机半径(px)", 0, 12, 12, 0),
