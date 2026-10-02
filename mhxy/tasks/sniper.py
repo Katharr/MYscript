@@ -27,6 +27,7 @@ class SniperTask(Task):
             ("sniper_product", "商品模板", "只框商品图标或名称，不含价格"),
             ("sniper_buy", "第一次购买按钮模板", "只框第一次购买按钮文字或按钮本体"),
             ("sniper_buy_confirm", "第二次购买按钮模板", "只框第二次购买按钮文字或按钮本体"),
+            ("sniper_interference_close", "干扰关闭叉叉模板", "只框干扰弹窗右上角叉叉"),
             ("sniper_success", "购买成功提示", "只框能确认购买成功的固定内容"),
         ],
         "watchlist": False,
@@ -50,6 +51,7 @@ class SniperTask(Task):
         for key, label in (("sniper_product", "商品模板"),
                            ("sniper_buy", "第一次购买按钮模板"),
                            ("sniper_buy_confirm", "第二次购买按钮模板"),
+                           ("sniper_interference_close", "干扰关闭叉叉模板"),
                            ("sniper_success", "购买成功提示")):
             path = tc.get("templates", {}).get(key)
             if not path or vision.load_template(path) is None:
@@ -76,6 +78,7 @@ class SniperTask(Task):
         product = vision.load_template(tc["templates"]["sniper_product"])
         buy_button = vision.load_template(tc["templates"]["sniper_buy"])
         buy_confirm = vision.load_template(tc["templates"]["sniper_buy_confirm"])
+        interference_close = vision.load_template(tc["templates"]["sniper_interference_close"])
         success = vision.load_template(tc["templates"]["sniper_success"])
         dry = tc.get("dry_run", True)
         shop_key = "+".join(ctx.hotkeys.get("open_shop", [])).upper()
@@ -87,7 +90,7 @@ class SniperTask(Task):
 
         def step(rec):
             try:
-                self._step(rec, tc, product, buy_button, buy_confirm, success)
+                self._step(rec, tc, product, buy_button, buy_confirm, interference_close, success)
             except Exception:
                 rec["state"] = "异常停止"
                 raise
@@ -119,7 +122,29 @@ class SniperTask(Task):
             raise RuntimeError("截图失败，已停止以避免重复购买")
         return vision.match(scene, tpl, threshold), rect
 
-    def _step(self, rec, tc, product, buy_button, buy_confirm, success):
+    def _close_interference(self, ctx, tc, tpl, threshold, speed):
+        """发现干扰弹窗就立即点叉；返回是否处理过。"""
+        if tpl is None:
+            return False
+        hit, rect = self._match(ctx, tc["regions"].get("purchase"), tpl, threshold)
+        if hit is None:
+            return False
+        if tc.get("dry_run", True):
+            ctx.log("[演练] 匹配到干扰关闭叉叉，不点击。", level="hit")
+            return False
+        ctx.mouse.click(rect[0] + hit[0], rect[1] + hit[1], speed=speed)
+        return True
+
+    def _refresh_after_failure(self, rec, tc):
+        """购买结果超时：关开商城回到当前商品页，下一轮继续抢。"""
+        ctx = rec["ctx"]
+        if not ctx.send_hotkey("open_shop"):
+            raise RuntimeError("发送商城快捷键失败")
+        rec["state"] = "购买失败，刷新中"
+        rec["ready_at"] = time.monotonic() + self._jitter(
+            tc["loop"].get("shop_close_wait_sec", 0.25), ctx)
+
+    def _step(self, rec, tc, product, buy_button, buy_confirm, interference_close, success):
         ctx = rec["ctx"]
         if ctx.should_stop() or rec["done"]:
             return
@@ -129,6 +154,12 @@ class SniperTask(Task):
         if now < rec["ready_at"]:
             return
         state = rec["state"]
+        if state == "购买失败，刷新中":
+            if not ctx.send_hotkey("open_shop"):
+                raise RuntimeError("发送商城快捷键失败")
+            rec["state"] = "等待商品页"
+            rec["ready_at"] = now + self._jitter(loop.get("shelf_load_wait_sec", 0.6), ctx)
+            return
         if state == "等待关闭":
             if not ctx.send_hotkey("open_shop"):
                 raise RuntimeError("发送商城快捷键失败")
@@ -139,15 +170,18 @@ class SniperTask(Task):
             rec["state"] = "识别中"
             return
 
+        speed = ctx.cfg.get("humanize", {}).get("snipe_speed", 3.0)
+        if self._close_interference(ctx, tc, interference_close, threshold, speed):
+            return
         old_hit, _ = self._match(ctx, regions.get("success"), success, threshold)
         if old_hit is not None:
             if not rec["clear_deadline"]:
                 rec["clear_deadline"] = now + loop.get("success_clear_timeout_sec", 5.0)
             rec["state"] = "等待旧提示消失"
             if now >= rec["clear_deadline"] and not tc.get("dry_run", True):
-                rec["state"] = "结果未确认"
-                ctx.log("旧成功提示持续存在，已停止，未继续购买。", level="error")
-                ctx.stop()
+                rec["state"] = "购买失败，刷新重试"
+                ctx.log("成功提示持续存在，刷新商城重试。", level="warn")
+                self._refresh_after_failure(rec, tc)
             return
         rec["clear_deadline"] = 0
         rec["state"] = "识别中"
@@ -178,9 +212,9 @@ class SniperTask(Task):
         speed = ctx.cfg.get("humanize", {}).get("snipe_speed", 3.0)
         first_buy, buy_rect = self._match(ctx, regions.get("purchase"), buy_button, threshold)
         if first_buy is None:
-            rec["state"] = "第一次购买按钮未匹配"
-            ctx.log("商品已选中，但未立即匹配到第一次购买按钮，已停止。", level="error")
-            ctx.stop()
+            rec["state"] = "第一次购买按钮未匹配，刷新重试"
+            ctx.log("商品已选中但未匹配到第一次购买按钮，刷新重试。", level="warn")
+            self._refresh_after_failure(rec, tc)
             return
         ctx.mouse.click(buy_rect[0] + first_buy[0], buy_rect[1] + first_buy[1], speed=speed)
 
@@ -190,14 +224,16 @@ class SniperTask(Task):
         second_buy = None
         confirm_rect = None
         while not ctx.should_stop() and time.monotonic() < second_deadline:
+            if self._close_interference(ctx, tc, interference_close, threshold, speed):
+                continue
             second_buy, confirm_rect = self._match(ctx, regions.get("purchase"), buy_confirm, threshold)
             if second_buy is not None:
                 break
             self._interruptible_sleep(ctx, loop.get("second_buy_retry_interval_sec", 0.02))
         if second_buy is None:
-            rec["state"] = "第二次购买按钮未匹配"
-            ctx.log("第一次购买已点击，重试后仍未匹配到第二次购买按钮，已停止。", level="error")
-            ctx.stop()
+            rec["state"] = "第二次购买按钮未匹配，刷新重试"
+            ctx.log("第一次购买已点击，重试后仍未匹配到第二次购买按钮，刷新重试。", level="warn")
+            self._refresh_after_failure(rec, tc)
             return
         ctx.mouse.click(confirm_rect[0] + second_buy[0], confirm_rect[1] + second_buy[1], speed=speed)
 
@@ -207,6 +243,8 @@ class SniperTask(Task):
             notify()
         deadline = time.monotonic() + loop.get("purchase_timeout_sec", 2.0)
         while not ctx.should_stop():
+            if self._close_interference(ctx, tc, interference_close, threshold, speed):
+                continue
             hit, _ = self._match(ctx, regions.get("success"), success, threshold)
             if hit is not None:
                 rec["count"] += 1
@@ -216,8 +254,8 @@ class SniperTask(Task):
                 rec["clear_deadline"] = time.monotonic() + loop.get("success_clear_timeout_sec", 5.0)
                 return
             if time.monotonic() >= deadline:
-                rec["state"] = "结果未确认"
-                ctx.log("未识别到购买成功提示，购买结果未确认，已停止。", level="error")
-                ctx.stop()
+                rec["state"] = "购买失败，刷新重试"
+                ctx.log("3秒内未匹配到购买成功提示，视为购买失败，刷新重试。", level="warn")
+                self._refresh_after_failure(rec, tc)
                 return
             self._interruptible_sleep(ctx, loop.get("tick_interval_sec", 0.06))

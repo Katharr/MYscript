@@ -328,6 +328,7 @@ class SniperPage(ctk.CTkFrame):
                 ("sniper_product", "商品模板"),
                 ("sniper_buy", "第一次购买按钮模板"),
                 ("sniper_buy_confirm", "第二次购买按钮模板"),
+                ("sniper_interference_close", "干扰关闭叉叉模板"),
                 ("sniper_success", "购买成功模板"))):
             slot = ctk.CTkFrame(assets, fg_color="transparent")
             slot.grid(row=column // 2, column=column % 2, sticky="ew", padx=16, pady=14)

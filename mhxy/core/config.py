@@ -208,7 +208,7 @@ DEFAULT_CONFIG = {
                 "second_buy_load_wait_sec": 0.08,
                 "second_buy_retry_interval_sec": 0.02,
                 "second_buy_timeout_sec": 1.0,
-                "purchase_timeout_sec": 2.0,
+                "purchase_timeout_sec": 3.0,
                 "success_clear_timeout_sec": 5.0
             },
             "regions": {
@@ -220,6 +220,7 @@ DEFAULT_CONFIG = {
                 "sniper_product": None,
                 "sniper_buy": None,
                 "sniper_buy_confirm": None,
+                "sniper_interference_close": None,
                 "sniper_success": None
             }
         },

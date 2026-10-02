@@ -17,7 +17,8 @@ class SniperTests(unittest.TestCase):
         self.tc['dry_run'] = False
         self.tc['regions']['purchase'] = [0, 0, 1000, 800]
         self.tc['templates'] = {'sniper_product': 'product.png', 'sniper_buy': 'buy.png',
-                                'sniper_buy_confirm': 'buy_confirm.png', 'sniper_success': 'success.png'}
+                                'sniper_buy_confirm': 'buy_confirm.png', 'sniper_interference_close': 'close.png',
+                                'sniper_success': 'success.png'}
         self.ctx = Mock()
         self.ctx.cfg = {'humanize': {}}
         self.ctx.window.region_center_screen.return_value = (10, 10)
@@ -33,7 +34,7 @@ class SniperTests(unittest.TestCase):
         self.task._match = Mock(side_effect=[(h, (100, 200, 300, 400)) for h in hits])
 
     def step(self):
-        self.task._step(self.rec, self.tc, 'product', 'buy', 'buy_confirm', 'success')
+        self.task._step(self.rec, self.tc, 'product', 'buy', 'buy_confirm', None, 'success')
 
     def test_missing_product_closes_then_opens_shop_without_buying(self):
         self.matches(None, None)
@@ -67,17 +68,17 @@ class SniperTests(unittest.TestCase):
     def test_first_purchase_button_must_match_immediately(self):
         self.matches(None, HIT, None)
         self.step()
-        self.assertEqual(self.rec['state'], '第一次购买按钮未匹配')
+        self.assertEqual(self.rec['state'], '购买失败，刷新中')
         self.assertEqual(self.ctx.mouse.click.call_count, 1)
-        self.ctx.stop.assert_called_once()
+        self.ctx.send_hotkey.assert_called_once_with('open_shop')
 
     def test_second_purchase_button_must_match_immediately(self):
         self.tc['loop']['second_buy_timeout_sec'] = 0
         self.matches(None, HIT, HIT, None)
         self.step()
-        self.assertEqual(self.rec['state'], '第二次购买按钮未匹配')
+        self.assertEqual(self.rec['state'], '购买失败，刷新中')
         self.assertEqual(self.ctx.mouse.click.call_count, 2)
-        self.ctx.stop.assert_called_once()
+        self.ctx.send_hotkey.assert_called_once_with('open_shop')
 
     def test_second_purchase_button_retries_after_load_delay(self):
         self.matches(None, HIT, HIT, None, None, HIT, HIT)
@@ -85,6 +86,13 @@ class SniperTests(unittest.TestCase):
         self.assertEqual(self.rec['count'], 1)
         self.assertEqual(self.ctx.mouse.click.call_count, 3)
         self.assertGreaterEqual(self.sleep.call_count, 2)
+
+    def test_interference_close_template_is_clicked_immediately(self):
+        self.ctx.cfg['humanize']['snipe_speed'] = 3.0
+        self.task._match = Mock(return_value=(HIT, (100, 200, 300, 400)))
+        handled = self.task._close_interference(self.ctx, self.tc, 'close', 0.85, 3.0)
+        self.assertTrue(handled)
+        self.ctx.mouse.click.assert_called_once_with(120, 230, speed=3.0)
 
     def test_old_success_never_counts_and_blocks_next_purchase(self):
         self.tc['target_count'] = 2
@@ -111,10 +119,10 @@ class SniperTests(unittest.TestCase):
         self.tc['loop']['purchase_timeout_sec'] = 0
         self.matches(None, HIT, HIT, HIT, None)
         self.step()
-        self.ctx.stop.assert_called_once()
-        self.assertEqual(self.rec['state'], '结果未确认')
+        self.ctx.send_hotkey.assert_called_once_with('open_shop')
+        self.assertEqual(self.rec['state'], '购买失败，刷新中')
         self.assertEqual(self.rec['count'], 0)
-        self.ctx.send_hotkey.assert_not_called()
+        self.ctx.stop.assert_not_called()
 
     def test_dry_run_never_inputs_or_counts(self):
         self.tc['dry_run'] = True
@@ -162,7 +170,7 @@ class SniperTests(unittest.TestCase):
         with patch('mhxy.tasks.sniper.vision.load_template', return_value=None):
             ok, problems = self.task.preflight(self.ctx)
         self.assertFalse(ok)
-        self.assertEqual(len(problems), 4)
+        self.assertEqual(len(problems), 5)
 
     def test_run_completes_each_window_and_preserves_foreground_during_result(self):
         self.tc['target_count'] = 1
@@ -183,6 +191,7 @@ class SniperTests(unittest.TestCase):
         self.matches(None, HIT, HIT, HIT, HIT, None, HIT, HIT, HIT, HIT)
         with patch.object(self.task, '_resolve_contexts', return_value=[self.ctx, other]), \
              patch('mhxy.tasks.sniper.vision.load_template', return_value=object()), \
+             patch.object(self.task, '_close_interference', return_value=False), \
              patch('mhxy.core.rotation._sleep'):
             self.task.run(self.ctx)
         self.assertEqual([row[1:] for row in self.task.progress],
