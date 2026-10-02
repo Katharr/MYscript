@@ -276,8 +276,13 @@ class SniperPage(ctk.CTkFrame):
                                      fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER, text_color=T.ON_ACCENT,
                                      command=self._toggle_run)
         self.btn_run.grid(row=0, column=0, sticky="w")
+        self.lbl_start_hint = ctk.CTkLabel(
+            top, text="打开对应商品页面后点击开始按钮。", font=self.fonts["small"],
+            text_color=T.TEXT_DIM, width=1, height=26, anchor="w", justify="left")
+        self.lbl_start_hint.grid(row=0, column=1, sticky="ew", padx=(16, 0))
+        bind_wraplength(self.lbl_start_hint)
         tools = ctk.CTkFrame(top, fg_color="transparent")
-        tools.grid(row=0, column=2, sticky="e")
+        tools.grid(row=1, column=0, columnspan=2, sticky="e", pady=(12, 0))
         ctk.CTkButton(tools, text="选择窗口", font=self.fonts["body"], height=36, width=104,
                       corner_radius=T.RADIUS_SM, fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
                       border_width=1, border_color=T.BORDER,
