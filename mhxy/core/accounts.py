@@ -698,6 +698,14 @@ def cached_labels_for(wins):
                 for i, w in enumerate(wins)]
 
 
+def sync_window_labels(wins):
+    """完整窗口枚举后同步界面顺序，只读身份缓存，不对后台窗口做 OCR。"""
+    with _lock:
+        labels = cached_labels_for(wins)
+        _cache["order"] = list(labels)
+        return labels
+
+
 def prime_visible_labels(cfg):
     """兼容旧调用的显式预热接口；新代码不得在 GUI 启动时调用。"""
     cfg = cfg or {}

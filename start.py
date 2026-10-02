@@ -195,8 +195,47 @@ def _report_fatal(stage):
         pass
 
 
+def _wake_existing_windows(app):
+    """后台启动扫描：逐窗唤出后识别当前标签条，禁止集中扫描后台像素。"""
+    from mhxy.core import accounts
+    from mhxy.core import window as win_mod
+
+    cfg = app.cfg
+    title = cfg.get("window_title", "梦幻西游")
+    offset = cfg.get("window_offset", [0, 0])
+    failures = []
+
+    def identify(win):
+        try:
+            # wake_all_to_front 仅在 activate 校验通过后调用；识别必须在切下个窗口前完成。
+            accounts.labels_for([win])
+        except Exception:
+            failures.append(win)
+
+    try:
+        total, woken = win_mod.wake_all_to_front(title, offset, on_woken=identify)
+    except Exception as exc:
+        message = "启动唤窗与角色识别失败：%s" % exc
+        app.ui_post(lambda: app.log_line(message, "warn", "启动"))
+        return
+
+    def apply():
+        if not total:
+            return
+        app.log_line(
+            "启动唤出游戏窗口：检测到 %d 个，%d 个成功切到前台；已逐窗执行角色名检测。" % (total, woken),
+            "info" if woken and not failures else "warn", "启动")
+        if failures:
+            app.log_line("部分窗口角色名检测失败，暂使用已有身份或号N。", "warn", "启动")
+        # 常驻定位只读角色缓存；使启动时已绘制的号N和目标摘要立即重新计算。
+        app._game_connected = None
+        app._kick_locate()
+
+    app.ui_post(apply)
+
+
 def _launch_gui():
-    """设 DPI → 启动页预热 → 透明预扫描游戏标签 → 一次性亮出就绪主窗口。
+    """设 DPI → 启动页轻量探测 → 亮出主窗口 → 后台逐窗唤出并识别角色名。
     任一步异常都回退到无启动页的直接启动，保证一定能起来。"""
     import threading
 
@@ -209,7 +248,7 @@ def _launch_gui():
         splash = None
 
     # —— 阶段一：预热重库 → 再建主界面 ——
-    # 角色身份只在“一键登录完成”和“唤出所有游戏窗口”后显式刷新，启动时不扫描。
+    # 启动页阶段仅轻量探测；完整界面显示后逐窗唤出并识别角色名。
     # 探测失败按已有窗口路径处理，避免误判为零窗口而重复启动游戏。
     shared = {"decision": "unknown"}
     if splash is not None:
@@ -316,24 +355,7 @@ def _launch_gui():
         app.log_line("窗口探测失败，按已有窗口处理。", "warn", "启动")
 
     if not compact:
-        def _wake_minimized_windows():
-            try:
-                from mhxy.core import window as win_mod
-                cfg = app.cfg
-                title = cfg.get("window_title", "梦幻西游")
-                offset = cfg.get("window_offset", [0, 0])
-                wins = win_mod.locate_all(title, offset, include_minimized=True)
-                if not any(getattr(getattr(win, "_win", None), "isMinimized", False) for win in wins):
-                    return
-                total, woken = win_mod.wake_all_to_front(title, offset)
-                app.ui_post(lambda: app.log_line(
-                    "唤出游戏窗口：检测到 %d 个，%d 个成功切到前台。" % (total, woken),
-                    "info" if woken else "warn", "启动"))
-            except Exception as exc:
-                message = "唤出最小化游戏窗口失败：%s" % exc
-                app.ui_post(lambda: app.log_line(message, "warn", "启动"))
-
-        threading.Thread(target=_wake_minimized_windows, daemon=True).start()
+        threading.Thread(target=_wake_existing_windows, args=(app,), daemon=True).start()
 
     # mainloop 期间的异常（Tk 回调里抛出）同样会静默杀死窗口，一并落盘。
     try:
