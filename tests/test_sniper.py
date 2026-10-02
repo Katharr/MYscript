@@ -72,11 +72,19 @@ class SniperTests(unittest.TestCase):
         self.ctx.stop.assert_called_once()
 
     def test_second_purchase_button_must_match_immediately(self):
+        self.tc['loop']['second_buy_timeout_sec'] = 0
         self.matches(None, HIT, HIT, None)
         self.step()
         self.assertEqual(self.rec['state'], '第二次购买按钮未匹配')
         self.assertEqual(self.ctx.mouse.click.call_count, 2)
         self.ctx.stop.assert_called_once()
+
+    def test_second_purchase_button_retries_after_load_delay(self):
+        self.matches(None, HIT, HIT, None, None, HIT, HIT)
+        self.step()
+        self.assertEqual(self.rec['count'], 1)
+        self.assertEqual(self.ctx.mouse.click.call_count, 3)
+        self.assertGreaterEqual(self.sleep.call_count, 2)
 
     def test_old_success_never_counts_and_blocks_next_purchase(self):
         self.tc['target_count'] = 2

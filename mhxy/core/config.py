@@ -205,6 +205,9 @@ DEFAULT_CONFIG = {
                 "tick_interval_sec": 0.06,
                 "shop_close_wait_sec": 0.25,
                 "shelf_load_wait_sec": 0.6,
+                "second_buy_load_wait_sec": 0.08,
+                "second_buy_retry_interval_sec": 0.02,
+                "second_buy_timeout_sec": 1.0,
                 "purchase_timeout_sec": 2.0,
                 "success_clear_timeout_sec": 5.0
             },

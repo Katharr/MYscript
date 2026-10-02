@@ -184,11 +184,19 @@ class SniperTask(Task):
             return
         ctx.mouse.click(buy_rect[0] + first_buy[0], buy_rect[1] + first_buy[1], speed=speed)
 
-        # 第一次购买点击后立刻匹配第二次购买按钮，匹配到后立即点击。
-        second_buy, confirm_rect = self._match(ctx, regions.get("purchase"), buy_confirm, threshold)
+        # 第一次购买点击后先给弹窗极短加载时间，再高频重试第二次购买按钮。
+        self._interruptible_sleep(ctx, loop.get("second_buy_load_wait_sec", 0.08))
+        second_deadline = time.monotonic() + loop.get("second_buy_timeout_sec", 1.0)
+        second_buy = None
+        confirm_rect = None
+        while not ctx.should_stop() and time.monotonic() < second_deadline:
+            second_buy, confirm_rect = self._match(ctx, regions.get("purchase"), buy_confirm, threshold)
+            if second_buy is not None:
+                break
+            self._interruptible_sleep(ctx, loop.get("second_buy_retry_interval_sec", 0.02))
         if second_buy is None:
             rec["state"] = "第二次购买按钮未匹配"
-            ctx.log("第一次购买已点击，但未立即匹配到第二次购买按钮，已停止。", level="error")
+            ctx.log("第一次购买已点击，重试后仍未匹配到第二次购买按钮，已停止。", level="error")
             ctx.stop()
             return
         ctx.mouse.click(confirm_rect[0] + second_buy[0], confirm_rect[1] + second_buy[1], speed=speed)
