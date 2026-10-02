@@ -94,6 +94,40 @@ class SniperTests(unittest.TestCase):
         self.assertTrue(handled)
         self.ctx.mouse.click.assert_called_once_with(120, 230, speed=3.0)
 
+    def test_close_checked_once_after_success_even_at_target(self):
+        self.matches(None, HIT, HIT, HIT, None, HIT, HIT)
+        self.task._step(self.rec, self.tc, 'product', 'buy', 'buy_confirm', 'close', 'success')
+        self.assertTrue(self.rec['done'])
+        self.assertEqual(self.rec['count'], 1)
+        self.assertEqual(self.ctx.mouse.click.call_count, 4)
+        keys = [call.args[2] for call in self.task._match.call_args_list]
+        self.assertEqual(keys, ['success', 'product', 'buy', 'buy_confirm', 'success', 'success', 'close'])
+        self.task._step(self.rec, self.tc, 'product', 'buy', 'buy_confirm', 'close', 'success')
+        self.assertEqual(self.task._match.call_count, 7)
+
+    def test_close_miss_checked_once_and_old_success_does_not_trigger_again(self):
+        self.tc['target_count'] = 2
+        self.matches(None, HIT, HIT, HIT, HIT, None, HIT, HIT)
+        for _ in range(3):
+            self.task._step(self.rec, self.tc, 'product', 'buy', 'buy_confirm', 'close', 'success')
+        keys = [call.args[2] for call in self.task._match.call_args_list]
+        self.assertEqual(keys.count('close'), 1)
+        self.assertEqual(self.rec['count'], 1)
+        self.assertEqual(self.ctx.mouse.click.call_count, 3)
+
+    def test_close_not_checked_on_failure_or_dry_run(self):
+        self.tc['loop']['purchase_timeout_sec'] = 0
+        self.matches(None, HIT, HIT, HIT, None)
+        self.task._step(self.rec, self.tc, 'product', 'buy', 'buy_confirm', 'close', 'success')
+        self.assertNotIn('close', [call.args[2] for call in self.task._match.call_args_list])
+        self.assertEqual(self.rec['count'], 0)
+        self.rec['state'] = '识别中'
+        self.rec['ready_at'] = 0
+        self.tc['dry_run'] = True
+        self.matches(None, HIT)
+        self.task._step(self.rec, self.tc, 'product', 'buy', 'buy_confirm', 'close', 'success')
+        self.assertNotIn('close', [call.args[2] for call in self.task._match.call_args_list])
+
     def test_old_success_never_counts_and_blocks_next_purchase(self):
         self.tc['target_count'] = 2
         self.matches(None, HIT, HIT, HIT, HIT, HIT, HIT)

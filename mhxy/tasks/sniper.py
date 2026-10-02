@@ -2,7 +2,7 @@
 """当前商品页购买：商品模板命中即买，成功提示确认计数，Alt+A 开关刷新。
 
 每窗口独立额度；购买结果等待期间保持该窗口前台，避免多开漏掉短暂提示。
-旧提示必须先消失才允许再次购买；结果不明停止整个任务，不猜成功或重试下单。
+旧提示必须先消失才允许再次购买；成功后仅检测一次干扰叉叉，失败刷新重试。
 """
 import time
 
@@ -171,8 +171,6 @@ class SniperTask(Task):
             return
 
         speed = ctx.cfg.get("humanize", {}).get("snipe_speed", 3.0)
-        if self._close_interference(ctx, tc, interference_close, threshold, speed):
-            return
         old_hit, _ = self._match(ctx, regions.get("success"), success, threshold)
         if old_hit is not None:
             if not rec["clear_deadline"]:
@@ -224,8 +222,6 @@ class SniperTask(Task):
         second_buy = None
         confirm_rect = None
         while not ctx.should_stop() and time.monotonic() < second_deadline:
-            if self._close_interference(ctx, tc, interference_close, threshold, speed):
-                continue
             second_buy, confirm_rect = self._match(ctx, regions.get("purchase"), buy_confirm, threshold)
             if second_buy is not None:
                 break
@@ -243,12 +239,12 @@ class SniperTask(Task):
             notify()
         deadline = time.monotonic() + loop.get("purchase_timeout_sec", 2.0)
         while not ctx.should_stop():
-            if self._close_interference(ctx, tc, interference_close, threshold, speed):
-                continue
             hit, _ = self._match(ctx, regions.get("success"), success, threshold)
             if hit is not None:
                 rec["count"] += 1
                 ctx.log(f"购买成功：{rec['count']} / {tc['target_count']}", level="hit")
+                # 每次新购买成功只检查一次；旧提示与失败轮次不触发。
+                self._close_interference(ctx, tc, interference_close, threshold, speed)
                 rec["done"] = rec["count"] >= tc["target_count"]
                 rec["state"] = "已完成" if rec["done"] else "等待旧提示消失"
                 rec["clear_deadline"] = time.monotonic() + loop.get("success_clear_timeout_sec", 5.0)
