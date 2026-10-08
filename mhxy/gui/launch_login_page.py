@@ -15,7 +15,7 @@ from ..core import accounts
 from ..core import config as cfg_mod
 from ..core import launcher
 from ..core import window as win_mod
-from ..core.runner import TaskRunner
+from ..core.runtime import get_runtime
 from ..tasks import get_task
 
 
@@ -395,14 +395,14 @@ class LaunchLoginPage(ctk.CTkFrame):
                                             on_done=lambda: (setattr(self, "_cal_dialog", None), self.refresh()))
 
     def _toggle_run(self):
-        if self.runner and self.runner.is_running():
-            self.runner.stop()
+        if self.runner and get_runtime().is_running(self.runner):
+            get_runtime().stop(self.runner)
             self.btn_run.configure(text="停止中…", state="disabled")
             return
         self.app.cfg = cfg_mod.load_config()
         task_cls = get_task(self.TASK_NAME)
-        self.runner = TaskRunner(task_cls(), self.app.cfg)
-        ok, problems = self.runner.start()
+        self.runner = get_runtime().create_runner(task_cls(), self.app.cfg)
+        ok, problems = get_runtime().start(self.runner)
         if not ok:
             for problem in problems:
                 self._log_line("无法启动：" + problem, "error")
@@ -413,10 +413,7 @@ class LaunchLoginPage(ctk.CTkFrame):
 
     def pump(self):
         if self.runner:
-            while not self.runner.log_queue.empty():
-                level, msg = self.runner.log_queue.get()
-                self._log_line(msg, level)
-            if not self.runner.is_running() and self.btn_run.cget("text") != "▶  开始启动登录":
+            if not get_runtime().is_running(self.runner) and self.btn_run.cget("text") != "▶  开始启动登录":
                 self.btn_run.configure(text="▶  开始启动登录", fg_color=T.ACCENT,
                                        hover_color=T.ACCENT_HOVER, state="normal")
         self._maybe_refresh_roles()     # 名册后到（先开脚本、后登录游戏）也能自动出现

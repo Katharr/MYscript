@@ -77,7 +77,7 @@ class FreeClickTask(Task):
         items = [(it, tpl) for it, tpl in items if tpl is not None]
         if not items:
             ctx.log("清单里没有可用的截图，已停止。", level="error")
-            return
+            return "stopped" if ctx.should_stop() else "failed"
 
         multi = ctx.cfg.get("targets", {}).get("multi", False)
         switch_delay = ctx.cfg.get("targets", {}).get("switch_delay_sec", 0.15)
@@ -89,7 +89,7 @@ class FreeClickTask(Task):
         contexts = self._resolve_contexts(ctx, multi)
         if not contexts:
             ctx.log("没找到/没选中目标窗口，已停止。", level="error")
-            return
+            return "stopped" if ctx.should_stop() else "failed"
 
         ctx.log(f"启动完成：{('多开轮转 ' + str(len(contexts)) + ' 个号') if multi else '单号'}，"
                 f"{len(items)} 张截图，阈值 {threshold}，检测区："
@@ -99,30 +99,36 @@ class FreeClickTask(Task):
 
         rounds = 0
         total_hits = 0
-        while not ctx.should_stop():
-            # 窗口可能被关/移动：多开时若有窗口失效就重新枚举选择
-            contexts = self._ensure_contexts(ctx, contexts, multi)
-            if not contexts:
-                self._interruptible_sleep(ctx, 2.0)
-                continue
-
-            for wctx in contexts:
-                if ctx.should_stop():
-                    break
-                if not self._prepare_window(wctx, multi):
+        try:
+            while not ctx.should_stop():
+                # 窗口可能被关/移动：多开时若有窗口失效就重新枚举选择
+                contexts = self._ensure_contexts(ctx, contexts, multi)
+                if not contexts:
+                    self._interruptible_sleep(ctx, 2.0)
                     continue
-                wctx.mouse.maybe_idle()
-                total_hits += self._click_one_round(
-                    wctx, items, regions, threshold, after_click, dry_run)
-                # 多开：号与号之间留个小间隔，别太机械
-                if multi and len(contexts) > 1:
-                    self._interruptible_sleep(ctx, self._jitter(switch_delay, ctx))
 
-            rounds += 1
-            # 一整轮（清单过完一遍）之间的间隔（带抖动）
-            self._interruptible_sleep(ctx, self._jitter(round_interval, ctx))
+                for wctx in contexts:
+                    if ctx.should_stop():
+                        break
+                    if not self._prepare_window(wctx, multi):
+                        continue
+                    wctx.mouse.maybe_idle()
+                    total_hits += self._click_one_round(
+                        wctx, items, regions, threshold, after_click, dry_run)
+                    # 多开：号与号之间留个小间隔，别太机械
+                    if multi and len(contexts) > 1:
+                        self._interruptible_sleep(ctx, self._jitter(switch_delay, ctx))
+
+                rounds += 1
+                # 一整轮（清单过完一遍）之间的间隔（带抖动）
+                self._interruptible_sleep(ctx, self._jitter(round_interval, ctx))
+        except Exception as exc:
+            ctx.log(f"任务异常：{exc}", level="error")
+            return "stopped" if ctx.should_stop() else "failed"
 
         ctx.log(f"已停止。共循环 {rounds} 轮，命中 {total_hits} 次。")
+        # 自由点击没有完成条件；命中和点击均不代表业务完成。
+        return "stopped"
 
     # ------------------------------------------------------------------
     # 单号一轮：截当前画面 → 按清单顺序逐项识别，认到就点（每项最多一次）

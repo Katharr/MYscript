@@ -108,11 +108,15 @@ def required_templates(action):
     return out
 
 
+class InventoryRecoveryError(RuntimeError):
+    """面板收尾未获准，调用方必须停止，不能继续原业务。"""
+
+
 class InventoryOrganizer:
     """整理背包编排器。给 ctx（已切到前台的单窗口上下文）、tasks.organize_bag 配置块、dry_run。
     调 organize() 在该号背包上一气呵成跑完（与滚轮查找同原则）。返回 (handled, reason)。"""
 
-    def __init__(self, ctx, ob_cfg, dry_run=False):
+    def __init__(self, ctx, ob_cfg, dry_run=True):
         self.ctx = ctx
         self.cfg = ctx.cfg
         self.ob = ob_cfg or {}
@@ -124,6 +128,7 @@ class InventoryOrganizer:
         self._item_tpls = [(it, vision.load_template(it.get("template"))) for it in items]
         self._item_tpls = [(it, t) for it, t in self._item_tpls if t is not None]
         tpls = self.ob.get("templates", {})
+        self.evidence = self._new_evidence()
         self._btn = {k: (vision.load_template(tpls.get(k)) if tpls.get(k) else None)
                      for k in _ALL_BTN_KEYS}
 
@@ -142,32 +147,56 @@ class InventoryOrganizer:
         region = self.regions.get("bag_list")
         return self.ctx.window.region_to_screen_rect(region) if region else self.ctx.window.rect()
 
+    @staticmethod
+    def _new_evidence():
+        # 只供独立整理任务报告；旧 (handled, reason) 和维护行为保持不变。
+        # handled 仍是旧动作序列完成/演练命中计数，不是服务端物品核验。
+        return {"handled": 0, "action_failures": 0,
+                "scan_limited": False, "observation_failed": False}
+
     def organize(self):
+        self.evidence = self._new_evidence()
         ctx = self.ctx
         if not self._item_tpls:
             ctx.log("整理背包：没有可整理的物品（请先在「管理物品」框选添加），跳过。", level="warn")
             return 0, "no_items"
-        if not ctx.send_hotkey("open_bag"):
-            ctx.log("整理背包：打不开背包（open_bag 未配置），跳过。", level="error")
-            return 0, "no_hotkey"
-        self._sleep(self._jitter(0.6))
-
-        passes = max(1, int(self.loop.get("passes", 1)))
+        if ctx.should_stop():
+            return 0, "stopped"
+        opened = False
         handled = 0
-        for p in range(passes):
-            if ctx.should_stop():
-                break
-            ctx.log(f"整理背包：第 {p + 1}/{passes} 遍扫描…")
-            n = self._sweep_once()
-            handled += n
-            if n == 0:
-                ctx.log("整理背包：本遍未发现可处理物品，提前结束。")
-                break
-        # 收尾点游戏自带「整理」按钮把背包重新排列收拢（用户要求）。趁包裹还开着点，再关包裹。
-        # 演练不点（dry_run 只识别不动手）。
-        if not self.dry_run:
-            self._click_sort_button()
-        ctx.send_hotkey("close_panel")
+        try:
+            if not self.dry_run:
+                opened = ctx.send_hotkey("open_bag")
+                if not opened:
+                    ctx.log("整理背包：打不开背包（open_bag 未配置或输入未获准），跳过。", level="error")
+                    return 0, "no_hotkey"
+                self._sleep(self._jitter(0.6))
+            passes = max(1, int(self.loop.get("passes", 1)))
+            for p in range(passes):
+                if ctx.should_stop():
+                    break
+                ctx.log(f"整理背包：第 {p + 1}/{passes} 遍扫描…")
+                n = self._sweep_once()
+                handled += n
+                if n == 0:
+                    ctx.log("整理背包：本遍未发现可处理物品，提前结束。")
+                    break
+                if self.dry_run:
+                    break  # 演练只看当前已打开的一屏，不滚动也不重复识别
+            if not self.dry_run and not ctx.should_stop():
+                self._click_sort_button()
+        finally:
+            # 仅关闭本次确实打开的背包；停止时不为收尾继续输入。
+            try:
+                if opened and not ctx.should_stop():
+                    if ctx.send_hotkey("close_panel") is False and not ctx.should_stop():
+                        raise InventoryRecoveryError("背包收尾输入未获准，面板恢复不确定")
+            finally:
+                session = getattr(ctx, "input_session", None)
+                if session is not None:
+                    session.invalidate()
+        if ctx.should_stop():
+            return handled, "stopped"
         if self.dry_run:
             ctx.log(f"整理背包·演练完成：共识别到 {handled} 次可处理物品（未执行任何动作）。", level="hit")
         else:
@@ -183,7 +212,8 @@ class InventoryOrganizer:
         if hit is None:
             self.ctx.log("没找到游戏「整理」按钮（请检查 sort_button 标定），跳过收拢。", level="warn")
             return
-        self.ctx.mouse.click(hit[0], hit[1])
+        if not self._click("left", hit[0], hit[1]):
+            return
         self.ctx.log(f"点游戏「整理」按钮收拢背包（{hit[2]:.2f}）。", level="hit")
         self._sleep(self._jitter(self.loop.get("step_wait_sec", 0.4)))
 
@@ -191,7 +221,7 @@ class InventoryOrganizer:
         """一次完整 top→bottom 扫描；每屏【逐个】处理命中物品：每次取最靠上的一个处理，处理完不急着滚，
         原地重新识别接着找同屏剩下的，等同屏再没有可处理物品了才往下滚一屏（用户拍板「卖完一件别急着滚」）。
         实战：成功处理完一件物品返回 HANDLED（scroll_search 据此原地不滚、重 probe 续找同屏剩下的，且不拿被
-        动作污染的画面判到底）；演练只识别无副作用，返回 SCROLL 正常往下翻并帧差判到底。
+        动作污染的画面判到底）；演练只识别当前一屏，不滚动、不宣称翻到底。
         ⚠ 动作【失败】（按钮没找到、放弃该物品）返回 SCROLL：此时画面已被 _cleanup 收回干净列表、未被污染，
           继续 SCROLL 让帧差能在到底时正常收工；若失败也返回 HANDLED，会在「包裹底部有个按钮永远匹配不到的
           物品」上原地反复『点开→放弃』空转直到 scroll_max_tries 耗尽，正是用户撞到的卡死放大场景。"""
@@ -213,6 +243,7 @@ class InventoryOrganizer:
             action = it.get("action", "use")
             if self.dry_run:
                 count["n"] += 1
+                self.evidence["handled"] += 1
                 self.ctx.log(f"识别到物品『{it.get('name', '?')}』（{score:.2f}）→ 计划动作："
                              f"{action_label(action)}（演练不执行）。", level="hit")
                 return scan.SCROLL, None
@@ -220,10 +251,23 @@ class InventoryOrganizer:
             # 找同屏剩下的可处理物品（卖完别急着滚）。失败时物品仍在、画面未污染，返回 SCROLL 让它往下翻并帧差判到底。
             if self._do_action(it, action, sx, sy, score):
                 count["n"] += 1
+                self.evidence["handled"] += 1
                 return scan.HANDLED, None
+            self.evidence["action_failures"] += 1
             return scan.SCROLL, None
 
-        scan.scroll_search(
+        if self.dry_run:
+            rect = self._region_rect()
+            if rect is not None and not self.ctx.should_stop():
+                scene = win_mod.grab(rect)
+                if scene is None:
+                    self.evidence["observation_failed"] = True
+                probe(scene, rect)
+            elif rect is None:
+                self.evidence["observation_failed"] = True
+            return count["n"]
+
+        result = scan.scroll_search(
             grab_rect=self._region_rect,
             probe=probe,
             mouse=self.ctx.mouse,
@@ -238,6 +282,11 @@ class InventoryOrganizer:
             log=self.ctx.log,
             label="背包",
         )
+        if result.exhausted and not result.reached_end:
+            self.evidence["scan_limited"] = True
+        if result.stopped and not self.ctx.should_stop():
+            self.evidence["observation_failed"] = True
+            raise InventoryRecoveryError("背包扫描未完成（窗口消失、截图失败或滚动未获准）")
         return count["n"]
 
     def _do_action(self, it, action, sx, sy, score):
@@ -253,7 +302,17 @@ class InventoryOrganizer:
         label = spec["label"]
         # ① 点中物品 → 右键弹操作菜单 / 左键弹详情（由 spec.open 指定，缺省用 open_item_click）。
         how = spec.get("open") or self.loop.get("open_item_click", "right")
-        self._click(how, sx, sy)
+        if not self._click(how, sx, sy):
+            return False
+        try:
+            return self._run_action_steps(it, spec, label, score)
+        finally:
+            if not ctx.should_stop():
+                self._cleanup(spec)
+
+    def _run_action_steps(self, it, spec, label, score):
+        ctx = self.ctx
+        name = it.get("name", "?")
         ctx.log(f"物品『{name}』（{score:.2f}）→ {label}：已点开。", level="hit")
         self._sleep(self._jitter(self.loop.get("action_settle_sec", 0.4)))
         # 各步「等按钮出现」的超时窗口与可选步骤跳过后的稳定等待（走 loop.* 配置，缺省回退现有键）。
@@ -286,27 +345,28 @@ class InventoryOrganizer:
                 else:
                     ctx.log(f"  · 没找到「{step['label']}」按钮（等待 {timeout:.1f}s 超时未匹配到），"
                             f"放弃该物品（请检查标定，或调大 loop.step_find_timeout_sec）。", level="warn")
-                self._cleanup(spec)
                 return False
-            self._click(step.get("button", "left"), btn[0], btn[1])
+            if not self._click(step.get("button", "left"), btn[0], btn[1]):
+                return False
             ctx.log(f"  · 点「{step['label']}」（{btn[2]:.2f}）。")
             self._sleep(self._jitter(step.get("wait", self.loop.get("step_wait_sec", 0.4))))
-        # ③ 旧式单按钮动作(丢弃/旧出售)：弹「确定」确认框就点（破坏性、用户明确要）。
-        if spec.get("confirm"):
-            self._confirm_if_present()
-        # ④ 收尾：关掉残留菜单/弹窗，回干净列表再继续滚动；
-        # 否则点击会落在残留模态上被吞/点歪，残留窗口也会拉高帧差、干扰 scroll_search 的「帧差判到底」。
-        self._cleanup(spec)
-        return True
+        if ctx.should_stop():
+            return False
+        if spec.get("confirm") and not self._confirm_if_present():
+            return False
+        return not ctx.should_stop()
 
     def _click(self, how, x, y):
-        """按 how(left/right/double) 拟人化点击屏幕坐标。"""
+        """按 how(left/right/double) 拟人化点击屏幕坐标，返回是否获准执行。"""
+        if self.dry_run or self.ctx.should_stop():
+            return False
         if how == "right":
-            self.ctx.mouse.right_click(x, y)
+            result = self.ctx.mouse.right_click(x, y)
         elif how == "double":
-            self.ctx.mouse.double_click(x, y)
+            result = self.ctx.mouse.double_click(x, y)
         else:
-            self.ctx.mouse.click(x, y)
+            result = self.ctx.mouse.click(x, y)
+        return result is not False
 
     def _cleanup(self, spec):
         """动作收尾，把残留菜单/弹窗关掉回干净的包裹列表（见 _ACTION_SPECS 的 close 说明）。
@@ -315,19 +375,23 @@ class InventoryOrganizer:
                      仅当探测到子面板还在（出售/满 等按钮仍匹配）才补发 close_panel 关它；
                      **绝不无脑 ESC**，否则窗口已自动关掉时这记 ESC 会把包裹关了（踩坑：整理提前收工）。
         其余(panel)：发 close_panel(ESC) 关「会一直开着等 ESC」的右键菜单/确认框（使用/丢弃）。"""
+        if self.dry_run or self.ctx.should_stop():
+            return
         close = spec.get("close")
+        result = True
         if close == "right":
             rect = self.ctx.window.rect()
             if rect is not None:
-                self.ctx.mouse.right_click(rect[0] + rect[2] // 2, rect[1] + rect[3] // 2)
+                result = self._click("right", rect[0] + rect[2] // 2, rect[1] + rect[3] // 2)
             else:
-                self.ctx.send_hotkey("close_panel")
+                result = self.ctx.send_hotkey("close_panel")
         elif close == "auto":
             if self._action_panel_present(spec):
-                self.ctx.send_hotkey("close_panel")   # 子面板没自动关掉，补一记 ESC 关它
-            # 否则什么都不做：窗口已自我关闭、当前只剩包裹，发 ESC 会误关包裹。
+                result = self.ctx.send_hotkey("close_panel")
         else:
-            self.ctx.send_hotkey("close_panel")
+            result = self.ctx.send_hotkey("close_panel")
+        if result is False and not self.ctx.should_stop():
+            raise InventoryRecoveryError("物品面板收尾输入未获准")
         self._sleep(self._jitter(0.3))
 
     def _action_panel_present(self, spec):
@@ -343,16 +407,18 @@ class InventoryOrganizer:
 
     def _confirm_if_present(self):
         if self._btn.get("confirm_button") is None:
-            return
+            return False
         # 复用统一的「带超时轮询」：在 confirm_timeout_sec 内反复找「确定」，命中即点。
         hit = self._find_full_wait("confirm_button", self.loop.get("confirm_timeout_sec", 6))
         if hit is not None:
-            self.ctx.mouse.click(hit[0], hit[1])
+            if not self._click("left", hit[0], hit[1]):
+                return False
             self.ctx.log(f"点「确定」确认（{hit[2]:.2f}）。", level="hit")
-            return
+            return True
         # 确认框确实弹了但没匹配到「确定」：告警，靠 _do_action 收尾的 close_panel 关掉模态，不留模态继续滚。
         self.ctx.log("等「确定」确认超时（没匹配到确认按钮），将关菜单跳过该物品（请检查 confirm_button 标定）。",
                      level="warn")
+        return False
 
     def _find_full(self, tpl_key):
         """整窗找按钮模板（单帧）。命中返回屏幕 (x,y,score)，否则 None。

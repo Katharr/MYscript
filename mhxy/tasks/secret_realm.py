@@ -140,13 +140,13 @@ class SecretRealmTask(Task):
         contexts = self._resolve_contexts(ctx, multi)
         if not contexts:
             ctx.log("没找到/没选中目标窗口，已停止。", level="error")
-            return
+            return "stopped" if ctx.should_stop() else "failed"
 
         if dry_run:
             ctx.log("演练模式：只对各号当前屏幕做『各标志识别自检』，不发快捷键/不点关键操作。"
                     + ("多号逐个扫描。" if multi else ""), level="warn")
             self._dry_run_selfcheck(ctx, contexts, multi, regions, threshold, switch_delay, deadline)
-            return
+            return "stopped" if ctx.should_stop() else "timeout"
 
         ctx.log(f"★ 实战模式：{('多开轮转 ' + str(len(contexts)) + ' 个号' if multi else '单号')}，"
                 f"每号连跑 {self.max_runs} 轮，号与号之间逐步轮转 ★", level="warn")
@@ -154,15 +154,18 @@ class SecretRealmTask(Task):
             ctx.log(f"时间上限 {time_limit} 分钟（到点自停）。每号每轮终止条件是 失败 或 时长超时。")
 
         records = [self._new_record(c) for c in contexts]
-        rotation.run_rotation(self._make_rotation(
+        rc = self._make_rotation(
             ctx, records,
             lambda rec: self._step_once(rec["ctx"], rec, loop, regions, threshold),
-            multi, switch_delay, tick, time_limit))
+            multi, switch_delay, tick, time_limit)
+        rotation.run_rotation(rc)
 
         if all(r["done"] for r in records):
             ctx.log("所有号都已跑满轮数/结束。")
         total = sum(r["runs"] for r in records)
         ctx.log(f"已停止。共完成 {total} 轮秘境，用时 {(time.time() - start_ts) / 60:.1f} 分钟。")
+
+        return self._activity_run_outcome(ctx, records, rc.termination_reason, "runs")
 
     # ------------------------------------------------------------------
     # 日常一条龙·每窗口独立链：暴露「单窗口一份 record + 单步推进函数」
@@ -241,6 +244,7 @@ class SecretRealmTask(Task):
         self._focus(ctx)
         if not ctx.send_hotkey("open_activity"):
             ctx.log("打不开活动界面（open_activity 快捷键未配置），放弃该号。", level="error")
+            rec["outcome"] = "failed"
             rec["done"] = True
             return
         ctx.log("已打开活动，翻找秘境降妖卡片…")
@@ -413,6 +417,8 @@ class SecretRealmTask(Task):
             return
         if self._state_elapsed(rec) > loop.get("step_timeout_sec", 20):
             ctx.log("等「离开」按钮超时，按本轮结束处理。", level="warn")
+            # 证据跨轮保留：任一轮未点到离开，整体不宣称已确认收尾；不改变旧计轮/重试。
+            rec["leave_timed_out"] = True
             self._finish_run(ctx, rec)
 
     def _finish_run(self, ctx, rec):
@@ -421,6 +427,8 @@ class SecretRealmTask(Task):
         ctx.log(f"完成第 {rec['runs']}/{self.max_runs} 轮秘境。", level="hit")
         self._interruptible_sleep(ctx, self._jitter(1.0, ctx))
         if rec["runs"] >= self.max_runs:
+            # completed 沿用点击即计轮的旧判据，未核验输入接受或客户端确已离开。
+            rec["outcome"] = "timeout" if rec.get("leave_timed_out") else "completed"
             rec["done"] = True
             ctx.log("该号已跑满设定轮数。")
             return
@@ -439,6 +447,7 @@ class SecretRealmTask(Task):
         self._save_capture(self._grab_scene(ctx, regions), f"stuck_{rec['state']}")
         if rec["recover"] >= loop.get("max_stuck_recover", 3):
             ctx.log("多次卡死仍无进展，放弃该号。", level="error")
+            rec["outcome"] = "failed"
             rec["done"] = True
             return
         if not rec["entered_battle"]:
@@ -448,6 +457,7 @@ class SecretRealmTask(Task):
             self._goto(rec, S_OPEN_ACTIVITY)
         else:
             ctx.log("已在秘境战斗中卡死，放弃该号。", level="warn")
+            rec["outcome"] = "failed"
             rec["done"] = True
 
     # ------------------------------------------------------------------

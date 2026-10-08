@@ -154,10 +154,10 @@ class TaohaiquTask(Task):
         wins = ctx.select_windows()
         if not wins:
             ctx.log("没找到/没选中目标窗口，已停止。", level="error")
-            return
+            return "stopped" if ctx.should_stop() else "failed"
         if not skip_team and len(wins) < 2:
             ctx.log("选中窗口不足 2 个（组队至少队长+1 队员）；若已自行组好队，请勾选「已组队」。", level="error")
-            return
+            return "stopped" if ctx.should_stop() else "failed"
         if not (0 <= cap < len(wins)):
             cap = 0
 
@@ -180,7 +180,7 @@ class TaohaiquTask(Task):
         if dry_run:
             ctx.log("演练模式：不组队、不发快捷键/不点，只对各号识别组队+副本模板做自检。", level="warn")
             self._dry_run_selfcheck(ctx, assignments, regions, threshold)
-            return
+            return "stopped" if ctx.should_stop() else "failed"
 
         # —— 第一步：组队（已勾选「已组队」则跳过，直接由队长跑）——
         if skip_team:
@@ -192,15 +192,15 @@ class TaohaiquTask(Task):
             team = TeamFormation(ctx, assignments, team_cfg, dry_run=False)
             ok, reason = team.run_until_formed()
             if ctx.should_stop():
-                return
+                return "stopped"
             if not ok:
                 ctx.log(f"组队未完成（{reason}），蹈海去中止。", level="error")
-                return
+                return team.formation_outcome
             ctx.log("组队完成，队长开始跑蹈海去副本流程…", level="hit")
 
         # —— 第二步：队长跑副本流程 ——
         self._interruptible_sleep(ctx, self._jitter(0.8, ctx))
-        self._run_dungeon(cap_child, loop, regions, threshold)
+        outcome = self._run_dungeon(cap_child, loop, regions, threshold)
 
         # —— 第三步（可选）：副本跑完后自动解散队伍（所有号退队，不分队长队员同一套流程）——
         if tc.get("auto_disband", False) and not ctx.should_stop():
@@ -211,6 +211,9 @@ class TaohaiquTask(Task):
             ok, _ = team.run_disband()
             if ok:
                 ctx.log("队伍已解散。", level="hit")
+            if outcome == "completed" and team.disband_outcome != "completed":
+                outcome = "partial"
+        return "stopped" if ctx.should_stop() else outcome
 
     # ------------------------------------------------------------------
     # 队长副本流程（线性、阻塞式；每个轮询里勤查 should_stop）
@@ -225,24 +228,24 @@ class TaohaiquTask(Task):
 
         # 前缀：开活动 → 参加 → 选副本 → 进入
         if not self._open_and_join(ctx, loop, regions, threshold):
-            return
+            return "failed"
         if not self._click_when(ctx, "thq_select", "选择副本", regions, threshold, npc_to):
             ctx.log("等「选择副本」对话框超时（角色可能还没寻路到 NPC），中止。", level="error")
-            return
+            return "timeout"
         if not self._click_enter(ctx, loop, regions, threshold, step_to):
             ctx.log("没点到蹈海去「进入」，中止。", level="error")
-            return
+            return "timeout" if self.flags.get("thq_enter") is not None else "failed"
 
         # 三场剧情战斗：公共节奏 [等并点跳过 → 开任务弹窗 → 马上传送 → 点本场对话选项]
         skip_to = entry_skip_to     # 第 1 个跳过跟在「进入」后的传送动画后，给短一点
         for i, (opt_key, opt_label) in enumerate(_DIALOGS, start=1):
             if not self._click_when(ctx, "thq_skip", f"跳过剧情({i})", regions, threshold, skip_to):
                 ctx.log(f"第 {i} 段等「跳过剧情」超时，中止。", level="error")
-                return
+                return "partial"
             self._focus(ctx)
             if not ctx.send_hotkey("open_task"):
                 ctx.log("打不开任务弹窗（open_task 未配置），中止。", level="error")
-                return
+                return "partial"
             self._interruptible_sleep(ctx, self._jitter(0.6, ctx))
             # 开任务弹窗后【不能直接传送】：先尝试点「日常」分类、再在列表点中蹈海去这条任务，「马上传送」才对应它。
             # 「日常」是可选步骤——检测到就点(它才会列出蹈海去任务)；没检测到就跳过、直接点蹈海去任务。
@@ -250,27 +253,30 @@ class TaohaiquTask(Task):
                 ctx.log("没检测到任务弹窗「日常」按钮，直接点蹈海去任务。", level="warn")
             if not self._click_when(ctx, "thq_task", "任务列表·蹈海去", regions, threshold, step_to):
                 ctx.log("等任务列表里「蹈海去」任务条目超时，中止。", level="error")
-                return
+                return "partial"
             if not self._click_when(ctx, "thq_teleport", "马上传送", regions, threshold, step_to):
                 ctx.log("等「马上传送」超时，中止。", level="error")
-                return
+                return "partial"
             if not self._click_when(ctx, opt_key, opt_label, regions, threshold, step_to):
                 ctx.log(f"等对话「{opt_label}」超时，中止。", level="error")
-                return
+                return "partial"
             ctx.log(f"第 {i} 场战斗已发起，等它打完…", level="hit")
             skip_to = battle_to     # 后续跳过都跟在一场战斗后，给足时长
 
         # 收尾：第三场战斗结束的跳过 → 再点一下屏幕 → 小闹钟
         if not self._click_when(ctx, "thq_skip", "跳过剧情(收尾)", regions, threshold, battle_to):
             ctx.log("等收尾「跳过剧情」超时，中止。", level="error")
-            return
+            return "partial"
         self._interruptible_sleep(ctx, self._jitter(0.6, ctx))
         self._click_scene_center(ctx, regions)          # 「再点一下屏幕」
         self._interruptible_sleep(ctx, self._jitter(0.6, ctx))
         if self._click_when(ctx, "thq_clock", "小闹钟", regions, threshold, step_to):
             ctx.log("★ 蹈海去·50 完成，已点小闹钟收尾。★", level="hit")
+            # 旧完成证据是匹配后发出点击；输入拒绝仍可返回 True，没有新加客户端核验。
+            return "completed"
         else:
             ctx.log("没点到「小闹钟」（副本可能已自动结束）。流程结束。", level="warn")
+            return "partial"
 
     # ---- 开活动 → 找蹈海去卡片 → 点「参加」----
     def _open_and_join(self, ctx, loop, regions, threshold):

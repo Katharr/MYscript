@@ -69,7 +69,7 @@ class SniperTask(Task):
         contexts = self._resolve_contexts(ctx, multi)
         if not contexts:
             ctx.log("没找到/没选中目标窗口，已停止。", level="error")
-            return
+            return "stopped" if ctx.should_stop() else "failed"
         target = tc["target_count"]
         records = [{"ctx": c, "label": getattr(c, "label", "") or "当前窗口",
                     "state": "识别中", "count": 0, "done": False,
@@ -103,15 +103,28 @@ class SniperTask(Task):
                                  tc["loop"].get("tick_interval_sec", 0.06))
         # 商品页必须保持人工选定状态，禁止轮转钩子自动打开背包干扰。
         rc.between_steps = lambda rec: None
-        rotation.run_rotation(rc)
+        failed = False
+        try:
+            rotation.run_rotation(rc)
+        except Exception as exc:
+            # 只聚合已有购买计数；不重试异常后的购买副作用。
+            failed = True
+            ctx.log(f"任务异常：{exc}", level="error")
         if ctx.should_stop():
             for rec in records:
                 if not rec["done"] and rec["state"] != "结果未确认":
                     rec["state"] = "已停止"
             self._publish(records, target)
             ctx.log("秒装备已停止。")
-        else:
+            return "stopped"
+        if not failed and not dry and all(r["done"] and r["count"] >= target for r in records):
             ctx.log("所有窗口已完成购买。")
+            return "completed"
+        if any(r["count"] > 0 for r in records):
+            return "partial"
+        if rc.termination_reason == "timeout":
+            return "timeout"
+        return "failed"
 
     def _match(self, ctx, region, tpl, threshold):
         rect = ctx.detection_rect(region)

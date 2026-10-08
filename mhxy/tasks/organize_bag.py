@@ -74,13 +74,15 @@ class OrganizeBagTask(Task):
         wins = ctx.select_windows()
         if not wins:
             ctx.log("没选到任何目标窗口，已停止。", level="error")
-            return
+            return "stopped" if ctx.should_stop() else "failed"
         if not self._is_admin():
             ctx.log("⚠ 当前非管理员：游戏前台时鼠标/键盘注入可能被拦截，建议以管理员重开。", level="warn")
         multi = ctx.cfg.get("targets", {}).get("multi", False) and len(wins) > 1
         if dry_run:
             ctx.log("整理背包·演练：只识别物品+打日志，不执行任何动作。", level="warn")
         total = 0
+        completed = 0
+        progressed = False
         labels = ctx.window_labels(wins) if multi else None
         for i, w in enumerate(wins):
             if ctx.should_stop():
@@ -93,10 +95,27 @@ class OrganizeBagTask(Task):
                 continue
             self._interruptible_sleep(child, self._jitter(0.3, child))
             # 单号整理异常（窗口中途失效、模板尺寸异常等）只跳过该号，不连累同批其余号。
+            organizer = None
             try:
-                handled, _reason = InventoryOrganizer(child, tc, dry_run=dry_run).organize()
+                organizer = InventoryOrganizer(child, tc, dry_run=dry_run)
+                handled, reason = organizer.organize()
                 total += handled
+                evidence = organizer.evidence
+                progressed = progressed or handled > 0
+                if reason == "done" and not any(evidence[key] for key in (
+                        "action_failures", "scan_limited", "observation_failed")):
+                    completed += 1
             except Exception as e:
+                if organizer is not None:
+                    progressed = progressed or organizer.evidence["handled"] > 0
                 child.log(f"该号整理异常，跳过：{e}", level="error")
                 continue
         ctx.log(f"★ 整理背包结束：共处理/识别 {total} 件。", level="hit")
+        if ctx.should_stop():
+            return "stopped"
+        # completed 仅表示原有有界整理/当前屏演练结束，非背包清空核验。
+        if completed == len(wins):
+            return "completed"
+        if completed or progressed:
+            return "partial"
+        return "failed"

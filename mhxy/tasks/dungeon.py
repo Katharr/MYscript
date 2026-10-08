@@ -78,7 +78,7 @@ class DungeonTask(Task):
         wins = ctx.select_windows()
         if len(wins) < 2:
             ctx.log("选中窗口不足 2 个（组队至少队长+1 队员），已停止。", level="error")
-            return
+            return "stopped" if ctx.should_stop() else "failed"
         if not (0 <= cap < len(wins)):
             cap = 0
 
@@ -106,8 +106,9 @@ class DungeonTask(Task):
         team = TeamFormation(ctx, assignments, team_cfg, dry_run=dry_run)
         ok, reason = team.run_until_formed()
         if dry_run:
-            return
+            return team.formation_outcome
         if ok:
             ctx.log("✔ 组队完成。", level="hit")
         else:
             ctx.log(f"组队未完成（{reason}）。", level="warn")
+        return team.formation_outcome

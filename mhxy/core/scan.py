@@ -80,18 +80,24 @@ def _scroll_to_top(grab_rect, mouse, should_stop, sleep, scroll_step,
     while not should_stop() and ups < reset_max:
         rect = grab_rect()
         if rect is None:
-            return
+            return False
         cur = win_mod.grab(rect)
+        if cur is None:
+            return False
         if cur is not None and prev is not None and vision.frame_diff(cur, prev) < end_diff:
-            return                  # 滚不动了=已到顶
+            return True             # 滚不动了=已到顶
         cx, cy = _center(rect)
-        mouse.scroll(up, cx, cy)
+        if mouse.scroll(up, cx, cy) is False:
+            return False
         prev = cur
         ups += 1
         sleep(settle_sec)
+    if should_stop():
+        return False
     if ups >= reset_max and log:
         log(f"滚到顶达上限 {reset_max} 屏仍在变化（列表很长或 end_diff 偏小），按当前位置开始向下找。")
 
+    return True
 
 def scroll_search(*, grab_rect, probe, mouse, should_stop, sleep,
                   scroll_step=-3, max_tries=8, settle_sec=0.35,
@@ -103,8 +109,9 @@ def scroll_search(*, grab_rect, probe, mouse, should_stop, sleep,
     用户拍板：滚轮查找在【同一个号】上一气呵成跑完（找到/翻完才返回），不在滚动中途让出去轮转别号——
     故这是个自带内循环的阻塞函数，只在 ACCEPT/翻完/被停止时返回；全程勤查 should_stop。"""
     if reset_to_top:
-        _scroll_to_top(grab_rect, mouse, should_stop, sleep, scroll_step,
-                       settle_sec, end_diff, reset_max, log)
+        if _scroll_to_top(grab_rect, mouse, should_stop, sleep, scroll_step,
+                          settle_sec, end_diff, reset_max, log) is False:
+            return ScanResult("stopped")
 
     tries = 0
     pre_scroll_scene = None         # 上一次「向下滚之前」看到的那片画面，用来判滚动后有没有动
@@ -113,6 +120,8 @@ def scroll_search(*, grab_rect, probe, mouse, should_stop, sleep,
         if rect is None:
             return ScanResult("stopped", scrolls=tries)
         scene = win_mod.grab(rect)
+        if scene is None or should_stop():
+            return ScanResult("stopped", scrolls=tries)
 
         # 帧差判到底：刚滚过一屏，但画面和滚前几乎一样→滚动条到底了，整段已翻完
         # （这片内容上一轮已 probe 过且没接受，不必再 probe，直接判 exhausted）。
@@ -128,7 +137,8 @@ def scroll_search(*, grab_rect, probe, mouse, should_stop, sleep,
 
         if decision == SCROLL:
             cx, cy = _center(rect)
-            mouse.scroll(scroll_step, cx, cy)
+            if mouse.scroll(scroll_step, cx, cy) is False:
+                return ScanResult("stopped", scrolls=tries)
             # SCROLL：probe 只看没动手 → 滚前画面干净，记下它，下一轮和滚后对比判到底。
             pre_scroll_scene = scene
         else:                               # HANDLED / STAY：都不滚，原地重 probe，清掉「刚滚过」标记

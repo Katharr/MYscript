@@ -99,6 +99,8 @@ class TeamFormation:
         self.team_ready = False     # 队长已建队并「申请」开放，队员才能开始申请
         self.joined = 0             # 队长已点过的「接受」次数（≈已入队人数）
         self.records = [self._new_record(wctx, role) for wctx, role in assignments]
+        self.formation_outcome = None  # run_until_formed 的补充证据，不用于改变握手控制流
+        self.disband_outcome = None    # run_disband 的旧退队/收尾证据，非客户端核验
 
     # ------------------------------------------------------------------
     # 初始化辅助
@@ -154,8 +156,12 @@ class TeamFormation:
         tick = self.loop.get("tick_interval_sec", 0.5)
         overall = self.loop.get("form_timeout_sec", 180) or 0
 
+        self.formation_outcome = None
         if self.dry_run:
-            return self._dry_run_selfcheck(multi, switch_delay)
+            result = self._dry_run_selfcheck(multi, switch_delay)
+            # completed 在演练中仅表示自检结束，不证明已成队。
+            self.formation_outcome = "stopped" if self.lead.should_stop() else "completed"
+            return result
 
         self._captain_gone = False
 
@@ -190,12 +196,19 @@ class TeamFormation:
         result = rotation.run_rotation(rc)
 
         if result == "aborted" and self._captain_gone:
+            self.formation_outcome = "stopped" if self.lead.should_stop() else "failed"
             return False, "captain_window_gone"
         if self.lead.should_stop():
+            self.formation_outcome = "stopped"
             return False, "stopped"
         if self.joined >= self.member_count:
+            # 保留现状：joined 是队长点击同意的计数，不新增客户端成队核验。
+            self.formation_outcome = "completed"
             self.lead.log(f"★ 组队成功：{self.joined}/{self.member_count} 名队员已入队。", level="hit")
             return True, "formed"
+        # 已有接受计数但未达到人数时记 partial；零计数才区分总超时与失败。
+        self.formation_outcome = ("partial" if self.joined else
+                                  "timeout" if rc.termination_reason == "timeout" else "failed")
         self.lead.log(f"组队未达人数：{self.joined}/{self.member_count} 入队。", level="warn")
         return False, "not_enough"
 
@@ -320,14 +333,16 @@ class TeamFormation:
         deadline = rec["t_state"] + self.loop.get("find_leader_timeout_sec", 60)
 
         def probe(scene, rect):
-            hit = vision.match(scene, leader_tpl, self.threshold) if scene is not None else None
+            hit = (vision.match(scene, leader_tpl, self.threshold)
+                   if scene is not None and scene.size > 0 else None)
             if hit is None:
                 return scan.SCROLL, None
             lx, ly, score = rect[0] + hit[0], rect[1] + hit[1], hit[2]
-            arrow = self._find_arrow_on_row(ctx, "friend_list", (lx, ly))
-            if arrow is None:        # 仅当区域取不到（窗口没了）才会是 None → 不滚，交下一轮 grab_rect=None 收尾
+            arrow = self._find_arrow_on_row(scene, rect, (lx, ly))
+            if arrow is None:        # 当前观察无效，不用新截图补旧锚点
                 return scan.STAY, None
-            ctx.mouse.click(arrow[0], arrow[1])
+            if ctx.mouse.click(arrow[0], arrow[1]) is False:
+                return scan.STAY, None
             if arrow[2] > 0:
                 ctx.log(f"队员：找到队长（{score:.2f}）→ 点右侧箭头（{arrow[2]:.2f}），准备申请入队。", level="hit")
             else:
@@ -392,13 +407,16 @@ class TeamFormation:
         开队伍面板 → 找「退出队伍」点击 → 右键关面板；约 1s 内找不到「退出队伍」则认为本就不在队、
         直接关面板收尾。各号独立、无号间握手，故复用通用轮转推进器（每号一份 record、走
         同一条 D_OPEN→D_QUIT 状态链）。返回 (ok, reason)：ok=所有在场号都已退队/收尾。"""
+        self.disband_outcome = None
         multi = self.cfg.get("targets", {}).get("multi", False)
         switch_delay = self.cfg.get("targets", {}).get("switch_delay_sec", 0.15)
         tick = self.loop.get("tick_interval_sec", 0.5)
         overall = self.loop.get("disband_timeout_sec", 60) or 0
 
         if self.dry_run:
-            return self._dry_run_disband(multi, switch_delay)
+            result = self._dry_run_disband(multi, switch_delay)
+            self.disband_outcome = "stopped" if self.lead.should_stop() else "completed"
+            return result
 
         records = [self._new_disband_record(rec["ctx"]) for rec in self.records]
 
@@ -428,9 +446,13 @@ class TeamFormation:
         rotation.run_rotation(rc)
 
         if self.lead.should_stop():
+            self.disband_outcome = "stopped"
             return False, "stopped"
         done_n = sum(1 for r in records if r["ok"])
         ok = done_n >= len(records) and len(records) > 0
+        # ok 是旧「退队/收尾」判据：未命中与输入拒绝也可能置位，非客户端退队核验。
+        self.disband_outcome = ("completed" if ok else "partial" if done_n else
+                                "timeout" if rc.termination_reason == "timeout" else "failed")
         self.lead.log(f"★ 解散队伍：{done_n}/{len(records)} 个号已退队/收尾。",
                       level="hit" if ok else "warn")
         return ok, "disbanded" if ok else "partial"
@@ -543,8 +565,9 @@ class TeamFormation:
             return None
         return (rect[0] + m[0], rect[1] + m[1], m[2])
 
-    def _find_arrow_on_row(self, ctx, region_key, leader_screen_xy):
-        """在队长ID命中【行/卡片】的右侧找箭头按钮(team_arrow)。返回屏幕 (x, y, score)。
+    def _find_arrow_on_row(self, scene, rect, leader_screen_xy):
+        """仅用队长ID命中的同一 scene/rect 找右侧箭头，返回屏幕 (x, y, score)。
+        不重新读取窗口或截图；无效观察不产生几何兜底候选。
         参照 core.list_row（活动列表「条目 → 右侧参加按钮」定位）的「按行 + 按模板比例撑开带」思路
         抗布局漂移、不串到别人那行：
         - 横向：从队长名字的【右边缘】一直扫到该区域【右缘】（整行右半部分都找）。
@@ -559,8 +582,7 @@ class TeamFormation:
           队长ID 在卡片内的纵向位置 = arrow_leader_pos(默认 0.4，即中上)，据此把带从卡片顶撑到卡片底；
           兜底点也落到【卡片纵向中心】而非队长ID 的 Y。排版不同改这俩 config 即可，不必改代码。
           下边界恰停在本卡片底，不会串到下一张卡片的箭头。"""
-        rect = self._region_rect(ctx, region_key)
-        if rect is None:
+        if rect is None or scene is None or scene.size == 0:
             return None
         rx, ry = rect[0], rect[1]
         lx, ly = leader_screen_xy
@@ -579,9 +601,6 @@ class TeamFormation:
         fallback = (right_edge_x + int(self.loop.get("arrow_offset_x", 28)), ly + mid_off, 0.0)
         arrow_tpl = self.tpl.get("team_arrow")
         if arrow_tpl is None:
-            return fallback
-        scene = win_mod.grab(rect)
-        if scene is None:
             return fallback
         sh, sw = scene.shape[:2]
         ly_local = int(ly - ry)

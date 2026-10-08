@@ -9,6 +9,7 @@ from PIL import Image
 
 from . import theme as T
 from ..core import calib_profiles as calib
+from ..core import calibration_assets
 from ..core import config as cfg_mod
 from ..core import vision
 from ..core.inventory import ACTION_LABELS, ACTION_ORDER
@@ -162,7 +163,7 @@ class InventoryItemsDialog(ctk.CTkToplevel):
                       text_color=T.ON_ACCENT, command=self._close).grid(row=0, column=1, sticky="e")
 
     def _refresh(self):
-        from .app import load_thumb
+        from .widgets import load_thumb
         self._thumbs.clear()
         for w in self.list_frame.winfo_children():
             w.destroy()
@@ -244,17 +245,25 @@ class InventoryItemsDialog(ctk.CTkToplevel):
             self._refresh()
 
     def _delete_item(self, idx):
+        """只删清单与归属，保留模板；保存成功后才发布独立草稿。"""
         items = self.tc.get("items", []) or []
-        if 0 <= idx < len(items):
-            name = items[idx].get("name", "?")
-
-            def change():
-                items.pop(idx)
-                self.tc.get("templates_calib", {}).pop(name, None)
-
-            if self._apply_items_change(change):
-                self._refresh()
-                self._toast(f"已删除：{name}", T.TEXT_DIM)
+        if not (0 <= idx < len(items)):
+            return
+        name = items[idx].get("name", "?")
+        try:
+            draft = deepcopy(self.cfg)
+            # 初次加载的 tc 带有 task_config 补齐的默认值，可能与 cfg 分离。
+            draft_tc = deepcopy(self.tc)
+            draft_tc["items"].pop(idx)
+            draft_tc.get("templates_calib", {}).pop(name, None)
+            cfg_mod.set_task_config(draft, "organize_bag", draft_tc)
+            cfg_mod.save_config(draft)
+        except Exception as exc:
+            self._toast(f"删除物品失败，本次修改未保留：{exc}", T.DANGER)
+            return
+        self.cfg, self.tc = draft, draft_tc
+        self._refresh()
+        self._toast(f"已删除：{name}", T.TEXT_DIM)
 
     def _add_items(self, batch):
         if self._adding:
@@ -264,15 +273,16 @@ class InventoryItemsDialog(ctk.CTkToplevel):
         added = 0
         try:
             while True:
+                draft = deepcopy(self.cfg)
                 rel, crop, pid = grab_roi_on_app(
-                    self.app, self.cfg, "框选要整理的物品（图标+名字）", with_crop=True,
-                    toast=self._toast, alpha_windows=(self.app, self))
+                    self.app, draft, "框选要整理的物品（图标+名字）", with_crop=True,
+                    toast=self._toast, alpha_windows=(self.app, self), save_profile=False)
                 if rel is None:
                     break
                 if crop is None or crop.size == 0:
                     self._toast("截图失败，请重试。", T.DANGER)
                     break
-                name = next_item_name(self.tc.get("items", []) or [])
+                name = next_item_name(cfg_mod.task_config(draft, "organize_bag").get("items", []) or [])
                 confirm = ItemActionDialog(self, crop, name, batch=batch)
                 self.wait_window(confirm)
                 if confirm.result is None:
@@ -281,23 +291,20 @@ class InventoryItemsDialog(ctk.CTkToplevel):
                 # 文件名用独立 ID：改名及删除后的编号复用都不会覆盖旧模板。
                 rel_path = f"templates/ob_{uuid4().hex}.png"
                 try:
-                    image_saved = vision.save_image(rel_path, crop)
-                except Exception:
-                    image_saved = False
-                if not image_saved:
-                    self._toast("保存模板图失败。", T.DANGER)
-                    break
-
-                def change():
-                    self.tc.setdefault("items", []).append(
+                    encoded = vision.encode_png(crop)
+                    draft_tc = cfg_mod.task_config(draft, "organize_bag")
+                    draft_tc.setdefault("items", []).append(
                         {"name": name, "template": rel_path, "action": action})
-                    # 标定指针必须写入同一配置块，避免 _save 覆盖掉新指针。
-                    cfg_mod.set_task_config(self.cfg, "organize_bag", self.tc)
-                    calib.set_task_profile(self.cfg, "organize_bag", pid)
-                    calib.set_template_profile(self.cfg, "organize_bag", name, pid)
-
-                if not self._apply_items_change(change):
+                    cfg_mod.set_task_config(draft, "organize_bag", draft_tc)
+                    calib.set_task_profile(draft, "organize_bag", pid)
+                    calib.set_template_profile(draft, "organize_bag", name, pid)
+                    calibration_assets.commit_image(draft, rel_path, encoded)
+                except Exception as exc:
+                    self._toast(f"添加物品失败：{exc}", T.DANGER)
                     break
+
+                self.cfg = draft
+                self.tc = draft["tasks"]["organize_bag"]
                 self._refresh()
                 added += 1
                 self._toast(f"已添加 {added} 件；最新：{name}（{ACTION_LABELS[action]}）", T.SUCCESS)

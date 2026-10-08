@@ -44,6 +44,12 @@ class _WINDOWPLACEMENT(ctypes.Structure):
                 ("rcNormalPosition", ctypes.wintypes.RECT)]
 
 
+_user32.GetForegroundWindow.argtypes = []
+_user32.GetForegroundWindow.restype = ctypes.wintypes.HWND
+_user32.IsWindow.argtypes = [ctypes.wintypes.HWND]
+_user32.IsWindow.restype = ctypes.wintypes.BOOL
+_user32.IsIconic.argtypes = [ctypes.wintypes.HWND]
+_user32.IsIconic.restype = ctypes.wintypes.BOOL
 _user32.GetWindowPlacement.argtypes = [ctypes.wintypes.HWND, ctypes.POINTER(_WINDOWPLACEMENT)]
 _user32.GetWindowPlacement.restype = ctypes.wintypes.BOOL
 
@@ -208,6 +214,24 @@ class _MONITORINFO(ctypes.Structure):
                 ("rcMonitor", ctypes.wintypes.RECT),
                 ("rcWork", ctypes.wintypes.RECT),
                 ("dwFlags", ctypes.wintypes.DWORD)]
+
+
+def foreground_evidence(win):
+    """只读核验目标 HWND、前台及几何；失败返回 None，不激活或注入。"""
+    try:
+        handle = win.hwnd
+        hwnd = int(handle() if callable(handle) else handle)
+        rect = win.rect()
+        if not hwnd or rect is None or not _user32.IsWindow(hwnd):
+            return None
+        if _user32.IsIconic(hwnd) or int(_user32.GetForegroundWindow() or 0) != hwnd:
+            return None
+        rect = tuple(int(v) for v in rect)
+        if len(rect) != 4 or rect[2] <= 0 or rect[3] <= 0:
+            return None
+        return hwnd, rect
+    except Exception:
+        return None
 
 
 def monitor_work_area(hwnd=None):
@@ -429,6 +453,21 @@ class GameWindow:
             return None
 
     def activate(self):
+        from .input_session import current_session
+        session = current_session()
+        if session is not None and not session._foreground(self):
+            session.invalidate()  # 真正切前台后必须重新截图；同窗无操作激活仍可保留观察
+        try:
+            ok = self._activate()
+        except Exception:
+            if session is not None:
+                session.activated(self, False)
+            raise
+        if session is not None:
+            session.activated(self, ok)
+        return ok
+
+    def _activate(self):
         """把本窗口切到前台并【校验确实成功】，成功返回 True、失败返回 False。
 
         关键：多开时若没真正切到前台就点击，点击会落在后台号上被吞/点歪。故这里用 _force_foreground
@@ -1001,11 +1040,22 @@ def _get_sct():
 
 def grab(rect):
     """截取屏幕矩形 [left, top, w, h]，返回 OpenCV BGR 图像。"""
-    left, top, w, h = rect
-    raw = _get_sct().grab({"left": int(left), "top": int(top),
-                           "width": int(w), "height": int(h)})
-    img = np.array(raw)  # BGRA
-    return cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+    from .input_session import current_session
+    session = current_session()
+    token = session.capture_token() if session is not None else None
+    try:
+        left, top, w, h = rect
+        raw = _get_sct().grab({"left": int(left), "top": int(top),
+                               "width": int(w), "height": int(h)})
+        img = np.array(raw)  # BGRA
+        result = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+    except Exception:
+        if session is not None:
+            session.invalidate()
+        raise
+    if session is not None:
+        session.observed(token, rect, result is not None)
+    return result
 
 
 # ----------------------------------------------------------------------
@@ -1076,7 +1126,27 @@ class ScaledScene:
             return 1.0
         if abs(w - bw) <= SIZE_TOL and abs(h - bh) <= SIZE_TOL:
             return 1.0
-        return max(0.5, min(2.0, math.sqrt((bw / w) * (bh / h))))
+        scale = max(0.5, min(2.0, math.sqrt((bw / w) * (bh / h))))
+        # 未重采样时，所有坐标和阈值都必须按恒等变换处理。
+        return 1.0 if abs(scale - 1.0) < 0.02 else scale
+
+    def _image_size(self):
+        if self._img is not None:
+            h, w = self._img.shape[:2]
+            return w, h
+        return self._rect[2], self._rect[3]
+
+    def _target_size(self):
+        w, h = self._image_size()
+        if not self.normalized:
+            return w, h
+        return max(6, int(round(w * self._scale))), max(6, int(round(h * self._scale)))
+
+    def _axis_scales(self):
+        """取整后的真实逐轴变换；坐标换算不触发截图。"""
+        w, h = self._image_size()
+        nw, nh = self._target_size()
+        return nw / float(w), nh / float(h)
 
     @property
     def img(self):
@@ -1087,38 +1157,37 @@ class ScaledScene:
         if not self.normalized:
             return self._img
         if self._norm is None:
-            self._norm = _resize(self._img, self._rect[2] * self._scale, self._rect[3] * self._scale)
+            self._norm = _resize(self._img, *self._target_size())
         return self._norm
 
     @property
     def local_rect(self):
         """缩放后画面在原屏幕矩形内的比例矩形：[x, y, w, h]（x/y 恒为 0，尺寸按 scale）。
         仅供绘制/调试；坐标换算一律用 to_screen()。"""
-        if not self.normalized:
-            return [0, 0, self._rect[2], self._rect[3]]
-        return [0, 0, int(round(self._rect[2] * self._scale)), int(round(self._rect[3] * self._scale))]
+        w, h = self._target_size()
+        return [0, 0, w, h]
 
     # ---- 坐标换算（唯一出口）----
     def to_screen(self, x, y):
         """把【缩放后画面】里的点换回当前屏幕绝对坐标。"""
         if x is None or y is None:
             return None
-        s = self._scale or 1.0
-        return (self._rect[0] + int(round(x / s)), self._rect[1] + int(round(y / s)))
+        sx, sy = self._axis_scales()
+        return (self._rect[0] + int(round(x / sx)), self._rect[1] + int(round(y / sy)))
 
     def to_screen_box(self, box):
         """把缩放后坐标系里的 [x,y,w,h] 换回屏幕绝对 [left,top,w,h]。"""
         if not box:
             return None
-        s = self._scale or 1.0
-        return [self._rect[0] + int(round(box[0] / s)), self._rect[1] + int(round(box[1] / s)),
-                int(round(box[2] / s)), int(round(box[3] / s))]
+        sx, sy = self._axis_scales()
+        return [self._rect[0] + int(round(box[0] / sx)), self._rect[1] + int(round(box[1] / sy)),
+                int(round(box[2] / sx)), int(round(box[3] / sy))]
 
     # ---- 匹配（阈值按 scale 动态放宽，见 vision.scaled_threshold）----
     def match(self, template_bgr, threshold):
         """在【缩放后画面】里匹配模板；命中返回缩放后坐标 (cx, cy, score)，否则 None。
         ⚠ 拿去点击前必须 to_screen()。"""
-        return vision.match_scaled(self.img, template_bgr, threshold, self._scale)
+        return vision.match_scaled(self.img, template_bgr, threshold, 1.0 / self._scale)
 
 
 def grab_scene(rect, calib_size=None):

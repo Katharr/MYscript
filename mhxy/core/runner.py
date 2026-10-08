@@ -1,54 +1,75 @@
 # -*- coding: utf-8 -*-
-"""
-任务运行器：在后台线程里跑一个 Task，把日志通过线程安全队列交给 GUI。
-GUI 只需 start()/stop()/poll 队列，完全不必关心线程细节。
-"""
-
+"""旧任务线程适配器；登记、互斥、停止与 GUI 日志由 runtime 统一管理。"""
+import copy
 import queue
 import threading
 
 from .context import TaskContext
+from .runtime import get_runtime
+
+
+_TASK_OUTCOMES = {"completed", "stopped", "failed", "timeout", "partial"}
 
 
 class TaskRunner:
     def __init__(self, task, cfg):
         self.task = task
-        self.cfg = cfg
+        self.cfg = copy.deepcopy(cfg)
         self.log_queue = queue.Queue()
         self.stop_event = threading.Event()
         self.thread = None
-        # GUI 用它区分正常完成、请求停止和异常退出，不能只根据线程是否仍存活猜状态。
         self.outcome = "idle"
+        self.label = getattr(task, "title", None) or getattr(task, "name", "任务")
+        self.runtime = get_runtime()
+        self.runtime.register(self)
 
     def _log(self, msg, level="info"):
         self.log_queue.put((level, msg))
+        self.runtime.publish(self, msg, level)
 
     def is_running(self):
-        return self.thread is not None and self.thread.is_alive()
+        # preflight 和线程启动间隙也持有输入席位；请求停止不会提前释放。
+        return self.outcome == "running" or (self.thread is not None and self.thread.is_alive())
 
     def start(self):
-        """启动任务。返回 (ok, problems)。preflight 不通过则不启动。"""
-        if self.is_running():
-            return False, ["任务已在运行"]
-        self.stop_event.clear()
-        self.outcome = "running"
-        ctx = TaskContext(self.cfg, log_fn=self._log, stop_event=self.stop_event)
-        ok, problems = self.task.preflight(ctx)
+        return self.runtime.start(self)
+
+    def _start_registered(self):
+        from .input_session import InputSession
+        session = InputSession(self.cfg, self.stop_event, getattr(self.task, "name", ""))
+        ctx = TaskContext(self.cfg, log_fn=self._log, stop_event=self.stop_event,
+                          input_session=session)
+        # preflight 也在禁止真实输入的会话中执行。
+        with session.activate(preflight=True):
+            ok, problems = self.task.preflight(ctx)
         if not ok:
             self.outcome = "idle"
             return False, problems
+        if self.stop_event.is_set():
+            self.outcome = "stopped"
+            return False, ["启动已取消"]
 
         def _wrap():
             try:
-                self.task.run(ctx)
-            except Exception as e:  # 任务里任何异常都不该让线程静默死掉
+                with session.activate():
+                    task_outcome = self.task.run(ctx)
+            except Exception as exc:
                 self.outcome = "failed"
-                self._log(f"任务异常：{e}", "error")
+                self._log(f"任务异常：{exc}", "error")
             else:
-                self.outcome = "stopped" if self.stop_event.is_set() else "completed"
+                if isinstance(task_outcome, str) and task_outcome in _TASK_OUTCOMES:
+                    self.outcome = task_outcome
+                else:
+                    self.outcome = "stopped" if self.stop_event.is_set() else "completed"
+            finally:
+                self.runtime.finished(self)
 
         self.thread = threading.Thread(target=_wrap, daemon=True)
-        self.thread.start()
+        try:
+            self.thread.start()
+        except Exception:
+            self.outcome = "failed"
+            raise
         return True, []
 
     def stop(self):

@@ -57,7 +57,12 @@ def _now_label():
 
 
 def _size_ok(size):
-    return bool(size) and len(size) >= 2 and int(size[0]) > 0 and int(size[1]) > 0
+    if not isinstance(size, (list, tuple)) or len(size) < 2:
+        return False
+    try:
+        return int(size[0]) > 0 and int(size[1]) > 0
+    except (TypeError, ValueError, OverflowError):
+        return False
 
 
 def _norm_size(size):
@@ -241,7 +246,7 @@ def delete(cfg, pid):
         set_active(cfg, its[0]["id"])
     else:
         # 删的不是激活组：镜像保持指向仍在的激活组（重写一遍防漂）
-        set_active(cfg, blk.get(ACTIVE_KEY))
+        set_active(cfg, active_id(cfg))
     return active_id(cfg)
 
 
@@ -255,10 +260,27 @@ def _as_id(v):
 # ----------------------------------------------------------------------
 # 任务/模板的组指针
 # ----------------------------------------------------------------------
+def _validated_profile_id(cfg, pid):
+    """None 显式清空；其他值必须指向现存组，校验失败不修改配置。"""
+    if pid is None:
+        return None
+    # 保留整数/整数字符串兼容；拒绝 bool 和浮点截断造成的误归属。
+    if isinstance(pid, bool) or not isinstance(pid, (int, str)):
+        raise ValueError("标定尺寸组 ID 无效")
+    prof = get(cfg, pid)
+    if prof is None:
+        raise ValueError("标定尺寸组不存在，无法记录归属")
+    return prof["id"]
+
+
 def set_task_profile(cfg, task, pid):
-    """记「该任务 regions 是在哪一组下标定的」：tasks.<task>.calib.profile。"""
+    """记录任务 regions 的归属；None 清空，不存在/非法的组抛 ValueError 且不改配置。
+
+    仅修改内存归属，不切换激活组、不同步镜像、不写盘；由调用方统一 save_config。
+    """
+    profile_id = _validated_profile_id(cfg, pid)
     tc = cfg.setdefault("tasks", {}).setdefault(task, {})
-    tc.setdefault(TASK_CALIB_KEY, {})["profile"] = _as_id(pid)
+    tc.setdefault(TASK_CALIB_KEY, {})["profile"] = profile_id
     return pid
 
 
@@ -269,9 +291,13 @@ def task_profile(cfg, task):
 
 
 def set_template_profile(cfg, task, key, pid):
-    """记「该模板属于哪一组」：tasks.<task>.templates_calib[key]。"""
+    """记录模板归属；None 清空，不存在/非法的组抛 ValueError 且不改配置。
+
+    与任务归属相同，仅修改内存指针；模板路径和文件保持原样。
+    """
+    profile_id = _validated_profile_id(cfg, pid)
     tc = cfg.setdefault("tasks", {}).setdefault(task, {})
-    tc.setdefault(TASK_TPL_KEY, {})[key] = _as_id(pid)
+    tc.setdefault(TASK_TPL_KEY, {})[key] = profile_id
     return pid
 
 

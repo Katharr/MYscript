@@ -62,7 +62,7 @@ class DailyTask(Task):
         steps = self._enabled_steps(ctx)
         if not steps:
             ctx.log("没有勾选任何任务，已停止。", level="error")
-            return
+            return "stopped" if ctx.should_stop() else "failed"
 
         multi = ctx.cfg.get("targets", {}).get("multi", False)
         switch_delay = ctx.cfg.get("targets", {}).get("switch_delay_sec", 0.15)
@@ -74,13 +74,15 @@ class DailyTask(Task):
         wins = ctx.select_windows()
         if not wins:
             ctx.log("没找到/没选中目标窗口，已停止。", level="error")
-            return
+            return "stopped" if ctx.should_stop() else "failed"
         if multi:
             labels = ctx.window_labels(wins)
             wctxs = [ctx.make_child(w, labels[i]) for i, w in enumerate(wins)]
         else:
             ctx.window = wins[0]
             wctxs = [ctx]
+        from ..core.inventory_maintenance import AutoInventoryMaintenance
+        maintenance = AutoInventoryMaintenance()
         chains = [self._new_chain(w) for w in wctxs]
 
         titles = " → ".join(self._title_of(n, ctx) for n in steps)
@@ -93,9 +95,11 @@ class DailyTask(Task):
         if time_limit > 0:
             ctx.log(f"整体时间上限 {time_limit:g} 分钟（仅安全网；正常按各任务自身条件跑完）。")
 
+        termination_reason = "finished"
         while not ctx.should_stop():
             if deadline and time.time() >= deadline:
                 ctx.log(f"已达整体时间上限 {time_limit:g} 分钟，停止。", level="warn")
+                termination_reason = "timeout"
                 break
             if all(c["done"] for c in chains):
                 break
@@ -106,14 +110,15 @@ class DailyTask(Task):
             # —— 集体屏障：未完成的号是否都停靠在「刷副本」步？都到齐就集体跑一次、放行 ——
             parked = [c for c in alive if self._at_dungeon(c, steps)]
             if parked and len(parked) == len(alive):
-                self._run_collective_dungeon(ctx)
+                outcome = self._run_collective_dungeon(ctx)
                 for c in parked:
+                    c["outcomes"].append(self._known_outcome(outcome))
                     self._advance(c, steps)
                 continue
             # 部分号已停靠等待：各提示一次（节流），免得用户以为卡住
             for c in parked:
                 if not c["park_logged"]:
-                    c["wctx"].log("已完成刷副本前的任务，等其它号汇合到「刷副本」一起组队…")
+                    c["wctx"].log("已推进到「刷副本」，等其它号汇合后一起组队…")
                     c["park_logged"] = True
 
             # —— 推进各「未停靠、未完成」窗口的独立链一段 ——
@@ -137,17 +142,21 @@ class DailyTask(Task):
                     break
                 c["gone_warned"] = c["fg_warned"] = False
                 try:
-                    wctx.maybe_auto_organize()
+                    if maintenance.check(wctx) is False:
+                        continue
                 except Exception as e:
-                    wctx.log(f"自动整理背包检测异常（已忽略，继续）：{e}", level="warn")
+                    wctx.log(f"自动整理背包检测异常，本轮让出：{e}", level="warn")
+                    continue
                 self._drive_chain_until_yield(ctx, c, steps)
                 if multi and len(drivable) > 1:
                     self._interruptible_sleep(ctx, self._jitter(switch_delay, ctx))
             self._interruptible_sleep(ctx, self._jitter(tick, ctx))
 
         # —— 汇总 ——
-        done_n = sum(1 for c in chains if c["done"])
-        ctx.log(f"日常一条龙结束：{done_n}/{len(chains)} 个号跑完整条链，"
+        outcome = self._daily_outcome(ctx, chains, termination_reason)
+        done_n = sum(1 for c in chains if c["done"] and c["outcomes"]
+                     and all(o == "completed" for o in c["outcomes"]))
+        ctx.log(f"日常一条龙结束（{self._outcome_label(outcome)}）：{done_n}/{len(chains)} 个号全部任务完成，"
                 f"用时 {(time.time() - start_ts) / 60:.1f} 分钟。")
         unfinished = [c for c in chains if not c["done"]]
         if unfinished and not ctx.should_stop():
@@ -156,6 +165,7 @@ class DailyTask(Task):
                 f"{self._title_of(steps[c['idx']], ctx) if c['idx'] < len(steps) else '收尾'}」"
                 for c in unfinished)
             ctx.log("未跑完：" + desc + "。", level="warn")
+        return outcome
 
     # ------------------------------------------------------------------
     # 每窗口独立链：链记录 + 推进引擎
@@ -164,7 +174,7 @@ class DailyTask(Task):
     def _new_chain(wctx):
         """每窗口一条独立链记录。idx=当前在 steps 的位置；sub_rec/sub_step=当前子任务的状态机与单步函数。"""
         return {"wctx": wctx, "idx": 0, "sub_rec": None, "sub_step": None,
-                "cur_title": None, "done": False,
+                "cur_title": None, "done": False, "outcomes": [], "sub_name": None,
                 "gone_warned": False, "fg_warned": False, "park_logged": False}
 
     @staticmethod
@@ -199,6 +209,7 @@ class DailyTask(Task):
                 if steps[c["idx"]] == "dungeon":
                     return                              # 停靠集体屏障，交回主循环
                 if self._begin_step(ctx, c, steps[c["idx"]]) != "ready":
+                    c["outcomes"].append("failed")
                     c["idx"] += 1                       # 跳过该步（未就绪/演练/不支持），接着下一步
                     continue
             rec = c["sub_rec"]
@@ -207,11 +218,14 @@ class DailyTask(Task):
                 c["sub_step"]()
             except Exception as e:                      # 单个子任务炸了不该带垮整条链
                 c["wctx"].log(f"「{c['cur_title']}」运行异常：{e}，跳过该任务。", level="error")
+                c["outcomes"].append(self._record_outcome(c, "failed"))
                 self._end_step(c)
                 c["idx"] += 1
                 continue
             if rec.get("done"):
-                c["wctx"].log(f"───── 「{c['cur_title']}」完成 ─────", level="hit")
+                outcome = self._record_outcome(c, "finished")
+                c["outcomes"].append(outcome)
+                self._log_step_outcome(c["wctx"], c["cur_title"], outcome)
                 self._end_step(c)
                 c["idx"] += 1
                 continue                                # 接着在本窗口推进下一步
@@ -227,6 +241,7 @@ class DailyTask(Task):
         wctx = c["wctx"]
         title = self._title_of(name, ctx)
         c["cur_title"] = title
+        c["sub_name"] = name
         eff_name, task_cls = self._resolve(name, ctx)
         if task_cls is None:
             wctx.log(f"「{title}」无可跑任务（未选/未收录），跳过。", level="warn")
@@ -255,23 +270,64 @@ class DailyTask(Task):
         eff_name, task_cls = self._resolve("dungeon", ctx)
         if task_cls is None:
             ctx.log(f"「{title}」无可跑副本（刷副本页未收录/未选），跳过该步。", level="warn")
-            return
+            return "failed"
         task = task_cls()
         if ctx.task_cfg(eff_name).get("dry_run", True):
             ctx.log(f"「{title}」处于演练模式，一条龙不实跑，跳过该步。", level="warn")
-            return
+            return "failed"
         ok, probs = task.preflight(ctx)
         if not ok:
             ctx.log(f"跳过「{title}」（未就绪）：" + "；".join(probs), level="warn")
-            return
+            return "failed"
         ctx.log(f"───── 所有号已汇合，开始集体「{title}」（组队 → 队长跑）─────", level="hit")
         try:
-            task.run(ctx)
+            outcome = self._known_outcome(task.run(ctx))
         except Exception as e:
             ctx.log(f"「{title}」运行异常：{e}，继续后续任务。", level="error")
-            return
-        if not ctx.should_stop():
-            ctx.log(f"───── 「{title}」完成 ─────", level="hit")
+            return "stopped" if ctx.should_stop() else "failed"
+        if ctx.should_stop():
+            outcome = "stopped"
+        self._log_step_outcome(ctx, title, outcome)
+        return outcome
+
+    @staticmethod
+    def _known_outcome(outcome):
+        # 无结果的旧/未知任务不再被推定为成功。
+        return outcome if isinstance(outcome, str) and outcome in {
+            "completed", "stopped", "failed", "timeout", "partial"} else "failed"
+
+    @staticmethod
+    def _outcome_label(outcome):
+        return {"completed": "完成", "stopped": "停止", "failed": "失败",
+                "timeout": "超时", "partial": "部分完成"}[outcome]
+
+    def _log_step_outcome(self, ctx, title, outcome):
+        ctx.log(f"───── 「{title}」{self._outcome_label(outcome)} ─────",
+                level="hit" if outcome == "completed" else "warn")
+
+    def _record_outcome(self, c, reason):
+        # 复用活动自己的旧计数含义；done 只用于推进，不作为成功证据。
+        counter = {"escort": "escorts", "treasure_map": "dug",
+                   "secret_realm": "runs"}.get(c["sub_name"], "_no_progress")
+        rec = c["sub_rec"]
+        if reason == "failed":
+            rec = dict(rec, outcome="failed")
+        return self._activity_run_outcome(c["wctx"], [rec], reason, counter)
+
+    def _daily_outcome(self, ctx, chains, reason):
+        evidence = [o for c in chains for o in c["outcomes"]]
+        evidence.extend(self._record_outcome(c, reason)
+                        for c in chains if c["sub_rec"] is not None)
+        if ctx.should_stop() or "stopped" in evidence:
+            return "stopped"
+        if (chains and all(c["done"] for c in chains) and evidence
+                and all(o == "completed" for o in evidence)):
+            return "completed"
+        if any(o in ("completed", "partial") for o in evidence):
+            return "partial"
+        if reason == "timeout" or "timeout" in evidence:
+            return "timeout"
+        return "failed"
 
     # ------------------------------------------------------------------
     # 配置读取

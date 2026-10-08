@@ -50,6 +50,10 @@ class LeaderIdGallery(ctk.CTkToplevel):
         self.transient(app)
 
         self._build()
+        try:
+            lh.initialize(self.app.cfg)
+        except lh.LeaderHistoryError as exc:
+            self._toast(f"初始化失败：{exc}", T.DANGER)
         self._render()
         self.after(120, self._center)
         self.protocol("WM_DELETE_WINDOW", self._close)
@@ -88,7 +92,7 @@ class LeaderIdGallery(ctk.CTkToplevel):
 
     # ------------------------------------------------------------------
     def _render(self):
-        from .app import load_thumb     # 延迟导入避免与 app.py 循环依赖
+        from .widgets import load_thumb
         for w in self.grid_frame.winfo_children():
             w.destroy()
         self._thumbs.clear()
@@ -173,16 +177,22 @@ class LeaderIdGallery(ctk.CTkToplevel):
             except Exception:
                 pass
         if ok:
-            self.app.cfg = cfg_mod.load_config()      # calibrate 自己写过盘，必须 reload 再 push
-            lh.push_after_calibrate(self.app.cfg)
             self._after_change("已标定新的队长ID并设为当前。", T.SUCCESS)
 
     def _activate(self, idx):
-        lh.activate(self.app.cfg, idx)
+        try:
+            lh.activate(self.app.cfg, idx)
+        except lh.LeaderHistoryError as exc:
+            self._toast(f"切换失败：{exc}", T.DANGER)
+            return
         self._after_change("已设为当前队长ID。", T.SUCCESS)
 
     def _delete(self, idx):
-        lh.delete(self.app.cfg, idx)
+        try:
+            lh.delete(self.app.cfg, idx)
+        except lh.LeaderHistoryError as exc:
+            self._toast(f"删除失败：{exc}", T.DANGER)
+            return
         self._after_change("已删除。", T.TEXT_DIM)
 
     def _after_change(self, msg, color):

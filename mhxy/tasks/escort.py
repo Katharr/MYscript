@@ -127,14 +127,14 @@ class EscortTask(Task):
         contexts = self._resolve_contexts(ctx, multi)
         if not contexts:
             ctx.log("没找到/没选中目标窗口，已停止。", level="error")
-            return
+            return "stopped" if ctx.should_stop() else "failed"
 
         if dry_run:
             ctx.log("演练模式：只对各号当前屏幕做『各标志识别自检』，不发快捷键/不点关键操作。"
                     + ("多号逐个扫描。" if multi else "")
                     + "手动打开对应界面，看日志能否认出 运镖入口/参加按钮/押送普通镖银/战斗。", level="warn")
             self._dry_run_selfcheck(ctx, contexts, multi, regions, threshold, switch_delay, deadline)
-            return
+            return "stopped" if ctx.should_stop() else "timeout"
 
         ctx.log(f"★ 实战模式：{('多开轮转 ' + str(len(contexts)) + ' 个号' if multi else '单号')}，"
                 f"每号循环押满 {self.max_escorts} 趟，号与号之间逐步轮转 ★", level="warn")
@@ -142,15 +142,18 @@ class EscortTask(Task):
             ctx.log(f"时间上限 {time_limit} 分钟（到点自停）。每号主终止条件是对话框不再弹出（次数用完）。")
 
         records = [self._new_record(c) for c in contexts]
-        rotation.run_rotation(self._make_rotation(
+        rc = self._make_rotation(
             ctx, records,
             lambda rec: self._step_once(rec["ctx"], rec, loop, regions, threshold),
-            multi, switch_delay, tick, time_limit))
+            multi, switch_delay, tick, time_limit)
+        rotation.run_rotation(rc)
 
         if all(r["done"] for r in records):
             ctx.log("所有号都已押满次数/结束。")
         total = sum(r["escorts"] for r in records)
         ctx.log(f"已停止。共完成 {total} 趟运镖，用时 {(time.time() - start_ts) / 60:.1f} 分钟。")
+
+        return self._activity_run_outcome(ctx, records, rc.termination_reason, "escorts")
 
     # ------------------------------------------------------------------
     # 日常一条龙·每窗口独立链：暴露「单窗口一份 record + 单步推进函数」
@@ -224,6 +227,7 @@ class EscortTask(Task):
         self._focus(ctx)
         if not ctx.send_hotkey("open_activity"):
             ctx.log("打不开活动界面（open_activity 快捷键未配置），放弃该号。", level="error")
+            rec["outcome"] = "failed"
             rec["done"] = True
             return
         ctx.log("已打开活动，滚轮翻找「运镖」…")
@@ -373,6 +377,7 @@ class EscortTask(Task):
         self._diag_escorting(ctx, rec, ongoing, in_battle, done_grace)
         if time.time() - rec["t_trip"] > per_trip_timeout:
             ctx.log("长时间既无『运镖中』也无对话框，按本号结束处理。", level="warn")
+            rec["outcome"] = "timeout"
             self._finish_escort(ctx, rec)
 
     def _diag_escorting(self, ctx, rec, ongoing, in_battle, done_grace):
@@ -394,6 +399,8 @@ class EscortTask(Task):
 
     def _finish_escort(self, ctx, rec):
         """本号押镖收尾：标记该号 done（押满次数/对话框不再弹）。"""
+        # escorts 为起步次数，正常结束沿用旧模板/消失判据，不是逐趟到账核验。
+        rec.setdefault("outcome", "completed")
         rec["done"] = True
         ctx.log(f"该号已完成 {rec['escorts']} 趟运镖。")
 
@@ -408,6 +415,7 @@ class EscortTask(Task):
         self._save_capture(self._grab_scene(ctx, regions), f"stuck_{rec['state']}")
         if rec["recover"] >= loop.get("max_stuck_recover", 3):
             ctx.log("多次卡死仍无进展，放弃该号。", level="error")
+            rec["outcome"] = "failed"
             rec["done"] = True
             return
         if rec["escorts"] == 0:
@@ -418,6 +426,7 @@ class EscortTask(Task):
             self._goto(rec, S_OPEN_ACTIVITY)
         else:
             ctx.log("已在押镖途中卡死，按已完成处理、放弃该号。", level="warn")
+            rec["outcome"] = "failed"
             rec["done"] = True
 
     # ------------------------------------------------------------------
