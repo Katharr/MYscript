@@ -335,8 +335,13 @@ class TreasureMapTask(Task):
             return
         if res.stopped:
             return
-        ctx.log("活动列表里翻找「宝图任务」多次未果。", level="warn")
-        self._recover_window(ctx, rec, loop, regions)
+        ctx.log("未识别到宝图「参加」，关闭活动页并检查背包里的已有藏宝图。", level="warn")
+        self._focus(ctx)
+        if ctx.send_hotkey("close_panel"):
+            self._interruptible_sleep(ctx, self._jitter(0.25, ctx))
+        if ctx.should_stop():
+            return
+        self._goto_dig(rec)
 
     # ---- 阶段 A：等对话框 → 点「听听无妨」（超时则恢复）----
     def _do_dialog(self, ctx, rec, loop, regions, threshold):
