@@ -32,21 +32,28 @@ class TreasureMapFallbackTests(unittest.TestCase):
 
     def find_card(self, card):
         with mock.patch.object(tm.win_mod, 'grab', return_value=self.scene), \
-             mock.patch.object(tm.list_row, 'locate_card', return_value=card):
+             mock.patch.object(tm.list_row, 'locate_card', return_value=card) as locate:
             self.task._step_once(self.ctx, self.rec, self.loop, {}, 0.85)
+        return locate
 
     def test_missing_entry_checks_bag_instead_of_recovering_or_abandoning(self):
         self.find_card(None)
-        self.assertEqual(self.rec['state'], tm.S_DIG_OPEN_BAG)
+        self.assertEqual(self.rec['state'], tm.S_DIG_FIND)
         self.assertTrue(self.rec['phase_b'])
         self.assertFalse(self.rec['done'])
         self.assertEqual(self.rec['recover'], 0)
-        self.ctx.send_hotkey.assert_called_once_with('close_panel')
+        self.assertEqual(self.ctx.send_hotkey.call_args_list,
+                         [mock.call('close_panel'), mock.call('open_bag')])
         self.task._recover_window.assert_not_called()
 
-    def test_entry_without_join_checks_bag_after_in_place_retries(self):
-        self.find_card(SimpleNamespace(join_x=None))
-        self.assertEqual(self.rec['state'], tm.S_DIG_OPEN_BAG)
+    def test_entry_without_join_opens_bag_on_first_probe(self):
+        self.loop['scroll_max_tries'] = 100
+        locate = self.find_card(SimpleNamespace(join_x=None))
+        locate.assert_called_once()
+        self.assertEqual(self.rec['state'], tm.S_DIG_FIND)
+        self.assertTrue(self.rec['phase_b'])
+        self.assertEqual(self.ctx.send_hotkey.call_args_list,
+                         [mock.call('close_panel'), mock.call('open_bag')])
         self.assertFalse(self.rec['done'])
         self.ctx.mouse.scroll.assert_not_called()
         self.ctx.mouse.click.assert_not_called()
@@ -54,7 +61,6 @@ class TreasureMapFallbackTests(unittest.TestCase):
 
     def test_existing_map_continues_into_digging(self):
         self.find_card(SimpleNamespace(join_x=None))
-        self.task._step_once(self.ctx, self.rec, self.loop, {}, 0.85)
         self.assertEqual(self.rec['state'], tm.S_DIG_FIND)
         self.assertEqual(self.ctx.send_hotkey.call_args_list,
                          [mock.call('close_panel'), mock.call('open_bag')])
@@ -67,7 +73,6 @@ class TreasureMapFallbackTests(unittest.TestCase):
 
     def test_empty_bag_closes_and_finishes_after_fallback(self):
         self.find_card(None)
-        self.task._step_once(self.ctx, self.rec, self.loop, {}, 0.85)
         with mock.patch.object(tm.win_mod, 'grab', return_value=self.scene), \
              mock.patch.object(tm.vision, 'match', return_value=None):
             self.task._step_once(self.ctx, self.rec, self.loop, {}, 0.85)

@@ -290,7 +290,7 @@ class TreasureMapTask(Task):
         rec["scrolls"] = 0
         self._goto(rec, S_FIND_CARD)
 
-    # ---- 阶段 A：找卡片 → 点「参加」（每访问一次：找不到就滚一屏，超 scroll_max_tries 屏则恢复）----
+    # ---- 阶段 A：找卡片 → 点「参加」；没有参加按钮就直接开背包用已有图 ----
     # 用户要求：滚轮查找在【同一个号】上一气呵成跑完（找到/翻完才轮转下个号），不在滚动中途返回。
     #   故用内部 while 把整段查找做完再返回；每滚一屏后自等 scroll_settle_sec 让画面落定。仍勤查 should_stop。
     def _do_find_card(self, ctx, rec, loop, regions, threshold):
@@ -310,10 +310,9 @@ class TreasureMapTask(Task):
             if got is None:
                 return (scan.SCROLL, None)
             if got.join_x is None:
-                ctx.log("认出「宝图任务」但右侧没找到「参加」——按上面那行『最佳候选 xx < 下限 yy』判断："
-                        "差一点点就把 tasks.treasure_map.loop.join_min_score 调低些，差很多就重标 flag_join 模板。"
-                        "原地重试、不滚动。", level="warn")
-                return (scan.STAY, None)
+                ctx.log("认出「宝图任务」但没找到「参加」，直接打开背包使用已有藏宝图。", level="warn")
+                # ACCEPT + 空负载：终止扫描，交给下方背包分支；不是已点击参加。
+                return (scan.ACCEPT, None)
             ctx.mouse.click(got.join_x, got.join_y)
             ctx.log(f"找到「宝图任务」（{got.anchor_score:.3f}）→ 点「参加」"
                     f"（{got.join_score:.3f}），开始传送找 NPC。", level="hit")
@@ -330,7 +329,7 @@ class TreasureMapTask(Task):
             end_diff=loop.get("scroll_end_diff", 2.0),
             reset_max=loop.get("scroll_reset_max", 20),
             log=ctx.log, label="活动列表")
-        if res.found:
+        if res.found and res.payload is not None:
             self._goto(rec, S_DIALOG)
             return
         if res.stopped:
@@ -342,6 +341,7 @@ class TreasureMapTask(Task):
         if ctx.should_stop():
             return
         self._goto_dig(rec)
+        self._do_dig_open_bag(ctx, rec, loop, regions, threshold)
 
     # ---- 阶段 A：等对话框 → 点「听听无妨」（超时则恢复）----
     def _do_dialog(self, ctx, rec, loop, regions, threshold):
