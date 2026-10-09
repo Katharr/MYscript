@@ -201,6 +201,16 @@
     }
   },
   "tasks": {
+    "activity": {
+      "loop": {
+        "match_threshold": 0.85,
+        "after_click_wait_sec": 0.35
+      },
+      "regions": {},
+      "templates": {
+        "daily_activity": null
+      }
+    },
     "launch_login": {
       "dry_run": true,
       "place_corner": true,

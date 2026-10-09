@@ -2988,6 +2988,28 @@ class GeneralPage(ctk.CTkFrame):
         # ── 窗口 / 界面工具（与具体任务无关：唤出多开窗口、把界面收成悬浮日志窗）──
         self._build_window_tools_card()
 
+        # ── 活动页导航（四个活动任务共用一份按钮模板）──
+        from ..core import vision
+        c_activity = self._card()
+        head_a = ctk.CTkFrame(c_activity, fg_color="transparent")
+        head_a.pack(fill="x", padx=16, pady=14)
+        head_a.grid_columnconfigure(0, weight=1)
+        txt_a = ctk.CTkFrame(head_a, fg_color="transparent")
+        txt_a.grid(row=0, column=0, sticky="ew")
+        ctk.CTkLabel(txt_a, text="活动页（共享）", font=self.fonts["h2"],
+                     text_color=T.TEXT).pack(anchor="w")
+        daily_path = cfg_mod.task_config(cfg, "activity").get("templates", {}).get("daily_activity")
+        daily_ready = bool(daily_path and vision.load_template(daily_path) is not None)
+        daily_status = ctk.CTkLabel(
+            txt_a, text="日常活动：已标定" if daily_ready else "日常活动：未标定（可选）",
+            font=self.fonts["body"], text_color=T.SUCCESS if daily_ready else T.TEXT_DIM)
+        daily_status.pack(fill="x", pady=(4, 0))
+        bind_wraplength(daily_status)
+        ctk.CTkButton(head_a, text="标定（日常活动）", font=self.fonts["body"], height=36, width=140,
+                      corner_radius=T.RADIUS_SM, fg_color=T.ACCENT, hover_color=T.ACCENT_HOVER,
+                      text_color=T.ON_ACCENT, command=self._open_activity_calibrate).grid(
+                          row=0, column=1, padx=(12, 0))
+
         # ── 组队（跨任务共享：任何用到组队的任务都自动读这份标定）──
         c_team = self._card()
         head_t = ctk.CTkFrame(c_team, fg_color="transparent")
@@ -3318,9 +3340,8 @@ class GeneralPage(ctk.CTkFrame):
                              row=0, column=0, sticky="w", padx=12, pady=8)
         ctk.CTkFrame(holder, fg_color="transparent", height=6).pack()
 
-    def _calib_singleton(self, attr, only, fail_msg, exclude=None):
-        """打开一个标定窗并按 attr 去重：已开着就 lift 回来，不叠开多个写同一处 teaming 的窗
-        （叠开会「后关的覆盖先关的」，让用户以为没生效）。"""
+    def _calib_singleton(self, attr, only, fail_msg, exclude=None, task_name="teaming"):
+        """打开共享标定窗并按 attr 去重，避免多个弹窗覆盖同一份配置。"""
         existing = getattr(self, attr, None)
         if existing is not None:
             try:
@@ -3337,11 +3358,14 @@ class GeneralPage(ctk.CTkFrame):
             self.refresh()
 
         try:
-            setattr(self, attr, CalibrateDialog(self.app, task_name="teaming",
+            setattr(self, attr, CalibrateDialog(self.app, task_name=task_name,
                                                 only=only, exclude=exclude, on_done=_after))
         except Exception as e:
             setattr(self, attr, None)
             self.app.toast(f"{fail_msg}：{e}")
+
+    def _open_activity_calibrate(self):
+        self._calib_singleton("_activity_cal_dialog", None, "打开活动页标定失败", task_name="activity")
 
     def _open_team_calibrate(self):
         """打开组队标定（共享命名空间 teaming）。队长ID 已移到「标定队长ID」按钮单独标，这里不再列出。"""

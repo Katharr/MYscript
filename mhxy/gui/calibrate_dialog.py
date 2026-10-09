@@ -20,12 +20,16 @@ from ..core import config as cfg_mod
 from ..core import calib_profiles as calib
 from ..core import window as win_mod
 from ..core import vision
+from ..core.activity import ACTIVITY_CALIBRATION
 from ..core.teaming import TEAM_CALIBRATION
 from ..tasks import get_task
 
 # 非注册的「共享命名空间」标定 spec（key = 写入 cfg.tasks.<key>）。
 # 组队是跨任务共享资产、不是可运行任务，故 get_task("teaming") 拿不到，走这里。
-_VIRTUAL_SPECS = {"teaming": ("组队（全局共享）", TEAM_CALIBRATION)}
+_VIRTUAL_SPECS = {
+    "teaming": ("组队（全局共享）", TEAM_CALIBRATION),
+    "activity": ("活动页（全局共享）", ACTIVITY_CALIBRATION),
+}
 
 
 # ----------------------------------------------------------------------

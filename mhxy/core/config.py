@@ -166,6 +166,13 @@ DEFAULT_CONFIG = {
 
     # ---- 各任务独立配置 ----
     "tasks": {
+        # ---- 活动页导航（所有活动入口共用，可选标定）----
+        "activity": {
+            "loop": {"match_threshold": 0.85, "after_click_wait_sec": 0.35},
+            "regions": {},
+            "templates": {"daily_activity": None},
+        },
+
         # ---- 一键启动登录（启动器唯一：账号按队列严格串行，完成窗口角色核验后才启动下一个）----
         "launch_login": {
             "dry_run": True,             # 演练只识别当前已开窗口，不启动程序、不点击

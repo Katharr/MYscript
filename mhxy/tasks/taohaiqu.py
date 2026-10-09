@@ -27,6 +27,7 @@
 
 import time
 
+from ..core import activity
 from ..core import scan
 from ..core import calib_profiles as calib
 from ..core import vision
@@ -280,6 +281,7 @@ class TaohaiquTask(Task):
             return False
         ctx.log("已打开活动，翻找蹈海去卡片…")
         self._interruptible_sleep(ctx, self._jitter(0.6, ctx))
+        activity.select_daily(ctx, lambda s: self._interruptible_sleep(ctx, self._jitter(s, ctx)))
         list_region = regions.get("activity_list")
 
         def grab_rect():

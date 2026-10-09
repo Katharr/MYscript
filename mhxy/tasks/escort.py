@@ -26,6 +26,7 @@
 
 import time
 
+from ..core import activity
 from ..core import calib_profiles as calib
 from ..core import vision
 from ..core import window as win_mod
@@ -228,6 +229,7 @@ class EscortTask(Task):
             return
         ctx.log("已打开活动，滚轮翻找「运镖」…")
         self._interruptible_sleep(ctx, self._jitter(0.6, ctx))
+        activity.select_daily(ctx, lambda s: self._interruptible_sleep(ctx, self._jitter(s, ctx)))
         rec["scrolls"] = 0
         self._goto(rec, S_FIND_CARD)
 
