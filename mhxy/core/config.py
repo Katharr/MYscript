@@ -488,6 +488,8 @@ DEFAULT_CONFIG = {
                 "sell_confirm_button": None,     # 商会出售弹窗里最终确认的「出售」按钮
                 "stall_sell_button": None,       # 「摆摊出售」按钮
                 "stall_shelf_button": None,      # 摆摊出售的「本服上架」按钮
+                "stall_notice_checkbox": None,   # 上架后可选提示：未勾选方框 +「7天不再提示」文字
+                "stall_notice_confirm": None,    # 上架后提示框里的「确定」
                 "sell_button": None,             # 旧·笼统「出售」单按钮（兼容旧配置；新建议用商会/摆摊出售）
                 "confirm_button": None,          # 丢弃/旧出售的「确定」确认按钮
                 "bag_full_icon": None            # 背包满时常驻屏幕上的「满」图标（自动整理靠它判背包满）

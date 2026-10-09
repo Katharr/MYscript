@@ -516,6 +516,8 @@
       },
       "templates": {
         "discard_button": null,
+        "stall_notice_checkbox": null,
+        "stall_notice_confirm": null,
         "sell_button": null,
         "confirm_button": null,
         "sort_button": null

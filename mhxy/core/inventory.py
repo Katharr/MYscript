@@ -15,7 +15,8 @@
        按钮模板（某步可标 optional，缺了就跳过，如详情里不一定有的「更多」）→ 收尾(close)关掉残留窗口回干净列表。例：
          · 使用/丢弃：点物品弹菜单 → 点「使用」/「丢弃」→（丢弃这类破坏性动作再点确认「确定」）；
          · 商会出售：左键点物品弹详情 →（有「更多」就点）→「商会出售」→ 出售窗点「满」→「出售」；
-         · 摆摊出售：左键点物品弹详情 →（有「更多」就点）→「摆摊出售」→「本服上架」→ 右键关出售窗回包裹；
+         · 摆摊出售：左键点物品弹详情 →（有「更多」就点）→「摆摊出售」→「本服上架」→
+            （若出现提示，勾选「7天不再提示」再点「确定」）→ 右键关出售窗回包裹；
        加新出售/处理方式只需在 _ACTION_SPECS 加一项 + 注册对应按钮模板，core 其余与 GUI 都不用动。
   ④ 一遍 = 一次完整 top→bottom 扫描；可配 passes 多遍兜底（丢/卖后列表会变短，位置变化保证覆盖）。
 
@@ -88,6 +89,7 @@ ACTION_LABELS = {k: v["label"] for k, v in _ACTION_SPECS.items()}
 _ALL_BTN_KEYS = {s["tpl"] for spec in _ACTION_SPECS.values() for s in spec["steps"]}
 _ALL_BTN_KEYS.add("confirm_button")
 _ALL_BTN_KEYS.add("sort_button")   # 游戏自带「整理」按钮：实战整理跑完点它把背包重新排列收拢（非任何动作的步骤）
+_ALL_BTN_KEYS.update({"stall_notice_checkbox", "stall_notice_confirm"})
 
 
 def action_label(action):
@@ -291,6 +293,13 @@ class InventoryOrganizer:
             self._click(step.get("button", "left"), btn[0], btn[1])
             ctx.log(f"  · 点「{step['label']}」（{btn[2]:.2f}）。")
             self._sleep(self._jitter(step.get("wait", self.loop.get("step_wait_sec", 0.4))))
+        # 上架后可能弹出提示框；必须先勾选再确定，关掉后才能收回摆摊窗口。
+        if action == "stall_sell" and not self._dismiss_stall_notice():
+            if not ctx.should_stop():
+                self._cleanup(spec)
+            return False
+        if ctx.should_stop():
+            return False
         # ③ 旧式单按钮动作(丢弃/旧出售)：弹「确定」确认框就点（破坏性、用户明确要）。
         if spec.get("confirm"):
             self._confirm_if_present()
@@ -298,6 +307,44 @@ class InventoryOrganizer:
         # 否则点击会落在残留模态上被吞/点歪，残留窗口也会拉高帧差、干扰 scroll_search 的「帧差判到底」。
         self._cleanup(spec)
         return True
+
+    def _dismiss_stall_notice(self):
+        """仅在本服上架后探测提示；未勾选的方框模板要连同「7天不再提示」文字框选。
+
+        两项标定独立于丢弃确认，避免误点其他「确定」。旧配置没标定时跳过；
+        识别到方框后，确定按钮缺失/超时则返回失败，绝不当作已完成继续整理。
+        """
+        if self.ctx.should_stop():
+            return False
+        if self._btn.get("stall_notice_checkbox") is None:
+            return True
+        timeout = self.loop.get("optional_find_timeout_sec",
+                                self.loop.get("step_find_timeout_sec", 1.5))
+        checkbox = self._find_full_wait("stall_notice_checkbox", timeout)
+        if self.ctx.should_stop():
+            return False
+        if checkbox is None:
+            return True
+        if self._btn.get("stall_notice_confirm") is None:
+            self.ctx.log("摆摊上架提示已出现，但「确定」未标定，请补标摆摊提示框「确定」。", level="warn")
+            return False
+        # 模板中心包含文字；点击框选区域左侧的方框中心，避免点击文字无效。
+        tpl = self._btn["stall_notice_checkbox"]
+        x = checkbox[0] - tpl.shape[1] // 2 + tpl.shape[0] // 2
+        self.ctx.mouse.click(x, checkbox[1])
+        self.ctx.log("摆摊上架提示：勾选「7天不再提示」。", level="hit")
+        self._sleep(self._jitter(self.loop.get("step_wait_sec", 0.4)))
+        confirm = self._find_full_wait("stall_notice_confirm",
+                                       self.loop.get("confirm_timeout_sec", 6))
+        if self.ctx.should_stop():
+            return False
+        if confirm is None:
+            self.ctx.log("摆摊上架提示：没找到「确定」，放弃该物品并收尾。", level="warn")
+            return False
+        self.ctx.mouse.click(confirm[0], confirm[1])
+        self.ctx.log("摆摊上架提示：点击「确定」。", level="hit")
+        self._sleep(self._jitter(self.loop.get("step_wait_sec", 0.4)))
+        return not self.ctx.should_stop()
 
     def _click(self, how, x, y):
         """按 how(left/right/double) 拟人化点击屏幕坐标。"""

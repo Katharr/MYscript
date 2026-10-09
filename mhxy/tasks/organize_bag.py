@@ -35,6 +35,8 @@ class OrganizeBagTask(Task):
             ("sell_confirm_button", "出售窗「出售」按钮", "出售弹窗里最终确认"),
             ("stall_sell_button", "「摆摊出售」按钮", "详情/更多里的「摆摊出售」"),
             ("stall_shelf_button", "「本服上架」按钮", "摆摊出售弹窗里的「本服上架」"),
+            ("stall_notice_checkbox", "摆摊「7天不再提示」", "紧贴未勾选方框及右侧文字框选，高度以方框为准，方框须在最左侧"),
+            ("stall_notice_confirm", "摆摊提示框「确定」", "本服上架后提示框里的「确定」，没提示可不标"),
             ("confirm_button", "「确定」按钮", "丢弃弹出的确认"),
             ("sort_button", "游戏「整理」按钮", "游戏自带的「整理」，没标=不点"),
             ("bag_full_icon", "背包「满」图标", "背包满时常驻的「满」标志，自动整理靠它"),
