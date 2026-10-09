@@ -159,7 +159,8 @@ class FloatLogWindow(ctk.CTkToplevel):
                                 else ("■  停止", T.DANGER, T.DANGER_HOVER, T.ON_ACCENT))
             title = f"运行日志 · {name}" if name else "运行日志 · 运行中"
         else:
-            result = {"completed": "已完成", "stopped": "已停止", "failed": "失败"}.get(phase, "待机")
+            result = {"completed": "已完成", "stopped": "已停止", "failed": "失败",
+                      "partial": "部分完成", "timeout": "超时"}.get(phase, "待机")
             key = (phase, last)
             txt = f"○ {result} · {last}" if last else f"○ {result}"
             btn, fg, hov, tc = "▶  开始", T.ACCENT, T.ACCENT_HOVER, T.ON_ACCENT
@@ -191,7 +192,7 @@ class FloatLogWindow(ctk.CTkToplevel):
             self.app.log_line(f"已请求停止 {n} 个任务（做完当前动作才停）", "warn")
             self.refresh_state()
             return
-        cb = getattr(self.app, "_task_restart", None)
+        cb = getattr(self.app, "restart_last_task", None)
         if not callable(cb):
             self.app.toast("还没跑过任何模块，请先展开主界面开始。")
             return

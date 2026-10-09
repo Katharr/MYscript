@@ -13,6 +13,8 @@ import time
 import ctypes
 import datetime
 import random
+from contextlib import nullcontext
+from functools import wraps
 
 import numpy as np
 
@@ -24,8 +26,38 @@ from ..core.config import CAPTURES_DIR
 _REGISTRY = {}
 
 
+def _input_policy(ctx, name):
+    session = getattr(ctx, "input_session", None)
+    from ..core.input_session import InputSession
+    return session.policy(name) if isinstance(session, InputSession) else nullcontext()
+
+
 def register(cls):
-    """类装饰器：把任务登记进注册表。"""
+    """注册旧任务，并给 run / 每窗链 driver 绑定输入策略。"""
+    original_run = cls.run
+
+    @wraps(original_run)
+    def run(self, ctx, *args, **kwargs):
+        with _input_policy(ctx, self.name):
+            return original_run(self, ctx, *args, **kwargs)
+
+    cls.run = run
+    if getattr(cls, "CHAINS_PER_WINDOW", False):
+        original_driver = cls.make_chain_driver
+
+        @wraps(original_driver)
+        def make_chain_driver(self, ctx, *args, **kwargs):
+            with _input_policy(ctx, self.name):
+                rec, step = original_driver(self, ctx, *args, **kwargs)
+
+            @wraps(step)
+            def guarded_step(*step_args, **step_kwargs):
+                with _input_policy(ctx, self.name):
+                    return step(*step_args, **step_kwargs)
+
+            return rec, guarded_step
+
+        cls.make_chain_driver = make_chain_driver
     _REGISTRY[cls.name] = cls
     return cls
 
@@ -147,6 +179,23 @@ class Task:
                 return
             time.sleep(min(0.05, max(0.0, end - time.time())))
 
+    @staticmethod
+    def _activity_run_outcome(ctx, records, termination_reason, progress_key):
+        """聚合活动旁路证据，不把 done 当业务成功，不改变 daily 的链驱动。
+
+        progress_key 沿用任务旧计数（可能只表示动作发起），partial 不证明客户端成功。
+        """
+        if ctx.should_stop() or termination_reason == "stopped":
+            return "stopped"
+        if records and all(r.get("outcome") == "completed" for r in records):
+            return "completed"
+        if any(r.get("outcome") == "completed" or r.get(progress_key, 0) > 0
+               for r in records):
+            return "partial"
+        if termination_reason == "timeout" or any(r.get("outcome") == "timeout" for r in records):
+            return "timeout"
+        return "failed"
+
     def _make_rotation(self, ctx, records, step_fn, multi, switch_delay, tick, time_limit=0):
         """把「逐号 activate 切前台 + 非阻塞状态机推进」这套多开轮转包成 rotation.RotationConfig。
 
@@ -173,13 +222,16 @@ class Task:
             rec["dead_logged"] = False
             step_fn(rec)
 
+        from ..core.inventory_maintenance import AutoInventoryMaintenance
+        maintenance = AutoInventoryMaintenance()
+
         def between_steps(rec):
-            # 每号切前台后、推进前：检测背包满则自动整理（开关在 tasks.organize_bag.auto_organize）。
-            # 所有走 _make_rotation 的任务（运镖/宝图/秘境/副本）由此统一获得「背包满自动整理」。
+            # 仅运镖/宝图/秘境使用；sniper 保留自己的空钩子。
             try:
-                rec["ctx"].maybe_auto_organize()
+                return maintenance.check(rec["ctx"])
             except Exception as e:
-                rec["ctx"].log(f"自动整理背包检测异常（已忽略，继续任务）：{e}", level="warn")
+                rec["ctx"].log(f"自动整理背包检测异常，本轮让出：{e}", level="warn")
+                return False
 
         return rotation.RotationConfig(
             records=records, step_once=step_once,
@@ -204,8 +256,7 @@ class Task:
         center = ctx.window.region_center_screen(region)
         if center is None:
             return False
-        ctx.mouse.click(center[0], center[1], speed=speed)
-        return True
+        return ctx.mouse.click(center[0], center[1], speed=speed) is not False
 
     def _save_capture(self, scene, name):
         fname = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_") + str(name) + ".png"

@@ -10,6 +10,7 @@
 框选时把本助手窗口透明化，确保截图里只有游戏画面。新增任务无需改本文件，只要在 Task 上写 CALIBRATION。
 """
 
+import copy
 import time
 
 import customtkinter as ctk
@@ -18,6 +19,7 @@ from . import theme as T
 from .roi_overlay import select_roi_on_screen
 from ..core import config as cfg_mod
 from ..core import calib_profiles as calib
+from ..core import calibration_assets
 from ..core import window as win_mod
 from ..core import vision
 from ..core.activity import ACTIVITY_CALIBRATION
@@ -66,7 +68,7 @@ def resolve_profile(cfg, size, app=None):
 
 
 def grab_roi_on_app(app, cfg, prompt, with_crop=False, toast=None, alpha_windows=None,
-                    allow_desktop_windows=False, track_profile=True):
+                    allow_desktop_windows=False, track_profile=True, save_profile=True):
     """在【当前屏幕】框选一块区域，返回 (rel_roi, crop, pid)；失败/取消返回 (None, None, None)。
     不激活/不切前台：你把哪个号摆在前面就标到哪个，框完按落点反查参照窗口算相对坐标。
     pid = 本次标定所属的「尺寸组」号（按参照窗口尺寸 resolve_profile：同尺寸复用、
@@ -75,7 +77,8 @@ def grab_roi_on_app(app, cfg, prompt, with_crop=False, toast=None, alpha_windows
     运行时根本不按窗口尺寸归一化（launch_login._scene 传 calib_size=None），若照旧建组，每标一次
     启动器就占掉一个尺寸组（实测已占满 3 个，用户再标就卡在「组已满」）。
     toast: 可选回调 toast(msg, color)；alpha_windows: 框选期间临时隐身的窗口（默认仅 app）。
-    allow_desktop_windows=True 仅给独立启动器标定用，允许其不匹配游戏窗口白名单。"""
+    allow_desktop_windows=True 仅给独立启动器标定用，允许其不匹配游戏窗口白名单。
+    save_profile=False 只修改传入草稿的尺寸组，不写盘；由整体资产提交入口负责保存。"""
     title = cfg.get("window_title", "梦幻西游")
     offset = cfg.get("window_offset", [0, 0])
     windows = alpha_windows or (app,)
@@ -140,35 +143,52 @@ def grab_roi_on_app(app, cfg, prompt, with_crop=False, toast=None, alpha_windows
             if toast:
                 toast("尺寸组已满，本次未保存；请先在「通用/工具」删一个旧组。", T.WARN)
             return None, None, None
-        cfg_mod.save_config(cfg)
+        if save_profile:
+            cfg_mod.save_config(cfg)
     rel = [roi_abs[0] - wr[0], roi_abs[1] - wr[1], roi_abs[2], roi_abs[3]]
     return rel, crop, pid
 
 
 def calibrate_template_direct(app, task_name, key, name, toast=None):
-    """无弹窗直接框选并裁图存成模板，写入 cfg.tasks.<task_name>.templates[key]。返回 True=已保存。
-    供「标定队长ID」按钮直接调用（task_name="teaming", key="leader_id"）。"""
-    cfg = cfg_mod.load_config()
-    rel, crop, pid = grab_roi_on_app(app, cfg, f"框选「{name}」（会裁下来存成模板图）",
-                                     with_crop=True, toast=toast)
-    if rel is None:
-        return False
-    if crop is None or crop.size == 0:
+    """无弹窗框选模板；图像与完整配置提交成功后才发布 app.cfg。
+
+    普通模板复用单图提交，队长 ID 使用包含历史槽位的专用提交。
+    """
+    from ..core import leader_history as lh
+    leader = task_name == "teaming" and key == "leader_id"
+    try:
+        before = cfg_mod.load_config()
+        cfg = copy.deepcopy(before)
+        rel, crop, pid = grab_roi_on_app(app, cfg, f"框选「{name}」（会裁下来存成模板图）",
+                                       with_crop=True, toast=toast, save_profile=False,
+                                       track_profile=task_name != "launch_login")
+        if rel is None:
+            return False
+        if crop is None or crop.size == 0:
+            if toast:
+                toast("截图失败，请重试。", T.DANGER)
+            return False
+        rel_path = f"templates/tm_{key}.png"
+        tc = cfg_mod.task_config(cfg, task_name)
+        tc.setdefault("templates", {})[key] = rel_path
+        cfg_mod.set_task_config(cfg, task_name, tc)
+        if pid is not None:
+            calib.set_task_profile(cfg, task_name, pid)
+            calib.set_template_profile(cfg, task_name, key, pid)
+        encoded = vision.encode_png(crop)
+        if not encoded:
+            raise calibration_assets.CalibrationAssetError("模板编码失败。")
+        if leader:
+            # 激活图与槽位先留旧字节，最后只保存一次完整配置。
+            lh.commit_calibration(before, cfg, encoded)
+            app.cfg = before
+        else:
+            calibration_assets.commit_image(cfg, rel_path, encoded)
+            app.cfg = cfg
+    except Exception as exc:
         if toast:
-            toast("截图失败，请重试。", T.DANGER)
+            toast(f"标定失败：{exc}", T.DANGER)
         return False
-    rel_path = f"templates/tm_{key}.png"
-    if not vision.save_image(rel_path, crop):
-        if toast:
-            toast("保存模板图失败。", T.DANGER)
-        return False
-    tc = cfg_mod.task_config(cfg, task_name)
-    tc.setdefault("templates", {})[key] = rel_path
-    cfg_mod.set_task_config(cfg, task_name, tc)
-    if pid is not None:                  # 整屏坐标标定（pid=None）不吃尺寸组，见 grab_roi_on_app
-        calib.set_task_profile(cfg, task_name, pid)
-        calib.set_template_profile(cfg, task_name, key, pid)
-    cfg_mod.save_config(cfg)
     return True
 
 
@@ -229,6 +249,9 @@ class CalibrateDialog(ctk.CTkToplevel):
 
         self.cfg = cfg_mod.load_config()
         self.tc = cfg_mod.task_config(self.cfg, task_name)
+        # task_config 返回深拷贝；接回同一内存配置，确保归属 setter 与删组级联
+        # 修改的就是后续 _save 使用的编辑块，避免旧副本覆盖新指针。
+        cfg_mod.set_task_config(self.cfg, task_name, self.tc)
 
         # 缩略图画廊列数：模板/装备越多列越多，行尽量匀（_pick_cols）；窗口随列数适当加宽。
         n_items = len(self.spec.get("templates", []))
@@ -354,8 +377,9 @@ class CalibrateDialog(ctk.CTkToplevel):
 
     def _use_full_window(self, key, name):
         """把某个可整窗的大检测区清空 → 运行时用整个窗口当检测区。"""
-        self.tc.setdefault("regions", {})[key] = None
-        self._save()
+        draft = copy.deepcopy(self.cfg)
+        if not self._commit_region(draft, key, None):
+            return
         self._refresh()
         self._toast(f"「{name}」已设为整窗检测（无需框选）", T.SUCCESS)
 
@@ -381,11 +405,10 @@ class CalibrateDialog(ctk.CTkToplevel):
     # ------------------------------------------------------------------
     # 框选：藏起自己 -> 截图框选 -> 复原。返回 (rel_roi, crop)
     # ------------------------------------------------------------------
-    def _grab_roi(self, prompt, with_crop=False):
-        # 框选逻辑抽进模块级 grab_roi_on_app（与「无弹窗直接标定」共享）：不激活/不切前台，
-        # 只在【当前屏幕】框选，框完按落点反查参照窗口算相对坐标——你把哪个号摆前面就标到哪个。
-        # 这里多传 self 让对话框自身也一并隐身，且复用 self.cfg（_save() 随后会回存 task_config）。
-        return grab_roi_on_app(self.app, self.cfg, prompt, with_crop=with_crop,
+    def _grab_roi(self, prompt, with_crop=False, cfg=None, save_profile=True):
+        # 标定入口可传入草稿并延迟尺寸组保存，由整体提交成功后发布。
+        return grab_roi_on_app(self.app, self.cfg if cfg is None else cfg, prompt,
+                               with_crop=with_crop, save_profile=save_profile,
                                toast=self._toast, alpha_windows=(self.app, self),
                                allow_desktop_windows=(self.task_name == "launch_login"),
                                track_profile=(self.task_name != "launch_login"))
@@ -406,53 +429,90 @@ class CalibrateDialog(ctk.CTkToplevel):
         return f"（尺寸组 {calib.label_for(pid)}）" if pid is not None else ""
 
     # ---- 区域标定 ----
+    def _commit_region(self, draft, key, rel, pid=None):
+        """区域与尺寸归属只走一次完整配置保存；失败不发布草稿。"""
+        try:
+            draft["tasks"][self.task_name].setdefault("regions", {})[key] = rel
+            self._record_profile(draft, self.task_name, None, pid)
+            cfg_mod.save_config(draft)
+        except Exception as exc:
+            self._toast(f"标定失败：{exc}", T.DANGER)
+            return False
+        self.cfg = draft
+        self.tc = draft["tasks"][self.task_name]
+        return True
+
     def _calibrate_region(self, key, name):
-        rel, _crop, pid = self._grab_roi(f"框选「{name}」")
+        draft = copy.deepcopy(self.cfg)
+        try:
+            rel, _crop, pid = self._grab_roi(f"框选「{name}」", cfg=draft,
+                                           save_profile=False)
+        except Exception as exc:
+            self._toast(f"标定失败：{exc}", T.DANGER)
+            return
         if rel is None:
             return
-        self.tc.setdefault("regions", {})[key] = rel
-        self._record_profile(self.cfg, self.task_name, None, pid)
-        self._save()
+        if not self._commit_region(draft, key, rel, pid):
+            return
         self._refresh()
         self._toast(f"已记录 {name}：{rel}{self._profile_note(pid)}", T.SUCCESS)
 
+    # ---- 普通图像资产：框选/命名只改草稿，提交成功才发布 ----
+    def _capture_image(self, prompt):
+        draft = copy.deepcopy(self.cfg)
+        try:
+            rel, crop, pid = self._grab_roi(prompt, with_crop=True, cfg=draft,
+                                           save_profile=False)
+            if rel is None:
+                return None
+            if crop is None or crop.size == 0:
+                self._toast("截图失败，请重试。", T.DANGER)
+                return None
+            return draft, crop, pid
+        except Exception as exc:
+            self._toast(f"标定失败：{exc}", T.DANGER)
+            return None
+
+    def _commit_image(self, draft, rel_path, crop):
+        try:
+            encoded = vision.encode_png(crop)
+            calibration_assets.commit_image(draft, rel_path, encoded)
+        except Exception as exc:
+            self._toast(f"标定失败：{exc}", T.DANGER)
+            return False
+        self.cfg = draft
+        self.tc = draft["tasks"][self.task_name]
+        return True
+
     # ---- 标志模板标定（裁图存盘）----
     def _calibrate_template(self, key, name):
-        rel, crop, pid = self._grab_roi(f"框选「{name}」（会裁下来存成模板图）", with_crop=True)
-        if rel is None:
+        captured = self._capture_image(f"框选「{name}」（会裁下来存成模板图）")
+        if captured is None:
             return
-        if crop is None or crop.size == 0:
-            self._toast("截图失败，请重试。", T.DANGER)
-            return
+        draft, crop, pid = captured
         rel_path = f"templates/tm_{key}.png"
-        if not vision.save_image(rel_path, crop):
-            self._toast("保存模板图失败。", T.DANGER)
+        draft["tasks"][self.task_name].setdefault("templates", {})[key] = rel_path
+        self._record_profile(draft, self.task_name, key, pid)
+        if not self._commit_image(draft, rel_path, crop):
             return
-        self.tc.setdefault("templates", {})[key] = rel_path
-        self._record_profile(self.cfg, self.task_name, key, pid)
-        self._save()
         self._refresh()
         self._toast(f"已记录模板 {name}{self._profile_note(pid)}", T.SUCCESS)
 
     # ---- 添加装备（watchlist）----
     def _add_item(self):
-        rel, crop, pid = self._grab_roi("框选要抢的装备（图标+名字）", with_crop=True)
-        if rel is None:
+        captured = self._capture_image("框选要抢的装备（图标+名字）")
+        if captured is None:
             return
-        if crop is None or crop.size == 0:
-            self._toast("截图失败，请重试。", T.DANGER)
-            return
+        draft, crop, pid = captured
         name = self._ask_name()
         if not name:
             return
         rel_path = f"templates/{name}.png"
-        if not vision.save_image(rel_path, crop):
-            self._toast("保存模板图失败。", T.DANGER)
-            return
-        self.tc.setdefault("watchlist", []).append(
+        draft["tasks"][self.task_name].setdefault("watchlist", []).append(
             {"name": name, "template": rel_path, "max_price": None})
-        self._record_profile(self.cfg, self.task_name, name, pid)
-        self._save()
+        self._record_profile(draft, self.task_name, name, pid)
+        if not self._commit_image(draft, rel_path, crop):
+            return
         self._refresh()
         self._toast(f"已添加装备：{name}", T.SUCCESS)
 
@@ -472,12 +532,27 @@ class CalibrateDialog(ctk.CTkToplevel):
         return name
 
     def _delete_item(self, idx):
-        wl = self.tc.get("watchlist", [])
-        if 0 <= idx < len(wl):
-            removed = wl.pop(idx)
-            self._save()
-            self._refresh()
-            self._toast(f"已删除：{removed.get('name', '?')}", T.TEXT_DIM)
+        wl = self.tc.get("watchlist", []) or []
+        if not (0 <= idx < len(wl)):
+            return
+        try:
+            draft = copy.deepcopy(self.cfg)
+            draft_tc = copy.deepcopy(self.tc)
+            removed = draft_tc["watchlist"].pop(idx)
+            name = removed.get("name")
+            # 固定模板键与剩余装备可能共享名称归属，不能一并清除。
+            retained = set(draft_tc.get("templates", {}))
+            retained.update(it.get("name") for it in draft_tc["watchlist"])
+            if name not in retained:
+                draft_tc.get("templates_calib", {}).pop(name, None)
+            cfg_mod.set_task_config(draft, self.task_name, draft_tc)
+            cfg_mod.save_config(draft)
+        except Exception as exc:
+            self._toast(f"删除装备失败，本次修改未保留：{exc}", T.DANGER)
+            return
+        self.cfg, self.tc = draft, draft_tc
+        self._refresh()
+        self._toast(f"已删除：{removed.get('name', '?')}", T.TEXT_DIM)
 
     # ------------------------------------------------------------------
     def _refresh(self):
@@ -497,7 +572,7 @@ class CalibrateDialog(ctk.CTkToplevel):
     def _render_templates(self):
         if self.template_grid is None:
             return
-        from .app import load_thumb     # 延迟导入避免与 app.py 循环依赖
+        from .widgets import load_thumb
         for w in self.template_grid.winfo_children():
             w.destroy()
         saved = self.tc.get("templates", {})
@@ -534,7 +609,7 @@ class CalibrateDialog(ctk.CTkToplevel):
     def _render_watchlist(self):
         if self.item_list is None:
             return
-        from .app import load_thumb
+        from .widgets import load_thumb
         for w in self.item_list.winfo_children():
             w.destroy()
         wl = self.tc.get("watchlist", [])

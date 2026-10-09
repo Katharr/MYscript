@@ -142,9 +142,13 @@ def bind_wraplength(label, padding=4):
             label.configure(wraplength=_logical(w))
 
     def _on(e):
+        # 标签可能已随清单刷新销毁，而父容器仍在；此时不再排队回调。
+        if not label.winfo_exists():
+            return
         # 父容器 <Configure> 时子单元宽可能还没重排好，延到空闲再读 winfo_width 取到新值。
         label.after_idle(_apply)
-    master.bind("<Configure>", _on)
+    # 保留父容器原有事件，尤其是 CTkScrollableFrame 的 scrollregion 更新。
+    master.bind("<Configure>", _on, add=True)
 
 
 def tune_scroll_speed(scrollable, pixels_per_notch=60):

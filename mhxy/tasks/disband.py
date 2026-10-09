@@ -57,7 +57,7 @@ class DisbandTask(Task):
         wins = ctx.select_windows()
         if not wins:
             ctx.log("没找到/没选中目标窗口，已停止。", level="error")
-            return
+            return "stopped" if ctx.should_stop() else "failed"
 
         if not self._is_admin():
             ctx.log("⚠ 当前非管理员权限：游戏在前台时鼠标/键盘注入可能被 UIPI 拦截，建议以管理员重开。",
@@ -76,8 +76,9 @@ class DisbandTask(Task):
         team = TeamFormation(ctx, assignments, team_cfg, dry_run=dry_run)
         ok, reason = team.run_disband()
         if dry_run:
-            return
+            return team.disband_outcome
         if ok:
             ctx.log("✔ 解散队伍完成（所有号已退队）。", level="hit")
         else:
             ctx.log(f"解散队伍未全部完成（{reason}）。", level="warn")
+        return team.disband_outcome

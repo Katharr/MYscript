@@ -14,7 +14,7 @@ from ..core import accounts
 from ..core import config as cfg_mod
 from ..core import launcher
 from ..core import window as win_mod
-from ..core.runner import TaskRunner
+from ..core.runtime import get_runtime
 from ..tasks.launch_login import LaunchLoginTask
 
 
@@ -274,13 +274,13 @@ class QuickStartPanel(ctk.CTkFrame):
         return cfg
 
     def _toggle_run(self):
-        if self.runner is not None and self.runner.is_running():
+        if self.runner is not None and get_runtime().is_running(self.runner):
             self._stop_and_wait_for_window()
             return
         cfg = self._prepare_launch_config(cfg_mod.load_config())
         self.app.cfg = cfg
-        self.runner = TaskRunner(LaunchLoginTask(), cfg)
-        ok, problems = self.runner.start()
+        self.runner = get_runtime().create_runner(LaunchLoginTask(), cfg)
+        ok, problems = get_runtime().start(self.runner)
         if not ok:
             self.runner = None
             for problem in problems:
@@ -378,8 +378,8 @@ class QuickStartPanel(ctk.CTkFrame):
             pass
 
     def _stop_and_wait_for_window(self):
-        if self.runner is not None and self.runner.is_running():
-            self.runner.stop()
+        if self.runner is not None and get_runtime().is_running(self.runner):
+            get_runtime().stop(self.runner)
         self._launched = False
         self._enter_full_if_game_ready()
 
@@ -392,16 +392,13 @@ class QuickStartPanel(ctk.CTkFrame):
         self._maybe_refresh_roles()
         if self.runner is None:
             return
-        while not self.runner.log_queue.empty():
-            level, msg = self.runner.log_queue.get()
-            self.append(msg, level)
-            self._track_progress(msg)
+        # 日志及进度由 App._tick 统一分发，不能再消费兼容队列。
         if self._launched:
             now = time.time()
             if now - getattr(self, "_dodged_at", 0.0) >= 0.8:
                 self._dodged_at = now
                 self._keep_behind_target()
-        if self._launched and not self.runner.is_running():
+        if self._launched and not get_runtime().is_running(self.runner):
             self._launched = False
             self._sync_calibrate_button()
             self._enter_full_if_game_ready()

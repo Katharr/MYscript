@@ -181,7 +181,7 @@ def _anchor_peaks(scene, tpl, threshold, scales, norm=1.0):
         # 只有「没做预缩放、靠模板缩放兜底」时才生效，两者不会叠加放宽。
         need = threshold if abs(sc - 1.0) < 0.02 else max(0.5, threshold * 0.9)
         if norm and abs(norm - 1.0) >= 0.02:
-            need = vision.scaled_threshold(need, norm)
+            need = vision.scaled_threshold(need, 1.0 / norm)
         res = cv2.matchTemplate(scene, t, cv2.TM_CCOEFF_NORMED)
         flat = res.ravel()
         for idx in flat.argsort()[::-1][:64]:

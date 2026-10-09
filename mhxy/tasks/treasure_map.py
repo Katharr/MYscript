@@ -158,7 +158,7 @@ class TreasureMapTask(Task):
         contexts = self._resolve_contexts(ctx, multi)
         if not contexts:
             ctx.log("没找到/没选中目标窗口，已停止。", level="error")
-            return
+            return "stopped" if ctx.should_stop() else "failed"
 
         if dry_run:
             if self._skip_collect:
@@ -169,7 +169,7 @@ class TreasureMapTask(Task):
                     + hint + ("（多号逐个扫描）" if multi else "") + "。", level="warn")
             self._dry_run_selfcheck(ctx, contexts, multi, regions, threshold, switch_delay,
                                     deadline, self._skip_collect)
-            return
+            return "stopped" if ctx.should_stop() else "timeout"
 
         if self._skip_collect:
             ctx.log("★ 实战模式（已有宝图）：跳过领取，直接开背包挖包裹里的藏宝图 ★", level="warn")
@@ -181,10 +181,11 @@ class TreasureMapTask(Task):
             ctx.log(f"时间上限 {time_limit} 分钟（到点自停）。主终止条件是各号背包藏宝图挖空。")
 
         records = [self._new_record(c) for c in contexts]
-        rotation.run_rotation(self._make_rotation(
+        rc = self._make_rotation(
             ctx, records,
             lambda rec: self._step_once(rec["ctx"], rec, loop, regions, threshold),
-            multi, switch_delay, tick, time_limit))
+            multi, switch_delay, tick, time_limit)
+        rotation.run_rotation(rc)
 
         if all(r["done"] for r in records):
             ctx.log("所有号都已挖空/结束。")
@@ -199,6 +200,8 @@ class TreasureMapTask(Task):
             ctx.log("未挖完：" + desc + "。若卡在『等对话框』，多为多开节奏慢(传送没到)或"
                     "「听听无妨」相似度低于阈值——看上面诊断行的最佳相似度，必要时重标 flag_tingting "
                     "或调大 dialog_timeout_sec。", level="warn")
+
+        return self._activity_run_outcome(ctx, records, rc.termination_reason, "dug")
 
     # ------------------------------------------------------------------
     # 日常一条龙·每窗口独立链：暴露「单窗口一份 record + 单步推进函数」
@@ -284,6 +287,7 @@ class TreasureMapTask(Task):
         self._focus(ctx)
         if not ctx.send_hotkey("open_activity"):
             ctx.log("打不开活动界面（open_activity 快捷键未配置），放弃该号。", level="error")
+            rec["outcome"] = "failed"
             rec["done"] = True
             return
         ctx.log("已打开活动，滚轮翻找「宝图任务」…")
@@ -408,6 +412,7 @@ class TreasureMapTask(Task):
         self._focus(ctx)
         if not ctx.send_hotkey("open_bag"):
             ctx.log("打不开背包（缺 open_bag 快捷键），放弃该号。", level="error")
+            rec["outcome"] = "failed"
             rec["done"] = True
             return
         ctx.log("打开背包，翻找藏宝图…")
@@ -453,6 +458,8 @@ class TreasureMapTask(Task):
             return
         ctx.log("背包已无藏宝图 → 全部挖完，关上背包。", level="hit")
         self._close_bag(ctx)
+        # 沿用翻包未命中的旧判据；截图失败也可能走到这里，不代表客户端无图核验。
+        rec["outcome"] = "completed"
         rec["done"] = True
 
     # ---- 阶段 B：挖宝监控（盯「下一张使用」续挖；长时间无弹窗且静止→这批挖完，回开背包确认）----
@@ -505,6 +512,7 @@ class TreasureMapTask(Task):
         self._save_capture(self._grab_scene(ctx, regions), f"stuck_{rec['state']}")
         if rec["recover"] >= loop.get("max_stuck_recover", 3):
             ctx.log("多次卡死仍无进展，放弃该号。", level="error")
+            rec["outcome"] = "failed"
             rec["done"] = True
             return
         # 按一次 Esc 清掉异常弹窗，再回合适的阶段起点

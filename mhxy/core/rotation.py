@@ -93,6 +93,8 @@ class RotationConfig:
         self.barrier_states = barrier_states or set()
         self.max_consec_steps = max(1, max_consec_steps)
         self.max_consec_sec = max(0.1, max_consec_sec)
+        # 仅补充结束证据；run_rotation 的旧返回值保持兼容。
+        self.termination_reason = None
 
 
 def _jitter(c, base):
@@ -131,10 +133,16 @@ def _drive_until_yield(c, rec):
 
 
 def run_rotation(c):
-    """跑轮转直到全员 done / 总超时 / 停止。返回 "ok" | "aborted" | "stopped"。"""
+    """跑轮转直到全员 done / 总超时 / 停止，保持旧返回值。
+
+    c.termination_reason 单独区分 completed / timeout / stopped / aborted；
+    completed 仅表示所有 record 结束，业务成功仍由任务判断。
+    """
+    c.termination_reason = None
     start = time.time()
     while not c.should_stop():
         if c.overall_timeout and time.time() - start > c.overall_timeout:
+            c.termination_reason = "timeout"
             c.log(c.timeout_msg or f"轮转总超时 {c.overall_timeout}s 未完成 → 降级结束。", level="warn")
             break
         if all(c.is_done(r) for r in c.records):
@@ -150,6 +158,7 @@ def run_rotation(c):
             if wctx.window.rect() is None:
                 action = c.on_window_gone(rec)
                 if action == "abort":
+                    c.termination_reason = "aborted"
                     return "aborted"
                 continue  # "skip" / "done"：本轮跳过（done 由回调内置位）
             # 每次实际执行前都要还原并置前：单开窗口也可能被最小化或被其他窗口遮挡。
@@ -158,7 +167,8 @@ def run_rotation(c):
                 continue
             if wctx.should_stop():
                 break
-            c.between_steps(rec)          # 切前台后、推进前：跨任务穿插钩子（如背包满自动整理）
+            if c.between_steps(rec) is False:
+                continue                 # 穿插维护未安全恢复，不推进业务状态
             if c.should_stop():
                 break
             _drive_until_yield(c, rec)
@@ -167,5 +177,8 @@ def run_rotation(c):
         _sleep(c, _jitter(c, c.tick))
 
     if c.should_stop():
+        c.termination_reason = "stopped"
         return "stopped"
+    if c.termination_reason is None:
+        c.termination_reason = "completed"
     return "ok"

@@ -16,23 +16,10 @@ tkinter 的几何与鼠标坐标都是物理像素，mss 截图也是物理像�
 
 import tkinter as tk
 
-import mss
-import numpy as np
-import cv2
+from ..core import vision
 from PIL import Image, ImageTk
 
 from . import theme as T
-
-
-def _pick_monitor(sct, point):
-    """返回包含 point(x,y) 的显示器字典；找不到则用主屏。"""
-    if point is not None:
-        px, py = point
-        for m in sct.monitors[1:]:
-            if (m["left"] <= px < m["left"] + m["width"]
-                    and m["top"] <= py < m["top"] + m["height"]):
-                return m
-    return sct.monitors[1]  # 主显示器
 
 
 def select_roi_on_screen(master, title="拖动鼠标框住目标，松开完成", around_point=None,
@@ -47,10 +34,8 @@ def select_roi_on_screen(master, title="拖动鼠标框住目标，松开完成"
     返回           : with_crop=False -> [left,top,w,h] 或 None；
                     with_crop=True  -> ([left,top,w,h], crop_bgr) 或 (None, None)。
     """
-    with mss.mss() as sct:
-        mon = _pick_monitor(sct, around_point)
-        raw = sct.grab(mon)
-    img = Image.frombytes("RGB", (raw.width, raw.height), raw.rgb)
+    mon, size, pixels = vision.capture_monitor_rgb(around_point)
+    img = Image.frombytes("RGB", size, pixels)
 
     state = {"rect": None, "start": None, "done": False}
 
@@ -159,5 +144,5 @@ def select_roi_on_screen(master, title="拖动鼠标框住目标，松开完成"
     lx = rect[0] - mon["left"]
     ly = rect[1] - mon["top"]
     crop_rgb = img.crop((lx, ly, lx + rect[2], ly + rect[3]))
-    crop_bgr = cv2.cvtColor(np.array(crop_rgb), cv2.COLOR_RGB2BGR)
+    crop_bgr = vision.rgb_to_bgr(crop_rgb)
     return rect, crop_bgr

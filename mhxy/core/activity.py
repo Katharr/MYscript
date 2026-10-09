@@ -38,7 +38,8 @@ def select_daily(ctx, sleep):
     hit = scene.match(tpl, tc.get("loop", {}).get("match_threshold", 0.85))
     if hit is None or ctx.should_stop():
         return False
-    ctx.mouse.click(*scene.to_screen(hit[0], hit[1]))
+    if ctx.mouse.click(*scene.to_screen(hit[0], hit[1])) is False:
+        return False
     ctx.log(f"识别到「日常活动」（{hit[2]:.3f}）→ 点击。", level="hit")
     sleep(tc.get("loop", {}).get("after_click_wait_sec", 0.35))
     return True

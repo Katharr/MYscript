@@ -26,6 +26,39 @@ def load_template(path):
     return cv2.imdecode(data, cv2.IMREAD_COLOR)
 
 
+def capture_monitor_rgb(point=None):
+    """冻结 point 所在显示器；返回显示器几何、图像尺寸和 RGB 字节。"""
+    import mss
+    with mss.mss() as sct:
+        mon = sct.monitors[1]
+        if point is not None:
+            px, py = point
+            for candidate in sct.monitors[1:]:
+                if (candidate["left"] <= px < candidate["left"] + candidate["width"]
+                        and candidate["top"] <= py < candidate["top"] + candidate["height"]):
+                    mon = candidate
+                    break
+        raw = sct.grab(mon)
+    return mon, (raw.width, raw.height), raw.rgb
+
+
+def rgb_to_bgr(image):
+    """展示图像转回任务/标定使用的 BGR 像素；不写入资产。"""
+    return cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+
+
+def load_template_rgb(path):
+    """展示用模板像素；不创建 GUI 对象，不改变读取/失败语义。"""
+    image = load_template(path)
+    return None if image is None else cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+
+def encode_png(img):
+    """编码为 PNG 字节，不写文件；编码失败返回 None。"""
+    ok, buf = cv2.imencode(".png", img)
+    return buf.tobytes() if ok else None
+
+
 def save_image(path, img):
     """保存图片（兼容中文路径）。"""
     p = _abspath(path)
@@ -69,6 +102,7 @@ SCALE_MAX = 1.50
 def scaled_threshold(threshold, scale):
     """按缩放比把阈值动态放宽（见上面实测依据）。scale≈1 时【原样返回 threshold】，零回归。
 
+    scale = 当前窗口尺寸 ÷ 标定基准尺寸；不是图像预缩放比例。
     分段（与实测表格一致）：0.9~1.5x 保持原阈值；0.75~0.9x 用 0.80；0.6~0.75x 用 0.75。
     下限不低于 0.75——再低会引入误认；真正的防线是「位置靠几何绑定推、分数只排序」（见 core/list_row）。
     """
@@ -89,9 +123,10 @@ def scaled_threshold(threshold, scale):
 def match_scaled(scene_bgr, template_bgr, threshold, scale):
     """match() 的跨分辨率版：scene 已被预缩放回标定基准尺度时，用 scale 动态放宽阈值后再匹配。
 
-    scale = 「当前窗口尺寸 ÷ 标定基准尺寸」的缩放比（见 window.ScaledScene.scale）。
-    ⚠ 返回的 cx/cy 是【缩放后画面】里的坐标，调用方必须用 window.ScaledScene.to_screen() 或
-    自己乘 1/scale 换算回当前屏幕坐标，否则会点歪（见 core/window.ScaledScene 的约定）。
+    scale = 「当前窗口尺寸 ÷ 标定基准尺寸」的缩放比，
+    即 window.ScaledScene.scale（图像归一化比例）的倒数。
+    ⚠ 返回的 cx/cy 是【缩放后画面】里的坐标，调用方必须用 window.ScaledScene.to_screen()
+    换算回当前屏幕坐标；阈值的 scale 不用于坐标反算。
     scale=None/≈1 时行为与 match() 逐字节一致（零回归）。
     """
     return match(scene_bgr, template_bgr, scaled_threshold(threshold, scale))

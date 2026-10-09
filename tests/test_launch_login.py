@@ -795,40 +795,60 @@ class LaunchCalibrationProfileTests(unittest.TestCase):
     def test_calibrate_template_saves_without_profile_tracking(self):
         """pid=None（整屏坐标标定）时仍要存下模板图与路径——这正是小窗标定要走的路。"""
         from mhxy.gui.calibrate_dialog import CalibrateDialog
-        saved = {}
+        import copy
+        from mhxy.core import config as cfg_mod
+        from types import SimpleNamespace
 
-        class _Stub:
-            task_name = "launch_login"
-            cfg = {}
-            tc = {"templates": {}}
-
-            @staticmethod
-            def _record_profile(cfg, task_name, key, pid):
-                return CalibrateDialog._record_profile(cfg, task_name, key, pid)
-
-            @staticmethod
-            def _profile_note(pid):
-                return CalibrateDialog._profile_note(pid)
-
-            def _grab_roi(self, prompt, with_crop=False):
-                import numpy as np
-                return [1, 2, 3, 4], np.zeros((10, 20, 3), dtype="uint8"), None
-
-            def _save(self):
-                saved["saved"] = True
-
-            def _refresh(self):
-                pass
-
-            def _toast(self, msg, color=None):
-                saved["toast"] = msg
-
-        with mock.patch("mhxy.gui.calibrate_dialog.vision.save_image", return_value=True), \
+        dialog = object.__new__(CalibrateDialog)
+        dialog.task_name = "launch_login"
+        dialog.cfg = copy.deepcopy(cfg_mod.DEFAULT_CONFIG)
+        dialog.tc = dialog.cfg["tasks"]["launch_login"]
+        dialog._grab_roi = mock.Mock(return_value=([1, 2, 3, 4], SimpleNamespace(size=600), None))
+        dialog._refresh = mock.Mock()
+        dialog._toast = mock.Mock()
+        before_profiles = copy.deepcopy(dialog.cfg.get("calib_profiles"))
+        with mock.patch("mhxy.gui.calibrate_dialog.vision.encode_png", return_value=b"png"), \
+             mock.patch("mhxy.gui.calibrate_dialog.calibration_assets.commit_image") as commit, \
              mock.patch("mhxy.gui.calibrate_dialog.calib.set_template_profile") as tpl_profile:
-            CalibrateDialog._calibrate_template(_Stub(), "start_game", "开始游戏")
-        self.assertEqual(_Stub.tc["templates"]["start_game"], "templates/tm_start_game.png")
-        self.assertTrue(saved.get("saved"))
+            dialog._calibrate_template("start_game", "开始游戏")
+        self.assertEqual(dialog.tc["templates"]["start_game"], "templates/tm_start_game.png")
+        commit.assert_called_once_with(dialog.cfg, "templates/tm_start_game.png", b"png")
+        self.assertEqual(dialog.cfg.get("calib_profiles"), before_profiles)
+        dialog._refresh.assert_called_once()
         tpl_profile.assert_not_called()
+    def test_run_aggregates_profile_completion_evidence(self):
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        cfg["account_launch"]["profiles"] = [
+            {"label": "一", "enabled": True},
+            {"label": "二", "enabled": True},
+        ]
+        cfg["tasks"]["launch_login"]["dry_run"] = False
+
+        class _RunCtx(_Ctx):
+            def __init__(self, cfg):
+                super().__init__(cfg)
+                self.events = []
+                self.stop = False
+
+            def should_stop(self):
+                return self.stop
+
+            def log(self, msg, level="info"):
+                self.events.append((level, msg))
+
+        for results, expected in ((["ok", "ok"], "completed"),
+                                  (["ok", "超时"], "partial"),
+                                  (["失败", "超时"], "failed")):
+            with self.subTest(expected=expected):
+                task = LaunchLoginTask()
+                ctx = _RunCtx(cfg)
+                with mock.patch.object(task, "_run_profile", side_effect=results):
+                    self.assertEqual(task.run(ctx), expected)
+
+        task = LaunchLoginTask()
+        ctx = _RunCtx(cfg)
+        with mock.patch.object(task, "_run_profile", return_value="stopped"):
+            self.assertEqual(task.run(ctx), "stopped")
 
 
 if __name__ == "__main__":

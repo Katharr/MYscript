@@ -116,6 +116,8 @@ class LaunchLoginTask(Task):
 
         ctx.log("启动登录：%d 个档案，%s。" % (len(profiles), "演练模式" if dry_run else "实战模式"))
         placed = 0
+        succeeded = 0
+        stopped = False
         for index, profile in enumerate(profiles, 1):
             if ctx.should_stop():
                 break
@@ -126,16 +128,23 @@ class LaunchLoginTask(Task):
                                        launcher_timeout, recheck_cfg, switch_cfg, dry_run,
                                        corner, corner_margin, corner_settle)
             if result == "ok":
+                succeeded += 1
                 placed += 1
                 ctx.log("[%s] 登录流程完成。" % label, level="hit")
             elif result == "stopped":
+                stopped = True
                 break
             else:
                 ctx.log("[%s] 未完成：%s；继续下一个档案。" % (label, result), level="error")
-        if ctx.should_stop():
+        if stopped or ctx.should_stop():
             ctx.log("启动登录已停止；不会关闭已打开的游戏窗口。", level="warn")
-        else:
-            ctx.log("启动登录队列结束。")
+            return "stopped"
+        ctx.log("启动登录队列结束。")
+        if dry_run or succeeded == len(profiles):
+            return "completed"
+        if succeeded:
+            return "partial"
+        return "failed"
 
     @staticmethod
     def _corner_for(placed, corners):

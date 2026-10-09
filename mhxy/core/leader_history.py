@@ -1,33 +1,30 @@
 # -*- coding: utf-8 -*-
-"""
-队长ID「当前 + 最近3历史」库：多张候选模板 + 激活指针 + 环形淘汰。纯逻辑、零 GUI 依赖、可单测。
+"""队长ID「当前 + 最近3历史」库；零 GUI 依赖。
 
-关键约定（改前务必读懂，否则极易破坏组队识别）：
-- 激活图路径【永远】是 templates/tm_leader_id.png（teaming._load_templates 与
-  calibrate_dialog.calibrate_template_direct 都写死读/写这条）。切换队长ID =
-  把选中历史图的【字节复制覆盖】这个同名文件，而【不是】改 config 里的路径串。
-  这样 TeamFormation、标定入口都对「文件内容被换」无感 —— 核心零改、零回归。
-- 历史存 4 个固定物理槽 templates/tm_leader_id_slot0..3.png（纯 ASCII 名，避开中文路径坑），
-  环形复用：淘汰最旧 = 复用其槽位、覆盖字节，自然 GC，不堆时间戳垃圾。
-- config（tasks.teaming 下）：
-    leader_id_history = [{slot, label}, ...]   最新在前，最多 4 项（当前1 + 历史3）
-    leader_id_active  = 指向 history 的下标（仅 UI 高亮用；约定 history[active] 的字节 == 激活图）
-  并由本模块统一维护 templates.leader_id：历史非空→指向激活图、历史空→None
-  （就绪度判定只看该字段是否非空，不看文件存在，故空历史必须置 None）。
-- 迁移兜底只在【读】(get_history/get_active_index) 触发；【写】(push/activate/delete) 绝不迁移，
-  否则首次标定会被「迁移 + push」复制成两份。
-"""
+激活图永远为 templates/tm_leader_id.png，切换只覆盖字节、不改路径；
+历史复用四个固定槽，最新在前。空历史将 templates.leader_id 置 None。
+get_history/get_active_index 只读快照；图库 reload 后显式 initialize，
+仅有变化时保存。push/activate/delete 不迁移，避免首次标定重复收编。
 
+资产操作先留内存字节快照，使用同目录临时文件原子覆盖，配置仍只走
+save_config；复制、删除或保存失败恢复资产并显式报错。此边界不提供跨文件
+崩溃事务。commit_calibration 覆盖标定前状态；兼容 push 仅覆盖其调用前状态。
+"""
+import copy
 import os
+import tempfile
 import time
 
 from . import config as cfg_mod
-from . import vision
 
 TASK = "teaming"
-ACTIVE_REL = "templates/tm_leader_id.png"        # 激活图：永不改名
-SLOT_REL = "templates/tm_leader_id_slot{}.png"   # 历史物理槽
-MAX_SLOTS = 4                                      # 当前1 + 历史3
+ACTIVE_REL = "templates/tm_leader_id.png"
+SLOT_REL = "templates/tm_leader_id_slot{}.png"
+MAX_SLOTS = 4
+
+
+class LeaderHistoryError(RuntimeError):
+    """资产或配置未提交；恢复失败会在消息中明确指出。"""
 
 
 def _all_slots():
@@ -46,109 +43,204 @@ def _exists(rel):
     return os.path.exists(_abs(rel))
 
 
+def _read_bytes(rel):
+    try:
+        with open(_abs(rel), "rb") as stream:
+            return stream.read()
+    except FileNotFoundError:
+        return None
+
+
+def _write_bytes(rel, data):
+    """同目录原子字节覆盖；中文路径由 Python 文件 API 处理。"""
+    path = _abs(rel)
+    parent = os.path.dirname(path)
+    os.makedirs(parent, exist_ok=True)
+    tmp = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=parent, prefix=".leader-", suffix=".tmp", delete=False) as stream:
+            tmp = stream.name
+            stream.write(data)
+        os.replace(tmp, path)
+    finally:
+        if tmp is not None and os.path.exists(tmp):
+            os.remove(tmp)
+
+
 def _copy(src_rel, dst_rel):
-    """复制图片字节（经 cv2 imdecode/imencode，兼容中文路径，不用 shutil）。成功返回 True。"""
-    img = vision.load_template(src_rel)
-    if img is None:
+    """严格字节复制，不经过图像解码/编码；失败返回 False。"""
+    try:
+        data = _read_bytes(src_rel)
+        if data is None:
+            return False
+        _write_bytes(dst_rel, data)
+        return True
+    except OSError:
         return False
-    return bool(vision.save_image(dst_rel, img))
 
 
 def _remove(rel):
     try:
-        p = _abs(rel)
-        if os.path.exists(p):
-            os.remove(p)
-    except OSError:
+        os.remove(_abs(rel))
+    except FileNotFoundError:
         pass
 
 
-# ----------------------------------------------------------------------
-def _load(cfg, migrate=True):
-    """读取 (tc, history, active)。migrate=True 时做一次性迁移兜底（老用户只有单张激活图、
-    还没历史 → 收编成 history[0]）。不落盘（由调用方决定何时 save）。"""
+def _valid_index(idx, history):
+    return type(idx) is int and 0 <= idx < len(history)
+
+
+def _load(cfg):
+    """读取独立快照并投影四槽/active；不复制、不保存、不修改 cfg。"""
     tc = cfg_mod.task_config(cfg, TASK)
-    history = list(tc.get("leader_id_history") or [])
+    history = copy.deepcopy(list(tc.get("leader_id_history") or [])[:MAX_SLOTS])
     active = tc.get("leader_id_active", 0)
-    if migrate and not history and _exists(ACTIVE_REL):
-        slot = SLOT_REL.format(0)
-        if _copy(ACTIVE_REL, slot):
-            history = [{"slot": slot, "label": _now_label()}]
-            active = 0
-    if not (0 <= active < len(history)):
+    if not _valid_index(active, history):
         active = 0
     return tc, history, active
 
 
-def _save(cfg, tc, history, active):
-    """落盘 history/active，并同步 templates.leader_id（历史空则置 None，让就绪度判定正确）。"""
-    history = history[:MAX_SLOTS]
-    if not (0 <= active < len(history)):
-        active = 0
-    tc["leader_id_history"] = history
-    tc["leader_id_active"] = active
-    tpl = tc.setdefault("templates", {})
-    tpl["leader_id"] = ACTIVE_REL if history else None
-    cfg_mod.set_task_config(cfg, TASK, tc)
-    cfg_mod.save_config(cfg)
-    return history
+def _slot(item):
+    slot = item.get("slot")
+    if slot not in _all_slots():
+        raise LeaderHistoryError("历史槽位无效。")
+    return slot
 
 
-# ----------------------------------------------------------------------
+def _prepared(tc, history, active):
+    tc = copy.deepcopy(tc)
+    tc["leader_id_history"] = copy.deepcopy(history[:MAX_SLOTS])
+    tc["leader_id_active"] = active if _valid_index(active, history) else 0
+    tc.setdefault("templates", {})["leader_id"] = ACTIVE_REL if history else None
+    return tc
+
+
+def _commit(cfg, tc, history, active, operations=()):
+    """operations 为 copy(src,dst)、write(bytes,path) 或 remove(path)；快照变更目标。"""
+    prepared = _prepared(tc, history, active)
+    draft = copy.deepcopy(cfg)
+    cfg_mod.set_task_config(draft, TASK, prepared)
+    snapshots = {}
+    try:
+        for operation in operations:
+            path = operation[-1]
+            if path not in snapshots:
+                snapshots[path] = _read_bytes(path)
+        for operation in operations:
+            if operation[0] == "copy":
+                if not _copy(operation[1], operation[2]):
+                    raise LeaderHistoryError("复制队长图失败。")
+            elif operation[0] == "write":
+                _write_bytes(operation[2], operation[1])
+            else:
+                _remove(operation[1])
+        cfg_mod.save_config(draft)
+    except Exception as exc:
+        restore_failed = False
+        for path, data in snapshots.items():
+            try:
+                if _read_bytes(path) == data:
+                    continue
+                if data is None:
+                    _remove(path)
+                else:
+                    _write_bytes(path, data)
+            except Exception:
+                restore_failed = True
+        detail = "旧资产恢复失败，请检查队长图库。" if restore_failed else "已保留原配置与操作前资产。"
+        raise LeaderHistoryError(f"队长历史提交失败：{detail}") from exc
+    cfg_mod.set_task_config(cfg, TASK, prepared)
+    return copy.deepcopy(prepared["leader_id_history"])
+
+
 def get_history(cfg):
-    """返回历史列表 [{slot, label}, ...]（含一次性迁移兜底，会落盘以稳定状态）。"""
-    tc, history, active = _load(cfg, migrate=True)
-    return _save(cfg, tc, history, active)
+    """返回独立历史快照，不触发迁移或保存。"""
+    return _load(cfg)[1]
 
 
 def get_active_index(cfg):
-    _tc, _history, active = _load(cfg, migrate=True)
-    return active
+    """返回当前下标；无效指针只在返回值中投影为 0。"""
+    return _load(cfg)[2]
+
+
+def initialize(cfg):
+    """显式、幂等初始化：收编旧图、截断历史、修正指针和就绪字段。"""
+    tc, history, active = _load(cfg)
+    operations = []
+    if not history and _exists(ACTIVE_REL):
+        slot = SLOT_REL.format(0)
+        history = [{"slot": slot, "label": _now_label()}]
+        active = 0
+        operations.append(("copy", ACTIVE_REL, slot))
+    elif history and (type(tc.get("leader_id_active", 0)) is not int
+                      or tc.get("leader_id_active", 0) != active):
+        # 越界/非法指针归零时，激活字节也必须对应新的第 0 项。
+        operations.append(("copy", _slot(history[0]), ACTIVE_REL))
+    prepared = _prepared(tc, history, active)
+    if not operations and prepared == tc:
+        return copy.deepcopy(history)
+    return _commit(cfg, tc, history, active, operations)
+
+
+def _append_history(tc):
+    history = copy.deepcopy(list(tc.get("leader_id_history") or [])[:MAX_SLOTS])
+    used = {_slot(item) for item in history}
+    free = next((slot for slot in _all_slots() if slot not in used), None)
+    if free is None:
+        free = _slot(history[-1])
+        history = history[:-1]
+    history.insert(0, {"slot": free, "label": _now_label()})
+    return history, free
+
+
+def commit_calibration(cfg, draft, image_bytes):
+    """草稿含尺寸归属；一次保存新图、历史与配置，同步失败恢复标定前资产。
+
+    不迁移旧激活图，不提供跨文件崩溃事务；成功后才更新调用方内存配置。
+    """
+    if not isinstance(image_bytes, bytes) or not image_bytes:
+        raise LeaderHistoryError("队长模板编码为空。")
+    working = copy.deepcopy(draft)
+    tc = cfg_mod.task_config(working, TASK)
+    history, slot = _append_history(tc)
+    result = _commit(working, tc, history, 0,
+                     [("write", image_bytes, ACTIVE_REL), ("copy", ACTIVE_REL, slot)])
+    cfg.clear()
+    cfg.update(working)
+    return result
 
 
 def push_after_calibrate(cfg):
-    """标定成功后（新图已被 calibrate 写进激活图 tm_leader_id.png）把它收进历史并设为当前；
-    环形淘汰最旧。返回新 history。调用前请确保 cfg 已 reload 到最新（calibrate 自行写过盘）。"""
-    tc, history, active = _load(cfg, migrate=False)
-    used = {h.get("slot") for h in history}
-    free = next((s for s in _all_slots() if s not in used), None)
-    if free is None:                       # 无空槽：复用最旧那项的槽（环形，物理文件被覆盖）
-        history.pop()                      # 最旧在末尾
-        used = {h.get("slot") for h in history}
-        free = next((s for s in _all_slots() if s not in used), SLOT_REL.format(0))
-    if not _copy(ACTIVE_REL, free):        # 复制失败：尽量不破坏现状
-        return _save(cfg, tc, history, active)
-    history.insert(0, {"slot": free, "label": _now_label()})
-    return _save(cfg, tc, history, 0)
+    """兼容已保存新图的调用方；恢复仅覆盖 push 调用前，不触发迁移。"""
+    tc, _history, _active = _load(cfg)
+    history, free = _append_history(tc)
+    return _commit(cfg, tc, history, 0, [("copy", ACTIVE_REL, free)])
 
 
 def activate(cfg, idx):
-    """把 history[idx] 设为当前：复制其槽位字节覆盖激活图，并重排到 history[0]。返回新 history。"""
-    tc, history, active = _load(cfg, migrate=False)
-    if not (0 <= idx < len(history)):
-        return _save(cfg, tc, history, active)
-    chosen = history[idx]
-    if not _copy(chosen.get("slot"), ACTIVE_REL):
-        return _save(cfg, tc, history, active)
-    history.pop(idx)
+    """复制选中槽到固定激活图并置顶；失败显式报错、零配置提交。"""
+    tc, history, _active = _load(cfg)
+    if not _valid_index(idx, history):
+        raise LeaderHistoryError("队长历史下标无效。")
+    chosen = history.pop(idx)
     history.insert(0, chosen)
-    return _save(cfg, tc, history, 0)
+    return _commit(cfg, tc, history, 0, [("copy", _slot(chosen), ACTIVE_REL)])
 
 
 def delete(cfg, idx):
-    """删除 history[idx]：删其槽位文件并维护激活图有效（删的是当前则用新 history[0] 复制覆盖激活图；
-    删空则连激活图一起清，回到「未标定」与现状一致）。返回新 history。"""
-    tc, history, active = _load(cfg, migrate=False)
-    if not (0 <= idx < len(history)):
-        return _save(cfg, tc, history, active)
+    """删除记录及槽；删除当前图时先准备替换，删空同时清激活图。"""
+    tc, history, active = _load(cfg)
+    if not _valid_index(idx, history):
+        raise LeaderHistoryError("队长历史下标无效。")
     removed = history.pop(idx)
-    _remove(removed.get("slot"))
-    if not history:                        # 全空：激活图也清掉
-        _remove(ACTIVE_REL)
-        return _save(cfg, tc, history, 0)
-    if idx == active:                      # 删的是当前：用新的 history[0] 当当前
-        _copy(history[0].get("slot"), ACTIVE_REL)
+    operations = []
+    if not history:
+        operations.append(("remove", ACTIVE_REL))
+        active = 0
+    elif idx == active:
+        operations.append(("copy", _slot(history[0]), ACTIVE_REL))
         active = 0
     elif idx < active:
         active -= 1
-    return _save(cfg, tc, history, active)
+    operations.append(("remove", _slot(removed)))
+    return _commit(cfg, tc, history, active, operations)

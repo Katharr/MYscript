@@ -177,11 +177,11 @@ class QuickStartPanelTests(unittest.TestCase):
         cfg["tasks"]["launch_login"]["dry_run"] = True
         with mock.patch("mhxy.gui.quick_start.cfg_mod.load_config", return_value=cfg), \
              mock.patch("mhxy.gui.quick_start.cfg_mod.save_config") as save_config, \
-             mock.patch("mhxy.gui.quick_start.TaskRunner") as runner_cls:
-            runner_cls.return_value.start.return_value = (True, [])
+             mock.patch("mhxy.gui.quick_start.get_runtime") as runtime_get:
+            runtime_get.return_value.start.return_value = (True, [])
             QuickStartPanel._toggle_run(stub)
 
-        self.assertFalse(runner_cls.call_args.args[1]["tasks"]["launch_login"]["dry_run"])
+        self.assertFalse(runtime_get.return_value.create_runner.call_args.args[1]["tasks"]["launch_login"]["dry_run"])
         stub.app.on_quick_start_started.assert_called_once_with(stub.runner)
         save_config.assert_not_called()
 
@@ -254,8 +254,9 @@ class QuickStartPanelTests(unittest.TestCase):
 
         QuickStartPanel.pump(stub)
 
-        stub.append.assert_called_once_with("[角色] 开始处理（1/1）。", "info")
-        stub._track_progress.assert_called_once_with("[角色] 开始处理（1/1）。")
+        stub.append.assert_not_called()
+        stub._track_progress.assert_not_called()
+        self.assertEqual(runner.log_queue.qsize(), 1)
         stub._enter_full_if_game_ready.assert_called_once_with()
 
 

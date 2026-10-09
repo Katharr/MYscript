@@ -108,7 +108,7 @@ mhxy/
     calibrate.py 旧的命令行标定（已不被 GUI 调用，仅留作 CLI 备用）
   gui/
     theme.py            配色/字体/圆角令牌（改这里整体换肤）+ bind_wraplength 换行助手（见约束 8）
-    app.py              主窗口：侧边导航 + 通用页(置顶,默认)/各任务Page/SettingsPage/AboutPage；
+    app.py              主窗口：侧边导航、全局状态、日志视图；各页面位于 *_page.py，PAGE_CLASSES 显式绑定；
                         任务启动成功后统一走 App.on_task_started（记运行态 + 自动收起为悬浮窗）——
                         各页启动入口**必须**在 preflight 通过后调它，失败路径别调（否则收起却看不到错误）
     quick_start.py      零游戏窗口时的紧凑一键启动面板（档案勾选、启动、流程标定、就地日志、完成自动展开）；
@@ -132,7 +132,7 @@ mhxy/
   `base.Task._make_rotation()`，只传 `step_fn(rec)`；有跨窗口握手的自己构造 `RotationConfig`（见 `teaming.py`）。
   **铁律：监控态未触发转移时绝不 `_goto`**，否则在一个号上空转盯屏、饿死别号。详见 memory `rotation-engine`。
 - 加新任务示例：新建 `mhxy/tasks/xxx.py` 写 `@register class XxxTask(Task)`；在 `tasks/__init__.py` import；
-  在 `gui/app.py` 仿 `SniperPage` 加页面 + 在 `App.NAV` 加项。
+  仿 `gui/sniper_page.py` 新建独立页面，在 `gui/app.py` 的 `App.PAGE_CLASSES` 与 `App.NAV` 显式绑定。
 - **日志统一到「全局日志面板」（约束，别再各页造日志框）**：日志框只此一处——常驻主窗口右侧（`App._build_log_panel`），
   统一出口 `App.log_line(msg, level, source)`。新页面**不要**自建日志框：设个类属性 `LOG_SOURCE = "短名"`，
   页内 `_log_line` 照范式写成一行转发 `self.app.log_line(msg, level, getattr(self,"LOG_SOURCE",None))`，

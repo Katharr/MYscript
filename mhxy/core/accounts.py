@@ -318,7 +318,8 @@ def launch_session(win):
 def bound_role_id(win):
     """读取已确认的角色 ID，不截屏、不 OCR。"""
     with _lock:
-        return _identity.get(_hwnd(win), {}).get("role_id")
+        entry = _identity.get(_hwnd(win), {})
+        return entry.get("role_id") if not entry.get("pending") else None
 
 
 def _window_pid(hwnd):
@@ -550,15 +551,26 @@ def _tab_name_rect(win):
         return None
 
 
-def _tab_name_roi(win):
-    """直接截取当前窗口的姓名小区域，典型大小约 100×40px。"""
+def _tab_name_observation(win):
+    """只在同一前台 HWND/几何下截取姓名条，返回像素及发布前可复核证据。"""
+    evidence = win_mod.foreground_evidence(win)
+    if evidence is None:
+        return None, None
     rect = _tab_name_rect(win)
-    if rect is None:
-        return None
+    if rect is None or win_mod.foreground_evidence(win) != evidence:
+        return None, None
     try:
-        return win_mod.grab(rect)
+        roi = win_mod.grab(rect)
     except Exception:
-        return None
+        return None, None
+    if win_mod.foreground_evidence(win) != evidence:
+        return None, None
+    return roi, evidence
+
+
+def _tab_name_roi(win):
+    """直接截取当前前台窗口的姓名小区域；失焦或几何变化拒绝观察。"""
+    return _tab_name_observation(win)[0]
 
 
 def _fingerprint(roi):
@@ -588,9 +600,10 @@ def _prepare_ocr_roi(roi):
 def _role_for_window(win, names, now):
     """按窗口独立缓存身份；指纹不变时零 OCR，变化后稳定一轮才重识别。"""
     hwnd = _hwnd(win)
-    roi = _tab_name_roi(win)
+    roi, evidence = _tab_name_observation(win)
     fingerprint = _fingerprint(roi)
-    if not hwnd or fingerprint is None:
+    if not hwnd or fingerprint is None or evidence is None \
+            or evidence[0] != hwnd or win_mod.foreground_evidence(win) != evidence:
         return None
 
     with _lock:
@@ -598,6 +611,8 @@ def _role_for_window(win, names, now):
         if entry is not None:
             entry["seen_at"] = now
             if fingerprint == entry.get("fingerprint") and entry.get("role_id"):
+                entry["pending"] = None
+                entry["retry_at"] = 0.0
                 return entry["role_id"]
             if fingerprint != entry.get("fingerprint"):
                 # 首次看到新指纹先等待下一轮确认稳定，期间显示号N，杜绝旧名字串号。
@@ -612,6 +627,8 @@ def _role_for_window(win, names, now):
 
     # 推理昂贵且会占 CPU：全局串行；入锁后重查，防止并发调用重复识别同一窗口。
     with _ocr_infer_lock:
+        if win_mod.foreground_evidence(win) != evidence:
+            return None
         with _lock:
             entry = _identity.get(hwnd)
             if entry is not None and fingerprint == entry.get("fingerprint") and entry.get("role_id"):
@@ -619,8 +636,17 @@ def _role_for_window(win, names, now):
             if entry is not None and fingerprint != entry.get("fingerprint") \
                     and entry.get("pending") != fingerprint:
                 return None
+            identity_before = (entry.get("fingerprint"), entry.get("pending"), entry.get("role_id")) \
+                if entry is not None else None
         rid = _ocr_role_id_without_lock(roi, names)
+        if win_mod.foreground_evidence(win) != evidence:
+            return None
         with _lock:
+            current = _identity.get(hwnd)
+            identity_now = (current.get("fingerprint"), current.get("pending"), current.get("role_id")) \
+                if current is not None else None
+            if identity_now != identity_before:
+                return None
             entry = _identity.setdefault(hwnd, {})
             entry["seen_at"] = now
             if rid:
@@ -674,17 +700,22 @@ def _compute(wins):
     return labels
 
 
+def _confirmed_label(hwnd):
+    entry = _identity.get(hwnd, {})
+    return entry.get("label") if not entry.get("pending") else None
+
+
 def labels_for(wins):
     """显式刷新窗口身份：截取顶部标签条并 OCR。
 
-    只能由“一键登录完成”和“唤出所有游戏窗口”两个受控入口调用。识别失败不会清掉
-    已确认的 HWND 绑定，故后台窗口暂时不可读时不会退回“号N”。
+    只能由“一键登录完成”和“唤出所有游戏窗口”两个受控入口调用。后台暂不可读保留
+    已确认绑定；明确看到新指纹后，稳定等待/OCR 不确定期间显示“号N”。
     """
     wins = list(wins)
     order = [_hwnd(w) for w in wins]
-    refreshed = _compute(wins)
+    _compute(wins)
     with _lock:
-        out = [refreshed.get(h) or _identity.get(h, {}).get("label") or fallback_label(i)
+        out = [_confirmed_label(h) or fallback_label(i)
                for i, h in enumerate(order)]
         _cache["order"] = list(out)
     return out
@@ -694,7 +725,7 @@ def cached_labels_for(wins):
     """按 wins 顺序读取已确认身份，不截屏、不 OCR、不改写绑定。"""
     wins = list(wins)
     with _lock:
-        return [_identity.get(_hwnd(w), {}).get("label") or fallback_label(i)
+        return [_confirmed_label(_hwnd(w)) or fallback_label(i)
                 for i, w in enumerate(wins)]
 
 
