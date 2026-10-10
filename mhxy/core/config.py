@@ -465,8 +465,8 @@ DEFAULT_CONFIG = {
                 "match_threshold": 0.85,
                 "auto_check_interval_sec": 20,   # 自动整理：同一个号两次「检测背包满」之间的最小间隔(秒)，
                                                  #   避免每轮都截图匹配、也避免战斗/过场频繁打断
-                "open_item_click": "right",      # 打开物品操作菜单的方式：right(右键,默认)/left/double
-                                                 #   注：商会/摆摊出售固定左键点物品弹详情，不看此项
+                "open_item_click": "left",       # 默认左键点物品；可显式选择 right/double
+                                                 #   使用固定左键双击，丢弃/商会/摆摊出售固定左键，不看此项
                 "step_wait_sec": 0.4,            # 出售/处理多步序列里两步之间的默认等待（如点「商会出售」后等出售窗弹出）
                 "action_settle_sec": 0.4,        # 点物品后等操作菜单/面板出现
                 "confirm_timeout_sec": 6,        # 等丢弃/出售确认弹窗的超时

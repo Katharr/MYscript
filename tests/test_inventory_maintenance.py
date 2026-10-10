@@ -248,8 +248,13 @@ class OrganizerTests(unittest.TestCase):
                             return None
                     return (10, 20, .99)
                 organizer._find_full_wait = mock.Mock(side_effect=find)
-                ctx.mouse.click.side_effect = [True, failure != "denied"]
+                organizer.loop["open_item_click"] = "right"  # 旧配置不能覆盖丢弃的左键选择。
+                ctx.mouse.click.side_effect = [True, True, failure != "denied"]
                 self.assertEqual(organizer._do_action({"name": "测试"}, "discard", 10, 20, .99), failure == "success")
+                ctx.mouse.right_click.assert_not_called()
+                if failure == "success":
+                    self.assertEqual(ctx.mouse.click.call_count, 3)
+                    ctx.send_hotkey.assert_not_called()
                 confirm_logs = [c for c in ctx.log.call_args_list if "点「确定」确认" in c.args[0]]
                 self.assertEqual(bool(confirm_logs), failure == "success")
 
@@ -258,7 +263,7 @@ class OrganizerTests(unittest.TestCase):
         ctx.task_cfg("organize_bag")["items"][0]["action"] = "discard"
         organizer = _organizer(ctx)
         organizer._find_full_wait = mock.Mock(return_value=(10, 20, .99))
-        ctx.mouse.click.side_effect = [True, False]
+        ctx.mouse.click.side_effect = [True, True, False]
         decisions = []
         def search(**kwargs):
             decisions.append(kwargs["probe"](object(), (0, 0, 800, 600))[0])
@@ -279,7 +284,8 @@ class OrganizerTests(unittest.TestCase):
     def test_cleanup_denial_blocks_action_and_bag_completion(self):
         ctx = _Ctx(_ob())
         organizer = _organizer(ctx)
-        organizer._find_full_wait = mock.Mock(return_value=(10, 20, .99))
+        organizer._find_full_wait = mock.Mock(side_effect=lambda key, timeout:
+                                              None if key == "confirm_button" else (10, 20, .99))
         ctx.send_hotkey.return_value = False
         with self.assertRaises(InventoryRecoveryError):
             organizer._do_action({"name": "测试"}, "discard", 10, 20, .99)

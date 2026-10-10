@@ -500,7 +500,7 @@
       "dry_run": true,
       "loop": {
         "match_threshold": 0.85,
-        "open_item_click": "right",
+        "open_item_click": "left",
         "action_settle_sec": 0.4,
         "confirm_timeout_sec": 6,
         "passes": 1,

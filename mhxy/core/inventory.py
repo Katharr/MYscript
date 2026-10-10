@@ -13,7 +13,7 @@
   ③ 每屏对【用户标定的物品图】逐个模板匹配，取最靠上的一个命中物品，按它配置的动作执行一段声明式步骤序列
        （见 _ACTION_SPECS）：先「点开物品」(open，右键弹操作菜单 / 左键弹详情) → 逐步在整窗里找并点序列里的
        按钮模板（某步可标 optional，缺了就跳过，如详情里不一定有的「更多」）→ 收尾(close)关掉残留窗口回干净列表。例：
-         · 使用/丢弃：点物品弹菜单 → 点「使用」/「丢弃」→（丢弃这类破坏性动作再点确认「确定」）；
+         · 使用：左键双击物品；丢弃：左键点物品弹详情 → 点「丢弃」→ 点确认「确定」；
          · 商会出售：左键点物品弹详情 →（有「更多」就点）→「商会出售」→ 出售窗点「满」→「出售」；
          · 摆摊出售：左键点物品弹详情 →（有「更多」就点）→「摆摊出售」→「本服上架」→
             （若出现提示，勾选「7天不再提示」再点「确定」）→ 右键关出售窗回包裹；
@@ -35,11 +35,11 @@ from . import window as win_mod
 from . import scan
 
 # 动作声明式步骤序列：每个动作 = 点开物品(open) → 逐步点序列按钮(steps) → 收尾(close)。
-#   open : 点物品方式 left/right/double；None=用 loop.open_item_click（缺省 right）。
+#   open : 点物品方式 left/right/double；None=用 loop.open_item_click（缺省 left）。
 #   steps: 逐步在【整窗】里找并点的按钮模板；每步 {tpl 模板键, label 显示名, optional 可选(缺了跳过),
 #          button 点法(默认 left), wait 点后等待秒(缺省 step_wait_sec)}。
 #   confirm: True 时走旧式 confirm_button 确认框（丢弃/旧出售）；显式步骤序列的出售不用它。
-#   close: panel=发 close_panel(ESC) 关菜单/确认框——用于「会一直开着等你 ESC」的右键菜单（使用/丢弃）；
+#   close: panel=发 close_panel(ESC) 关菜单/确认框；丢弃成功时跳过收尾，仅失败时关闭残留面板。
 #          right =在窗口中心右键关弹窗——用于「会一直开着等你右键」的弹窗（摆摊出售窗）；
 #          auto  =动作末步会【自我关闭】其窗口（如商会出售点「出售」后窗口自动关回包裹）→ 默认**啥都不做**，
 #                 只有探测到该动作的子面板还在（出售/满 等按钮仍能匹配到）才补发一记 ESC 关它。
@@ -55,7 +55,7 @@ _ACTION_SPECS = {
         "steps": [],
     },
     "discard": {
-        "label": "丢弃", "open": None, "confirm": True, "close": "panel",
+        "label": "丢弃", "open": "left", "confirm": True, "close": "panel",
         "steps": [{"tpl": "discard_button", "label": "丢弃"}],
     },
     "sell": {   # 旧·笼统单按钮出售（兼容旧配置；新建议用 shop_sell/stall_sell）
@@ -303,13 +303,17 @@ class InventoryOrganizer:
             return False
         label = spec["label"]
         # ① 点中物品 → 右键弹操作菜单 / 左键弹详情（由 spec.open 指定，缺省用 open_item_click）。
-        how = spec.get("open") or self.loop.get("open_item_click", "right")
+        how = spec.get("open") or self.loop.get("open_item_click", "left")
         if not self._click(how, sx, sy):
             return False
+        completed = False
         try:
-            return self._run_action_steps(it, spec, label, score)
+            completed = self._run_action_steps(it, spec, label, score)
+            return completed
         finally:
-            if not ctx.should_stop():
+            # 丢弃确认后面板自动关闭；再按 ESC 会把背包关掉。
+            # 失败时仍收回残留详情/确认框，避免带着弹窗继续扫描。
+            if not ctx.should_stop() and not (action == "discard" and completed):
                 self._cleanup(spec)
 
     def _run_action_steps(self, it, spec, label, score):
@@ -461,7 +465,8 @@ class InventoryOrganizer:
             if not self._click("left", hit[0], hit[1]):
                 return False
             self.ctx.log(f"点「确定」确认（{hit[2]:.2f}）。", level="hit")
-            return True
+            self._sleep(self._jitter(self.loop.get("step_wait_sec", 0.4)))
+            return not self.ctx.should_stop()
         # 确认框确实弹了但没匹配到「确定」：告警，靠 _do_action 收尾的 close_panel 关掉模态，不留模态继续滚。
         self.ctx.log("等「确定」确认超时（没匹配到确认按钮），将关菜单跳过该物品（请检查 confirm_button 标定）。",
                      level="warn")
