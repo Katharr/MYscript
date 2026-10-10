@@ -68,7 +68,8 @@ def resolve_profile(cfg, size, app=None):
 
 
 def grab_roi_on_app(app, cfg, prompt, with_crop=False, toast=None, alpha_windows=None,
-                    allow_desktop_windows=False, track_profile=True, save_profile=True):
+                    allow_desktop_windows=False, track_profile=True, save_profile=True,
+                    action_choices=None, restore_windows=True):
     """在【当前屏幕】框选一块区域，返回 (rel_roi, crop, pid)；失败/取消返回 (None, None, None)。
     不激活/不切前台：你把哪个号摆在前面就标到哪个，框完按落点反查参照窗口算相对坐标。
     pid = 本次标定所属的「尺寸组」号（按参照窗口尺寸 resolve_profile：同尺寸复用、
@@ -78,7 +79,10 @@ def grab_roi_on_app(app, cfg, prompt, with_crop=False, toast=None, alpha_windows
     启动器就占掉一个尺寸组（实测已占满 3 个，用户再标就卡在「组已满」）。
     toast: 可选回调 toast(msg, color)；alpha_windows: 框选期间临时隐身的窗口（默认仅 app）。
     allow_desktop_windows=True 仅给独立启动器标定用，允许其不匹配游戏窗口白名单。
-    save_profile=False 只修改传入草稿的尺寸组，不写盘；由整体资产提交入口负责保存。"""
+    save_profile=False 只修改传入草稿的尺寸组，不写盘；由整体资产提交入口负责保存。
+    action_choices 非 None 时返回 (rel_roi, crop, pid, action)，失败/取消返回四项 None。
+    restore_windows=False 时保留隐藏状态且不 lift/focus，调用方在整个批量结束后恢复窗口。"""
+    failure = (None, None, None, None) if action_choices is not None else (None, None, None)
     title = cfg.get("window_title", "梦幻西游")
     offset = cfg.get("window_offset", [0, 0])
     windows = alpha_windows or (app,)
@@ -96,7 +100,7 @@ def grab_roi_on_app(app, cfg, prompt, with_crop=False, toast=None, alpha_windows
         if toast:
             toast("没找到可标定窗口，请先打开启动器或游戏。" if allow_desktop_windows
                   else f"没找到游戏窗口（标题含「{title}」），请先打开游戏。", T.WARN)
-        return None, None, None
+        return failure
     hr = hint_wins[0].rect()
     center = (hr[0] + hr[2] // 2, hr[1] + hr[3] // 2) if hr else None
 
@@ -108,21 +112,32 @@ def grab_roi_on_app(app, cfg, prompt, with_crop=False, toast=None, alpha_windows
     time.sleep(0.12)
 
     try:
-        result = select_roi_on_screen(app, prompt, around_point=center, with_crop=with_crop)
+        kwargs = dict(around_point=center, with_crop=with_crop)
+        if action_choices is not None:
+            kwargs["action_choices"] = action_choices
+        result = select_roi_on_screen(app, prompt, **kwargs)
     finally:
-        _set_alpha(1.0)
-        try:
-            app.lift()
-            app.focus_force()
-        except Exception:
-            pass
+        if restore_windows:
+            _set_alpha(1.0)
+            try:
+                app.lift()
+                app.focus_force()
+            except Exception:
+                pass
 
-    if with_crop:
+    action = None
+    if action_choices is not None:
+        if with_crop:
+            roi_abs, crop, action = result
+        else:
+            roi_abs, action = result
+            crop = None
+    elif with_crop:
         roi_abs, crop = result
     else:
         roi_abs, crop = result, None
     if roi_abs is None:
-        return None, None, None
+        return failure
 
     cx = roi_abs[0] + roi_abs[2] // 2
     cy = roi_abs[1] + roi_abs[3] // 2
@@ -132,7 +147,7 @@ def grab_roi_on_app(app, cfg, prompt, with_crop=False, toast=None, alpha_windows
     if wr is None:
         if toast:
             toast("框选不在目标窗口内，请把要标的窗口切到前面。", T.WARN)
-        return None, None, None
+        return failure
     # 记下「这一套标定图是在多大的窗口下标定的」：同尺寸复用已有组、否则新建并设为激活组，
     # 同时同步 targets.base_size 镜像（唯一写入口，见 core/calib_profiles.py 模块头）。
     # 启动登录这类整屏坐标标定不参与尺寸组（见 track_profile 说明）。
@@ -142,11 +157,11 @@ def grab_roi_on_app(app, cfg, prompt, with_crop=False, toast=None, alpha_windows
         if pid is None:
             if toast:
                 toast("尺寸组已满，本次未保存；请先在「通用/工具」删一个旧组。", T.WARN)
-            return None, None, None
+            return failure
         if save_profile:
             cfg_mod.save_config(cfg)
     rel = [roi_abs[0] - wr[0], roi_abs[1] - wr[1], roi_abs[2], roi_abs[3]]
-    return rel, crop, pid
+    return (rel, crop, pid, action) if action_choices is not None else (rel, crop, pid)
 
 
 def calibrate_template_direct(app, task_name, key, name, toast=None):

@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
-"""整理背包物品清单：单个或连续框选，逐件确认动作后保存。"""
+"""整理背包物品清单：框选后就地选择动作，连续录入结束后统一刷新。"""
 
 from copy import deepcopy
 from uuid import uuid4
 
 import customtkinter as ctk
-from PIL import Image
 
 from . import theme as T
 from ..core import calib_profiles as calib
@@ -24,79 +23,6 @@ def next_item_name(items):
     while f"物品 {n:03d}" in used:
         n += 1
     return f"物品 {n:03d}"
-
-
-class ItemActionDialog(ctk.CTkToplevel):
-    """确认当前裁图及动作。返回 (action, continue_batch) 或 None。"""
-
-    def __init__(self, parent, crop, name, batch=False):
-        super().__init__(parent)
-        self.result = None
-        self.batch = batch
-        self.fonts = parent.fonts
-        self.title("添加物品")
-        self.geometry("390x340")
-        self.minsize(390, 340)
-        self.resizable(False, True)
-        self.configure(fg_color=T.BG)
-        self.transient(parent)
-        self.protocol("WM_DELETE_WINDOW", self._cancel)
-
-        # 缩略图仅在确认窗存活期间使用；原始像素留给模板保存。
-        rgb = Image.fromarray(crop[:, :, ::-1])
-        rgb.thumbnail((320, 105))
-        self.preview = ctk.CTkImage(light_image=rgb, dark_image=rgb, size=rgb.size)
-        ctk.CTkLabel(self, text="", image=self.preview, height=110).pack(pady=(16, 4))
-        ctk.CTkLabel(self, text=name, font=self.fonts["body_b"], text_color=T.TEXT).pack(pady=(0, 10))
-
-        row = ctk.CTkFrame(self, fg_color="transparent")
-        row.pack(fill="x", padx=22)
-        ctk.CTkLabel(row, text="整理方式", font=self.fonts["body"], text_color=T.TEXT).pack(side="left")
-        self.menu = ctk.CTkOptionMenu(
-            row, width=170, height=34, font=self.fonts["body"],
-            fg_color=T.BTN, button_color=T.BTN, button_hover_color=T.BTN_HOVER,
-            text_color=T.TEXT, dropdown_fg_color=T.SURFACE_2, dropdown_text_color=T.TEXT,
-            values=[ACTION_LABELS[a] for a in ACTION_ORDER], command=self._selected)
-        self.menu.set("选择整理方式")
-        self.menu.pack(side="right")
-        self.action = None
-        self.status = ctk.CTkLabel(self, text="", font=self.fonts["small"], text_color=T.DANGER)
-        self.status.pack(fill="x", padx=22, pady=(4, 0))
-        buttons = ctk.CTkFrame(self, fg_color="transparent")
-        buttons.pack(fill="x", padx=22, pady=(8, 14))
-        ctk.CTkButton(buttons, text="取消", width=70, height=34, font=self.fonts["body"],
-                      fg_color=T.BTN, hover_color=T.BTN_HOVER, text_color=T.TEXT,
-                      command=self._cancel).pack(side="left")
-        if batch:
-            ctk.CTkButton(buttons, text="添加并完成", width=104, height=34,
-                          font=self.fonts["body"], command=lambda: self._accept(False)).pack(side="right")
-            ctk.CTkButton(buttons, text="添加并继续", width=104, height=34,
-                          font=self.fonts["body"], command=lambda: self._accept(True)).pack(side="right", padx=6)
-        else:
-            ctk.CTkButton(buttons, text="添加", width=100, height=34,
-                          font=self.fonts["body"], command=lambda: self._accept(False)).pack(side="right")
-        self.bind("<Escape>", self._cancel)
-        self.update_idletasks()
-        if not self.winfo_viewable():
-            self.wait_visibility()
-        self.lift()
-        self.focus_force()
-        self.grab_set()
-
-    def _selected(self, label):
-        self.action = ACTION_VALUES.get(label)
-        self.menu.configure(text_color=T.TEXT if self.action == "use" else T.DANGER)
-        self.status.configure(text="")
-
-    def _accept(self, continue_batch):
-        if self.action is None:
-            self.status.configure(text="请先选择整理方式")
-            return
-        self.result = (self.action, continue_batch)
-        self.destroy()
-
-    def _cancel(self, _event=None):
-        self.destroy()
 
 
 class InventoryItemsDialog(ctk.CTkToplevel):
@@ -274,20 +200,20 @@ class InventoryItemsDialog(ctk.CTkToplevel):
         try:
             while True:
                 draft = deepcopy(self.cfg)
-                rel, crop, pid = grab_roi_on_app(
+                rel, crop, pid, action = grab_roi_on_app(
                     self.app, draft, "框选要整理的物品（图标+名字）", with_crop=True,
-                    toast=self._toast, alpha_windows=(self.app, self), save_profile=False)
+                    toast=self._toast, alpha_windows=(self.app, self), save_profile=False,
+                    action_choices=[(a, ACTION_LABELS[a]) for a in ACTION_ORDER],
+                    restore_windows=False)
                 if rel is None:
                     break
                 if crop is None or crop.size == 0:
                     self._toast("截图失败，请重试。", T.DANGER)
                     break
-                name = next_item_name(cfg_mod.task_config(draft, "organize_bag").get("items", []) or [])
-                confirm = ItemActionDialog(self, crop, name, batch=batch)
-                self.wait_window(confirm)
-                if confirm.result is None:
+                if action not in ACTION_ORDER:
+                    self._toast("未选择有效的整理方式，本次未添加。", T.DANGER)
                     break
-                action, keep_going = confirm.result
+                name = next_item_name(cfg_mod.task_config(draft, "organize_bag").get("items", []) or [])
                 # 文件名用独立 ID：改名及删除后的编号复用都不会覆盖旧模板。
                 rel_path = f"templates/ob_{uuid4().hex}.png"
                 try:
@@ -305,13 +231,32 @@ class InventoryItemsDialog(ctk.CTkToplevel):
 
                 self.cfg = draft
                 self.tc = draft["tasks"]["organize_bag"]
-                self._refresh()
                 added += 1
                 self._toast(f"已添加 {added} 件；最新：{name}（{ACTION_LABELS[action]}）", T.SUCCESS)
-                if not batch or not keep_going:
+                if not batch:
                     break
+        except Exception as exc:
+            self._toast(f"录入物品失败：{exc}", T.DANGER)
         finally:
             self._adding = False
+            try:
+                if added:
+                    self._refresh()
+            finally:
+                self._restore_capture_windows()
+
+    def _restore_capture_windows(self):
+        """一次录入会话只恢复一次窗口；包括取消、截图或保存失败。"""
+        for window in (self.app, self):
+            try:
+                window.attributes("-alpha", 1.0)
+            except Exception:
+                pass
+        try:
+            self.lift()
+            self.focus_force()
+        except Exception:
+            pass
 
     def _save(self):
         cfg_mod.set_task_config(self.cfg, "organize_bag", self.tc)

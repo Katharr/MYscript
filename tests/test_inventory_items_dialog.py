@@ -19,11 +19,6 @@ class _Label:
         self.calls.append(kwargs)
 
 
-class _DialogStub:
-    def __init__(self, result):
-        self.result = result
-
-
 class InventoryDialogTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory(prefix="inventory_test_")
@@ -59,7 +54,7 @@ class InventoryDialogTests(unittest.TestCase):
         self.dialog.status_lbl = _Label()
         self.dialog._refresh = mock.Mock()
         self.dialog._toast = mock.Mock()
-        self.dialog.wait_window = mock.Mock()
+        self.dialog._restore_capture_windows = mock.Mock()
         self.dialog.app = SimpleNamespace(fonts={})
 
     def test_next_item_name_skips_existing_numbers(self):
@@ -110,58 +105,89 @@ class InventoryDialogTests(unittest.TestCase):
         self.assertEqual(self.dialog.tc["items"][0]["template"], "templates/old.png")
         self.assertEqual(self.dialog.tc["items"][0]["action"], "discard")
 
-    def test_confirm_requires_explicit_action(self):
-        dialog = mod.ItemActionDialog.__new__(mod.ItemActionDialog)
-        dialog.action = None
-        dialog.result = None
-        dialog.status = _Label()
-        dialog._accept(True)
-        self.assertIsNone(dialog.result)
-        self.assertTrue(dialog.status.calls)
-
     def test_add_single_cancel_does_not_append(self):
-        crop = np.ones((4, 4, 3), dtype=np.uint8)
-        results = [(None, None, None)]
-        with mock.patch("mhxy.gui.calibrate_dialog.grab_roi_on_app", side_effect=results) as grab, \
-             mock.patch.object(mod.vision, "encode_png") as save:
+        with mock.patch("mhxy.gui.calibrate_dialog.grab_roi_on_app",
+                        return_value=(None, None, None, None)) as grab, \
+                mock.patch.object(mod.vision, "encode_png") as encode:
             self.dialog._add_items(False)
         self.assertFalse(grab.call_args.kwargs["save_profile"])
+        self.assertFalse(grab.call_args.kwargs["restore_windows"])
+        self.assertEqual(grab.call_args.kwargs["action_choices"],
+                         [(action, mod.ACTION_LABELS[action]) for action in mod.ACTION_ORDER])
         self.assertEqual(len(self.dialog.tc["items"]), 1)
-        save.assert_not_called()
+        encode.assert_not_called()
+        self.saved_config.assert_not_called()
+        self.dialog._refresh.assert_not_called()
+        self.dialog._restore_capture_windows.assert_called_once()
         self.assertFalse(self.dialog._adding)
 
-    def test_batch_continue_then_complete_uses_fresh_actions(self):
+    def test_batch_saves_each_action_without_refresh_until_capture_cancel(self):
         crop = np.ones((4, 4, 3), dtype=np.uint8)
-        grabs = [([1, 2, 3, 4], crop, 1), ([1, 2, 3, 4], crop, 1)]
-        confirmations = [_DialogStub(("discard", True)), _DialogStub(("use", False))]
-        with mock.patch("mhxy.gui.calibrate_dialog.grab_roi_on_app", side_effect=grabs), \
-             mock.patch.object(mod, "ItemActionDialog", side_effect=confirmations) as dialogs, \
-             mock.patch.object(mod.vision, "encode_png", return_value=b"png"), \
-             mock.patch.object(mod.cfg_mod, "save_config"):
+        actions = list(mod.ACTION_ORDER)
+        results = iter([([1, 2, 3, 4], crop, 1, action) for action in actions]
+                       + [(None, None, None, None)])
+        persisted = []
+        captures = []
+
+        def capture(app, draft, prompt, **kwargs):
+            self.dialog._refresh.assert_not_called()
+            self.dialog._restore_capture_windows.assert_not_called()
+            self.assertTrue(self.dialog._adding)
+            self.assertEqual(len(self.dialog.tc["items"]), 1 + len(persisted))
+            self.assertEqual(draft, self.dialog.cfg)
+            self.assertFalse(kwargs["restore_windows"])
+            captures.append(copy.deepcopy(draft))
+            return next(results)
+
+        def save(draft):
+            self.dialog._refresh.assert_not_called()
+            self.dialog._restore_capture_windows.assert_not_called()
+            self.assertTrue(self.dialog._adding)
+            self.assertEqual(len(self.dialog.tc["items"]), 1 + len(persisted))
+            item = draft["tasks"]["organize_bag"]["items"][-1]
+            self.assertEqual(item["action"], actions[len(persisted)])
+            self.assertEqual((self.root / item["template"]).read_bytes(), b"png")
+            persisted.append(copy.deepcopy(draft))
+
+        self.saved_config.side_effect = save
+        with mock.patch("mhxy.gui.calibrate_dialog.grab_roi_on_app", side_effect=capture) as grab, \
+                mock.patch.object(mod.vision, "encode_png", return_value=b"png"):
             self.dialog._add_items(True)
-        self.assertEqual([i["action"] for i in self.dialog.tc["items"]], ["use", "discard", "use"])
-        self.assertEqual(dialogs.call_count, 2)
+        self.assertEqual(grab.call_count, len(actions) + 1)
+        self.assertEqual(self.saved_config.call_count, len(actions))
+        self.assertEqual([item["action"] for item in self.dialog.tc["items"]], ["use"] + actions)
+        self.assertEqual(self.dialog.cfg, persisted[-1])
+        self.assertEqual(captures[-1], persisted[-1])
+        self.dialog._refresh.assert_called_once()
+        self.dialog._restore_capture_windows.assert_called_once()
         self.assertFalse(self.dialog._adding)
 
     def test_batch_cancel_after_first_keeps_first(self):
         crop = np.ones((4, 4, 3), dtype=np.uint8)
-        grabs = [([1, 2, 3, 4], crop, 1), (None, None, None)]
+        grabs = [([1, 2, 3, 4], crop, 1, "discard"), (None, None, None, None)]
         with mock.patch("mhxy.gui.calibrate_dialog.grab_roi_on_app", side_effect=grabs), \
-             mock.patch.object(mod, "ItemActionDialog", return_value=_DialogStub(("discard", True))), \
-             mock.patch.object(mod.vision, "encode_png", return_value=b"png"), \
-             mock.patch.object(mod.cfg_mod, "save_config"):
+                mock.patch.object(mod.vision, "encode_png", return_value=b"png"):
             self.dialog._add_items(True)
         self.assertEqual(len(self.dialog.tc["items"]), 2)
-        self.assertEqual(self.dialog.tc["items"][-1]["action"], "discard")
+        item = self.dialog.tc["items"][-1]
+        self.assertEqual(item["action"], "discard")
+        self.assertEqual((self.root / item["template"]).read_bytes(), b"png")
+        self.saved_config.assert_called_once()
+        self.assertIs(self.dialog.cfg, self.saved_config.call_args.args[0])
+        self.dialog._refresh.assert_called_once()
+        self.dialog._restore_capture_windows.assert_called_once()
 
     def test_batch_image_save_failure_does_not_append(self):
         crop = np.ones((4, 4, 3), dtype=np.uint8)
-        with mock.patch("mhxy.gui.calibrate_dialog.grab_roi_on_app", return_value=([1, 2, 3, 4], crop, 1)), \
-             mock.patch.object(mod, "ItemActionDialog", return_value=_DialogStub(("discard", True))), \
-             mock.patch.object(mod.vision, "encode_png", return_value=None), \
-             mock.patch.object(mod.cfg_mod, "save_config"):
+        with mock.patch("mhxy.gui.calibrate_dialog.grab_roi_on_app",
+                        side_effect=[([1, 2, 3, 4], crop, 1, "discard")]) as grab, \
+                mock.patch.object(mod.vision, "encode_png", return_value=None):
             self.dialog._add_items(True)
         self.assertEqual(len(self.dialog.tc["items"]), 1)
+        grab.assert_called_once()
+        self.saved_config.assert_not_called()
+        self.dialog._refresh.assert_not_called()
+        self.dialog._restore_capture_windows.assert_called_once()
         self.assertFalse(self.dialog._adding)
 
     def test_batch_config_failure_keeps_only_saved_items_and_profiles(self):
@@ -174,8 +200,8 @@ class InventoryDialogTests(unittest.TestCase):
             persisted.append(copy.deepcopy(cfg))
 
         self.saved_config.side_effect = save
-        with mock.patch("mhxy.gui.calibrate_dialog.grab_roi_on_app", return_value=([1, 2, 3, 4], crop, 2)), \
-             mock.patch.object(mod, "ItemActionDialog", return_value=_DialogStub(("discard", True))), \
+        with mock.patch("mhxy.gui.calibrate_dialog.grab_roi_on_app", side_effect=[([1, 2, 3, 4], crop, 2, "discard"),
+                          ([1, 2, 3, 4], crop, 2, "use"), (None, None, None, None)]), \
              mock.patch.object(mod.vision, "encode_png", return_value=b"png"):
             self.dialog._add_items(True)
         self.assertEqual(self.dialog.cfg, persisted[0])
@@ -189,8 +215,8 @@ class InventoryDialogTests(unittest.TestCase):
 
     def test_batch_second_image_failure_keeps_first_item(self):
         crop = np.ones((4, 4, 3), dtype=np.uint8)
-        with mock.patch("mhxy.gui.calibrate_dialog.grab_roi_on_app", return_value=([1, 2, 3, 4], crop, 1)), \
-             mock.patch.object(mod, "ItemActionDialog", return_value=_DialogStub(("use", True))), \
+        with mock.patch("mhxy.gui.calibrate_dialog.grab_roi_on_app", side_effect=[([1, 2, 3, 4], crop, 1, "use"),
+                          ([1, 2, 3, 4], crop, 1, "use"), (None, None, None, None)]), \
              mock.patch.object(mod.vision, "encode_png", side_effect=[b"png", OSError("encode")]):
             self.dialog._add_items(True)
         self.assertEqual(len(self.dialog.tc["items"]), 2)
@@ -199,8 +225,7 @@ class InventoryDialogTests(unittest.TestCase):
 
     def test_single_success_saves_selected_action_and_independent_path(self):
         crop = np.ones((4, 4, 3), dtype=np.uint8)
-        with mock.patch("mhxy.gui.calibrate_dialog.grab_roi_on_app", return_value=([1, 2, 3, 4], crop, 2)) as grab, \
-             mock.patch.object(mod, "ItemActionDialog", return_value=_DialogStub(("shop_sell", False))), \
+        with mock.patch("mhxy.gui.calibrate_dialog.grab_roi_on_app", return_value=([1, 2, 3, 4], crop, 2, "shop_sell")) as grab, \
              mock.patch.object(mod.vision, "encode_png", return_value=b"png"):
             self.dialog._add_items(False)
         item = self.dialog.tc["items"][-1]
@@ -209,33 +234,42 @@ class InventoryDialogTests(unittest.TestCase):
         self.assertRegex(item["template"], r"^templates/ob_[0-9a-f]{32}\.png$")
         self.assertEqual(grab.call_args.kwargs["alpha_windows"], (self.dialog.app, self.dialog))
         self.assertEqual(self.dialog.tc["templates_calib"][item["name"]], 2)
+        grab.assert_called_once()
         self.saved_config.assert_called_once()
+        self.dialog._refresh.assert_called_once()
+        self.dialog._restore_capture_windows.assert_called_once()
+        self.assertFalse(self.dialog._adding)
 
-    def test_confirmation_cancel_never_saves_image_or_config(self):
+    def test_missing_or_invalid_action_never_saves_image_or_config(self):
         crop = np.ones((4, 4, 3), dtype=np.uint8)
-        with mock.patch("mhxy.gui.calibrate_dialog.grab_roi_on_app", return_value=([1, 2, 3, 4], crop, 1)), \
-             mock.patch.object(mod, "ItemActionDialog", return_value=_DialogStub(None)), \
-             mock.patch.object(mod.vision, "encode_png") as image:
-            self.dialog._add_items(True)
-        image.assert_not_called()
-        self.saved_config.assert_not_called()
-        self.assertEqual(len(self.dialog.tc["items"]), 1)
+        for action in (None, "", "invalid"):
+            with self.subTest(action=action), \
+                    mock.patch("mhxy.gui.calibrate_dialog.grab_roi_on_app",
+                               side_effect=[([1, 2, 3, 4], crop, 1, action)]) as grab, \
+                    mock.patch.object(mod.vision, "encode_png") as image:
+                self.dialog._add_items(True)
+            grab.assert_called_once()
+            image.assert_not_called()
+            self.saved_config.assert_not_called()
+            self.assertEqual(len(self.dialog.tc["items"]), 1)
+            self.dialog._refresh.assert_not_called()
+            self.assertFalse(self.dialog._adding)
+        self.assertEqual(self.dialog._restore_capture_windows.call_count, 3)
 
     def test_draft_profile_changes_are_discarded_before_commit(self):
         crop = np.ones((4, 4, 3), dtype=np.uint8)
         before = copy.deepcopy(self.dialog.cfg)
 
-        def capture(app, draft, prompt, **kwargs):
-            self.assertIsNot(draft, self.dialog.cfg)
-            self.assertFalse(kwargs["save_profile"])
-            mod.calib.delete(draft, 1)
-            pid = mod.calib.get_or_create(draft, [1900, 1400])
-            return [1, 2, 3, 4], crop, pid
+        for action in (None, "use"):
+            def capture(app, draft, prompt, **kwargs):
+                self.assertIsNot(draft, self.dialog.cfg)
+                self.assertFalse(kwargs["save_profile"])
+                mod.calib.delete(draft, 1)
+                pid = mod.calib.get_or_create(draft, [1900, 1400])
+                return [1, 2, 3, 4], crop, pid, action
 
-        for result in (None, ("use", False)):
-            with self.subTest(confirm=result), \
+            with self.subTest(action=action), \
                     mock.patch("mhxy.gui.calibrate_dialog.grab_roi_on_app", side_effect=capture), \
-                    mock.patch.object(mod, "ItemActionDialog", return_value=_DialogStub(result)), \
                     mock.patch.object(mod.vision, "encode_png", return_value=None):
                 self.dialog._add_items(False)
                 self.assertEqual(self.dialog.cfg, before)
@@ -243,6 +277,7 @@ class InventoryDialogTests(unittest.TestCase):
                 self.saved_config.assert_not_called()
                 self.dialog._refresh.assert_not_called()
                 self.assertFalse((self.root / "templates").exists())
+                self.assertFalse(self.dialog._adding)
 
     def test_success_writes_image_before_saving_complete_draft_and_publishing(self):
         before = copy.deepcopy(self.dialog.cfg)
@@ -255,7 +290,7 @@ class InventoryDialogTests(unittest.TestCase):
         def capture(app, draft, prompt, **kwargs):
             mod.calib.delete(draft, 1)
             pid = mod.calib.get_or_create(draft, [1900, 1400])
-            return [1, 2, 3, 4], SimpleNamespace(size=12), pid
+            return [1, 2, 3, 4], SimpleNamespace(size=12), pid, "use"
 
         def save(draft):
             self.assertEqual(self.dialog.cfg, before)
@@ -269,7 +304,6 @@ class InventoryDialogTests(unittest.TestCase):
 
         self.saved_config.side_effect = save
         with mock.patch("mhxy.gui.calibrate_dialog.grab_roi_on_app", side_effect=capture), \
-                mock.patch.object(mod, "ItemActionDialog", return_value=_DialogStub(("use", False))), \
                 mock.patch.object(mod.vision, "encode_png", return_value=b"png"):
             self.dialog._add_items(False)
         self.saved_config.assert_called_once()
@@ -287,9 +321,8 @@ class InventoryDialogTests(unittest.TestCase):
                 if existing:
                     path.write_bytes(b"old")
                 with mock.patch("mhxy.gui.calibrate_dialog.grab_roi_on_app",
-                                return_value=([1, 2, 3, 4], SimpleNamespace(size=12), 1)), \
-                        mock.patch.object(mod, "ItemActionDialog", return_value=_DialogStub(("use", False))), \
-                        mock.patch.object(mod, "uuid4", return_value=SimpleNamespace(hex="test")), \
+                                return_value=([1, 2, 3, 4], SimpleNamespace(size=12), 1, "use")), \
+                               mock.patch.object(mod, "uuid4", return_value=SimpleNamespace(hex="test")), \
                         mock.patch.object(mod.vision, "encode_png", return_value=b"png"):
                     self.dialog._add_items(False)
                 self.assertEqual(path.read_bytes() if path.exists() else None,
@@ -303,8 +336,7 @@ class InventoryDialogTests(unittest.TestCase):
         before = copy.deepcopy(self.dialog.cfg)
         self.saved_config.side_effect = OSError("save")
         with mock.patch("mhxy.gui.calibrate_dialog.grab_roi_on_app",
-                        return_value=([1, 2, 3, 4], SimpleNamespace(size=12), 1)), \
-                mock.patch.object(mod, "ItemActionDialog", return_value=_DialogStub(("use", False))), \
+                        return_value=([1, 2, 3, 4], SimpleNamespace(size=12), 1, "use")), \
                 mock.patch.object(mod.vision, "encode_png", return_value=b"png"), \
                 mock.patch.object(Path, "unlink", side_effect=OSError("cleanup")):
             self.dialog._add_items(False)
@@ -423,6 +455,82 @@ class InventoryDialogTests(unittest.TestCase):
         self.assertEqual(persisted["tasks"]["organize_bag"]["items"], [])
         self.assertEqual(persisted["tasks"]["organize_bag"]["templates_calib"], {})
         self.assertTrue((self.root / "config_backups").is_dir())
+
+    def test_capture_exception_restores_windows_and_keeps_saved_items(self):
+        crop = np.ones((4, 4, 3), dtype=np.uint8)
+        before = copy.deepcopy(self.dialog.cfg)
+        for saved_first in (False, True):
+            with self.subTest(saved_first=saved_first):
+                self.dialog.cfg = copy.deepcopy(before)
+                self.dialog.tc = self.dialog.cfg["tasks"]["organize_bag"]
+                self.dialog._refresh.reset_mock()
+                self.dialog._restore_capture_windows.reset_mock()
+                self.dialog._toast.reset_mock()
+                self.saved_config.reset_mock()
+                results = ([([1, 2, 3, 4], crop, 1, "discard")] if saved_first else [])
+                results.append(RuntimeError("window unavailable"))
+                with mock.patch("mhxy.gui.calibrate_dialog.grab_roi_on_app", side_effect=results), \
+                        mock.patch.object(mod.vision, "encode_png", return_value=b"png"):
+                    self.dialog._add_items(True)
+                self.assertFalse(self.dialog._adding)
+                self.dialog._restore_capture_windows.assert_called_once()
+                self.assertEqual(self.dialog._refresh.call_count, int(saved_first))
+                self.assertEqual(self.saved_config.call_count, int(saved_first))
+                self.assertEqual(len(self.dialog.tc["items"]), 1 + int(saved_first))
+                self.assertIn("window unavailable", self.dialog._toast.call_args.args[0])
+                self.assertEqual(self.dialog._toast.call_args.args[1], mod.T.DANGER)
+                if saved_first:
+                    self.assertIs(self.dialog.cfg, self.saved_config.call_args.args[0])
+                    item = self.dialog.tc["items"][-1]
+                    self.assertEqual((self.root / item["template"]).read_bytes(), b"png")
+                else:
+                    self.assertEqual(self.dialog.cfg, before)
+
+    def test_final_refresh_failure_still_restores_windows(self):
+        self.dialog._refresh.side_effect = RuntimeError("refresh")
+        with mock.patch("mhxy.gui.calibrate_dialog.grab_roi_on_app",
+                        return_value=([1, 2, 3, 4], SimpleNamespace(size=12), 1, "use")), \
+                mock.patch.object(mod.vision, "encode_png", return_value=b"png"):
+            with self.assertRaisesRegex(RuntimeError, "refresh"):
+                self.dialog._add_items(False)
+        self.saved_config.assert_called_once()
+        self.dialog._refresh.assert_called_once()
+        self.dialog._restore_capture_windows.assert_called_once()
+        self.assertFalse(self.dialog._adding)
+        self.assertEqual(len(self.dialog.tc["items"]), 2)
+
+    def test_restore_capture_windows_with_fake_windows(self):
+        events = []
+        app = SimpleNamespace(attributes=lambda *args: events.append(("app", args)))
+        window = SimpleNamespace(
+            app=app,
+            attributes=lambda *args: events.append(("dialog", args)),
+            lift=lambda: events.append(("lift",)),
+            focus_force=lambda: events.append(("focus",)),
+        )
+        mod.InventoryItemsDialog._restore_capture_windows(window)
+        self.assertEqual(events, [("app", ("-alpha", 1.0)),
+                                  ("dialog", ("-alpha", 1.0)), ("lift",), ("focus",)])
+
+    def test_restore_capture_windows_survives_window_errors(self):
+        for fail_app, fail_dialog, fail_lift, fail_focus in (
+                (True, False, False, False), (False, True, False, False),
+                (False, False, True, False), (False, False, False, True),
+                (True, True, True, True)):
+            with self.subTest(app=fail_app, dialog=fail_dialog, lift=fail_lift, focus=fail_focus):
+                app = SimpleNamespace(attributes=mock.Mock(
+                    side_effect=RuntimeError("app") if fail_app else None))
+                window = SimpleNamespace(
+                    app=app,
+                    attributes=mock.Mock(side_effect=RuntimeError("dialog") if fail_dialog else None),
+                    lift=mock.Mock(side_effect=RuntimeError("lift") if fail_lift else None),
+                    focus_force=mock.Mock(side_effect=RuntimeError("focus") if fail_focus else None),
+                )
+                mod.InventoryItemsDialog._restore_capture_windows(window)
+                app.attributes.assert_called_once_with("-alpha", 1.0)
+                window.attributes.assert_called_once_with("-alpha", 1.0)
+                window.lift.assert_called_once()
+                self.assertEqual(window.focus_force.call_count, int(not fail_lift))
 
     def test_reentry_guard_skips_nested_add(self):
         self.dialog._adding = True
