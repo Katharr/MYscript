@@ -1,7 +1,67 @@
 # -*- coding: utf-8 -*-
 import unittest
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 from mhxy.core import window_probe as probe
+
+
+class QtWindowProbeTests(unittest.TestCase):
+    def window(self, hwnd, *, minimized=False, rect=(0, 0, 800, 600)):
+        return SimpleNamespace(_win=SimpleNamespace(_hWnd=hwnd, isMinimized=minimized),
+                               rect=Mock(return_value=rect))
+
+    def test_qt_scan_includes_minimized_and_only_reads_identity_cache(self):
+        from mhxy.core import accounts, window as win_mod
+        from mhxy.qtui.window import scan_windows
+        wins = [self.window(101), self.window(102, minimized=True, rect=None)]
+        with patch.object(win_mod, "locate_all", return_value=wins) as locate, \
+             patch.object(win_mod, "set_game_process") as process, \
+             patch.object(accounts, "set_game_dir"), \
+             patch.object(accounts, "set_launcher_path"), \
+             patch.object(accounts, "_identity", {101: {"label": "示例甲（50）"}}), \
+             patch.object(accounts, "_cache", {"order": []}), \
+             patch.object(accounts, "labels_for") as identify, \
+             patch.object(accounts, "prime_visible_labels") as prime, \
+             patch.object(accounts, "_compute") as compute:
+            states = scan_windows({"window_title": "game", "window_offset": [2, 3],
+                                   "window_process": "CustomGame.exe"})
+            locate.assert_called_once_with("game", [2, 3], include_minimized=True)
+            process.assert_called_once_with("CustomGame.exe")
+            self.assertEqual(accounts.cached_labels(), ["示例甲（50）", "号2"])
+            self.assertEqual([(s.hwnd, s.label, s.status, s.minimized) for s in states],
+                             [(101, "示例甲（50）", "ready", False), (102, "号2", "pending", True)])
+            identify.assert_not_called()
+            prime.assert_not_called()
+            compute.assert_not_called()
+            wins[1].rect.assert_not_called()
+
+    def test_qt_scan_keeps_one_failed_window_separate_from_healthy_window(self):
+        from mhxy.core import accounts, window as win_mod
+        from mhxy.qtui.window import scan_windows
+        wins = [self.window(101, rect=None), self.window(102)]
+        with patch.object(win_mod, "locate_all", return_value=wins), \
+             patch.object(accounts, "sync_window_labels", return_value=["甲", "乙"]), \
+             patch.object(accounts, "set_game_dir"), patch.object(accounts, "set_launcher_path"):
+            states = scan_windows({})
+        self.assertEqual([s.status for s in states], ["failed", "ready"])
+
+    def test_qt_selection_order_matches_runtime_including_limit_and_fallback(self):
+        from mhxy.core import window as win_mod
+        from mhxy.qtui.role_window_page import target_indices
+        wins = [self.window(i) for i in range(4)]
+        cases = [
+            {}, {"single_index": 2}, {"single_index": 99},
+            {"multi": True, "multi_indices": [], "max_windows": 3},
+            {"multi": True, "multi_indices": [0, 2], "max_windows": 0},
+            {"multi": True, "multi_indices": [2, 0], "max_windows": 1},
+            {"multi": True, "multi_indices": [99]},
+        ]
+        for targets in cases:
+            with self.subTest(targets=targets), patch.object(win_mod, "locate_all", return_value=wins):
+                actual = win_mod.resolve_targets("game", (0, 0), targets)
+                self.assertEqual([wins.index(win) for win in actual],
+                                 target_indices(targets, len(wins), apply_limit=True))
 
 
 class _Window:
