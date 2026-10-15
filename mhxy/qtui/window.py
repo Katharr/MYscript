@@ -1,6 +1,7 @@
 """Qt 主窗口及小型线程桥；检测和启动结果只通过 signal 回到 UI。"""
 
 import copy
+from collections import deque
 from dataclasses import replace
 import threading
 
@@ -165,9 +166,22 @@ class MainWindow(QMainWindow):
             from .daily_page import DailyPage
 
             page = DailyPage(parent=self.stack)
-            page.log_consumption_paused = self._launching or self._runner_running()
+            self._manage_task_page(page)
             page.config_changed.connect(self._config_changed)
             page.window_selection_requested.connect(lambda: self.show_page("role_window"))
+            return page
+        if key in ("treasure_map", "escort", "secret_realm"):
+            from .treasure_map_page import TreasureMapPage
+            from .escort_page import EscortPage
+            from .secret_realm_page import SecretRealmPage
+
+            page_cls = {"treasure_map": TreasureMapPage, "escort": EscortPage,
+                        "secret_realm": SecretRealmPage}[key]
+            page = page_cls(parent=self.stack)
+            self._manage_task_page(page)
+            page.config_changed.connect(self._config_changed)
+            page.window_selection_requested.connect(lambda: self.show_page("role_window"))
+            page.update_windows(self.window_states)
             return page
         page = QWidget(self.stack)
         page.setObjectName(f"page_{key}")
@@ -205,6 +219,53 @@ class MainWindow(QMainWindow):
     def _config_changed(self, cfg):
         self.cfg = cfg
         self._update_strip()
+        for page in self._activity_pages():
+            if not page._start_pending and not page._runtime_running():
+                page.cfg = copy.deepcopy(cfg)
+                page.update_windows(self.window_states)
+
+    def _activity_pages(self):
+        return [self.pages[key] for key in ("treasure_map", "escort", "secret_realm")
+                if key in self.pages]
+
+    def _task_pages(self):
+        return [page for key, page in self.pages.items()
+                if key in ("daily", "treasure_map", "escort", "secret_realm")]
+
+    def _manage_task_page(self, page):
+        # RuntimeService 只有一个日志流；窗口按 runner 分发，避免空闲页抢日志。
+        # 隐藏页只缓存数据，回到该页后再以固定批量显示。
+        page.log_consumption_paused = True
+        page._pending_logs = deque(maxlen=page.log_panel.max_lines)
+        page.log_panel.cleared.connect(page._pending_logs.clear)
+
+    def _pump_task_logs(self):
+        from ..core.runtime import get_runtime
+
+        pages = self._task_pages()
+        runtime = self._runtime or get_runtime()
+        for event in runtime.drain_logs(64):
+            source_runner, _level, msg, _source = event
+            for page in pages:
+                if source_runner is page.runner:
+                    page._pending_logs.append(event)
+                    break
+            if source_runner is self.runner:
+                self.role_page.status.setText(msg)
+                self.statusBar().showMessage(msg)
+        for page in pages:
+            if not page._visible:
+                continue
+            for _ in range(min(page.log_batch_size, len(page._pending_logs))):
+                page.log_panel.append_event(page._pending_logs.popleft())
+            if page.runner is not None:
+                if page._start_pending or page._runtime_running():
+                    page._set_status(page._status_key())
+                elif not page._terminal_rendered:
+                    page._terminal_rendered = True
+                    page._set_status(page._status_key())
+                    page.start_button.setEnabled(True)
+                    page.stop_button.setEnabled(False)
 
     def _update_strip(self, error=""):
         selected = target_indices(self.cfg.get("targets") or {}, len(self.window_states), apply_limit=True)
@@ -239,6 +300,8 @@ class MainWindow(QMainWindow):
                               if error else states)
         self._update_strip(error)
         self.role_page.update_windows(self.window_states, error)
+        for page in self._activity_pages():
+            page.update_windows(self.window_states, error)
 
     def detect_launcher(self):
         if self._closed or self._detecting_launcher:
@@ -290,9 +353,6 @@ class MainWindow(QMainWindow):
         self._runtime = get_runtime()
         self.runner = self._runtime.create_runner(LaunchLoginTask(), self.cfg)
         self._launching = True
-        daily = self.pages.get("daily")
-        if daily is not None:
-            daily.log_consumption_paused = True
         self.role_page.set_running(True)
         self.role_page.status.setText("启动检查中…")
         runner, runtime, bridge = self.runner, self._runtime, self.bridge
@@ -322,17 +382,13 @@ class MainWindow(QMainWindow):
             self.role_page.set_running(False)
             self.role_page.status.setText("无法启动：" + "；".join(problems))
             self.runner = None
-            daily = self.pages.get("daily")
-            if daily is not None:
-                daily.log_consumption_paused = False
         else:
             self.role_page.status.setText("启动登录运行中")
         self.refresh_windows()
 
     def stop_all_tasks(self):
-        daily = self.pages.get("daily")
-        if daily is not None:
-            daily.stop()
+        for page in self._task_pages():
+            page.stop()
         if self._runtime is not None:
             if hasattr(self, "_launch_cancel"):
                 self._launch_cancel.set()
@@ -344,15 +400,15 @@ class MainWindow(QMainWindow):
     def _pump_launch(self):
         if self._closed:
             return
-        daily = self.pages.get("daily")
-        daily_active = daily is not None and (daily._start_pending or daily._runtime_running())
+        active_pages = [page for page in self._task_pages()
+                        if page._start_pending or page._runtime_running()]
         launch_active = self._launching or self._runner_running()
         # 沿用原 GUI 的热键解析与 core 的只读急停判据，不引入 Tk 窗口。
         from ..gui.shortcuts import _parse_stop_hotkey
         from ..core.emergency import get_cursor, in_failsafe_corner, vk_down
 
-        if launch_active or daily_active:
-            cfg = daily.cfg if daily_active else self.cfg
+        if launch_active or active_pages:
+            cfg = active_pages[0].cfg if active_pages else self.cfg
             try:
                 cx, cy = get_cursor()
             except Exception:
@@ -367,14 +423,9 @@ class MainWindow(QMainWindow):
             self._hotkey_down = down
         else:
             self._hotkey_down = False
-        # 一条龙由 TaskPage 小批量消费日志，主窗口不抢走它的事件。
+        self._pump_task_logs()
         if self._runtime is None or self.runner is None:
             return
-        events = [] if daily_active else self._runtime.drain_logs()
-        for source_runner, _level, msg, _source in events[-30:]:
-            if source_runner is self.runner:
-                self.role_page.status.setText(msg)
-                self.statusBar().showMessage(msg)
         if self.runner is not None:
             if not self._launching and not self._runner_running():
                 outcome = self.runner.outcome
@@ -383,16 +434,13 @@ class MainWindow(QMainWindow):
                 self.role_page.status.setText("启动登录：" + names.get(outcome, outcome))
                 self.role_page.set_running(False)
                 self.runner = None
-                if daily is not None:
-                    daily.log_consumption_paused = False
                 self.refresh_windows()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self._closed = True
         self.scan_timer.stop()
         self.runtime_timer.stop()
-        if self._launching or self._runner_running():
-            self.stop_all_tasks()
+        self.stop_all_tasks()
         for page in self.pages.values():
             page.close()
         self._settings.setValue("window/geometry", self.saveGeometry())
