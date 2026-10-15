@@ -170,12 +170,13 @@ class MainWindow(QMainWindow):
             page.config_changed.connect(self._config_changed)
             page.window_selection_requested.connect(lambda: self.show_page("role_window"))
             return page
-        if key in ("treasure_map", "escort", "secret_realm"):
+        if key in ("sniper", "treasure_map", "escort", "secret_realm"):
+            from .sniper_page import SniperPage
             from .treasure_map_page import TreasureMapPage
             from .escort_page import EscortPage
             from .secret_realm_page import SecretRealmPage
 
-            page_cls = {"treasure_map": TreasureMapPage, "escort": EscortPage,
+            page_cls = {"sniper": SniperPage, "treasure_map": TreasureMapPage, "escort": EscortPage,
                         "secret_realm": SecretRealmPage}[key]
             page = page_cls(parent=self.stack)
             self._manage_task_page(page)
@@ -225,12 +226,12 @@ class MainWindow(QMainWindow):
                 page.update_windows(self.window_states)
 
     def _activity_pages(self):
-        return [self.pages[key] for key in ("treasure_map", "escort", "secret_realm")
+        return [self.pages[key] for key in ("sniper", "treasure_map", "escort", "secret_realm")
                 if key in self.pages]
 
     def _task_pages(self):
         return [page for key, page in self.pages.items()
-                if key in ("daily", "treasure_map", "escort", "secret_realm")]
+                if key in ("daily", "sniper", "treasure_map", "escort", "secret_realm")]
 
     def _manage_task_page(self, page):
         # RuntimeService 只有一个日志流；窗口按 runner 分发，避免空闲页抢日志。
