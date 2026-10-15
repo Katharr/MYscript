@@ -1,0 +1,252 @@
+{
+  "generated_at": "2026-10-15T15:22:39+0800",
+  "python": "3.14.3 (tags/v3.14.3:323c59a, Feb  3 2026, 16:04:56) [MSC v.1944 64 bit (AMD64)]",
+  "root": "D:\\MYscript",
+  "samples": {
+    "no-game": [
+      {
+        "mode": "no-game",
+        "started_at": 443089.1508948,
+        "actions": {
+          "cold_start_to_operable": {
+            "duration_ms": 2386.83,
+            "memory_mb": 77.33
+          },
+          "first_page_open": {
+            "duration_ms": 338.05,
+            "memory_mb": 78.86
+          },
+          "repeat_page_switch_5_cycles": {
+            "duration_ms": 4014.78,
+            "memory_mb": 91.82
+          },
+          "expand_full_interface": {
+            "duration_ms": 3001.41,
+            "memory_mb": 93.88
+          },
+          "restore_from_floating": {
+            "duration_ms": 528.86,
+            "memory_mb": 95.03
+          }
+        },
+        "status": "ok",
+        "ready_at": 443091.4403618,
+        "ready_ms_from_process_start": 2289.47,
+        "stall_max_ms": 2988.26,
+        "process_wall_ms": 15359.76,
+        "process_start_to_operable_ms": 2386.83
+      },
+      {
+        "mode": "no-game",
+        "started_at": 443104.5279521,
+        "actions": {
+          "cold_start_to_operable": {
+            "duration_ms": 2679.97,
+            "memory_mb": 77.28
+          },
+          "first_page_open": {
+            "duration_ms": 327.48,
+            "memory_mb": 78.94
+          },
+          "repeat_page_switch_5_cycles": {
+            "duration_ms": 4112.53,
+            "memory_mb": 92.19
+          },
+          "expand_full_interface": {
+            "duration_ms": 4594.74,
+            "memory_mb": 94.04
+          },
+          "restore_from_floating": {
+            "duration_ms": 738.72,
+            "memory_mb": 95.27
+          }
+        },
+        "status": "ok",
+        "ready_at": 443107.1131481,
+        "ready_ms_from_process_start": 2585.2,
+        "stall_max_ms": 4728.62,
+        "process_wall_ms": 19255.78,
+        "process_start_to_operable_ms": 2679.97
+      },
+      {
+        "mode": "no-game",
+        "started_at": 443123.8142274,
+        "actions": {
+          "cold_start_to_operable": {
+            "duration_ms": 2378.29,
+            "memory_mb": 77.14
+          },
+          "first_page_open": {
+            "duration_ms": 324.23,
+            "memory_mb": 78.69
+          },
+          "repeat_page_switch_5_cycles": {
+            "duration_ms": 4519.59,
+            "memory_mb": 91.88
+          },
+          "expand_full_interface": {
+            "duration_ms": 4058.65,
+            "memory_mb": 93.96
+          },
+          "restore_from_floating": {
+            "duration_ms": 559.4,
+            "memory_mb": 94.96
+          }
+        },
+        "status": "ok",
+        "ready_at": 443126.0861614,
+        "ready_ms_from_process_start": 2271.94,
+        "stall_max_ms": 4859.34,
+        "process_wall_ms": 18625.33,
+        "process_start_to_operable_ms": 2378.29
+      },
+      {
+        "mode": "no-game",
+        "started_at": 443142.474838,
+        "actions": {
+          "cold_start_to_operable": {
+            "duration_ms": 2312.81,
+            "memory_mb": 77.32
+          },
+          "first_page_open": {
+            "duration_ms": 312.91,
+            "memory_mb": 78.75
+          },
+          "repeat_page_switch_5_cycles": {
+            "duration_ms": 5076.45,
+            "memory_mb": 91.68
+          },
+          "expand_full_interface": {
+            "duration_ms": 4570.64,
+            "memory_mb": 95.98
+          },
+          "restore_from_floating": {
+            "duration_ms": 790.18,
+            "memory_mb": 96.84
+          }
+        },
+        "status": "ok",
+        "ready_at": 443144.6716271,
+        "ready_ms_from_process_start": 2196.79,
+        "stall_max_ms": 4468.27,
+        "process_wall_ms": 19756.59,
+        "process_start_to_operable_ms": 2312.81
+      },
+      {
+        "mode": "no-game",
+        "started_at": 443162.2428476,
+        "actions": {
+          "cold_start_to_operable": {
+            "duration_ms": 1642.31,
+            "memory_mb": 79.34
+          },
+          "first_page_open": {
+            "duration_ms": 280.96,
+            "memory_mb": 80.76
+          },
+          "repeat_page_switch_5_cycles": {
+            "duration_ms": 2632.18,
+            "memory_mb": 94.04
+          },
+          "expand_full_interface": {
+            "duration_ms": 2371.05,
+            "memory_mb": 96.04
+          },
+          "restore_from_floating": {
+            "duration_ms": 535.23,
+            "memory_mb": 97.05
+          }
+        },
+        "status": "ok",
+        "ready_at": 443163.7839308,
+        "ready_ms_from_process_start": 1541.09,
+        "stall_max_ms": 2212.33,
+        "process_wall_ms": 11128.15,
+        "process_start_to_operable_ms": 1642.31
+      }
+    ],
+    "three-game": []
+  },
+  "summary": {
+    "no-game": {
+      "cold_start_to_operable": {
+        "raw_ms": [
+          2386.83,
+          2679.97,
+          2378.29,
+          2312.81,
+          1642.31
+        ],
+        "median_ms": 2378.29,
+        "max_ms": 2679.97
+      },
+      "expand_full_interface": {
+        "raw_ms": [
+          3001.41,
+          4594.74,
+          4058.65,
+          4570.64,
+          2371.05
+        ],
+        "median_ms": 4058.65,
+        "max_ms": 4594.74
+      },
+      "first_page_open": {
+        "raw_ms": [
+          338.05,
+          327.48,
+          324.23,
+          312.91,
+          280.96
+        ],
+        "median_ms": 324.23,
+        "max_ms": 338.05
+      },
+      "repeat_page_switch_5_cycles": {
+        "raw_ms": [
+          4014.78,
+          4112.53,
+          4519.59,
+          5076.45,
+          2632.18
+        ],
+        "median_ms": 4112.53,
+        "max_ms": 5076.45
+      },
+      "restore_from_floating": {
+        "raw_ms": [
+          528.86,
+          738.72,
+          559.4,
+          790.18,
+          535.23
+        ],
+        "median_ms": 559.4,
+        "max_ms": 790.18
+      },
+      "main_thread_stall": {
+        "raw_ms": [
+          2988.26,
+          4728.62,
+          4859.34,
+          4468.27,
+          2212.33
+        ],
+        "median_ms": 4468.27,
+        "max_ms": 4859.34
+      }
+    },
+    "three-game": {
+      "main_thread_stall": {
+        "raw_ms": [],
+        "median_ms": null,
+        "max_ms": null
+      }
+    }
+  },
+  "notes": {
+    "three-game": "需要真实的三个目标游戏窗口；测量进程不会伪造窗口。",
+    "memory": "每个动作结束时的当前进程工作集（MB）。",
+    "stall": "5ms Tk after 心跳观察到的最大超额间隔。"
+  }
+}
