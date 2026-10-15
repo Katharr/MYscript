@@ -161,6 +161,14 @@ class MainWindow(QMainWindow):
             page.launch_requested.connect(self.toggle_launch)
             page.detect_launcher_requested.connect(self.detect_launcher)
             return page
+        if key == "daily":
+            from .daily_page import DailyPage
+
+            page = DailyPage(parent=self.stack)
+            page.log_consumption_paused = self._launching or self._runner_running()
+            page.config_changed.connect(self._config_changed)
+            page.window_selection_requested.connect(lambda: self.show_page("role_window"))
+            return page
         page = QWidget(self.stack)
         page.setObjectName(f"page_{key}")
         page.setProperty("role", "page")
@@ -282,6 +290,9 @@ class MainWindow(QMainWindow):
         self._runtime = get_runtime()
         self.runner = self._runtime.create_runner(LaunchLoginTask(), self.cfg)
         self._launching = True
+        daily = self.pages.get("daily")
+        if daily is not None:
+            daily.log_consumption_paused = True
         self.role_page.set_running(True)
         self.role_page.status.setText("启动检查中…")
         runner, runtime, bridge = self.runner, self._runtime, self.bridge
@@ -311,42 +322,55 @@ class MainWindow(QMainWindow):
             self.role_page.set_running(False)
             self.role_page.status.setText("无法启动：" + "；".join(problems))
             self.runner = None
+            daily = self.pages.get("daily")
+            if daily is not None:
+                daily.log_consumption_paused = False
         else:
             self.role_page.status.setText("启动登录运行中")
         self.refresh_windows()
 
     def stop_all_tasks(self):
+        daily = self.pages.get("daily")
+        if daily is not None:
+            daily.stop()
         if self._runtime is not None:
             if hasattr(self, "_launch_cancel"):
                 self._launch_cancel.set()
             self._runtime.stop(self.runner)
             self._runtime.stop_all()
-            self.role_page.set_running(True, stopping=True)
+            if self.runner is not None:
+                self.role_page.set_running(True, stopping=True)
 
     def _pump_launch(self):
-        if self._closed or self._runtime is None:
+        if self._closed:
             return
+        daily = self.pages.get("daily")
+        daily_active = daily is not None and (daily._start_pending or daily._runtime_running())
+        launch_active = self._launching or self._runner_running()
         # 沿用原 GUI 的热键解析与 core 的只读急停判据，不引入 Tk 窗口。
         from ..gui.shortcuts import _parse_stop_hotkey
         from ..core.emergency import get_cursor, in_failsafe_corner, vk_down
 
-        if self._launching or self._runner_running():
+        if launch_active or daily_active:
+            cfg = daily.cfg if daily_active else self.cfg
             try:
                 cx, cy = get_cursor()
             except Exception:
                 cx, cy = None, None
-            corner = in_failsafe_corner(cx, cy, self.cfg.get("failsafe_corner", "top_right"))
-            mods, key = _parse_stop_hotkey(self.cfg.get("hotkey_stop", "ctrl+alt+F12"))
+            corner = in_failsafe_corner(cx, cy, cfg.get("failsafe_corner", "top_right"))
+            mods, key = _parse_stop_hotkey(cfg.get("hotkey_stop", "ctrl+alt+F12"))
             down = key is not None and all(vk_down(mod) for mod in mods) and vk_down(key)
             if corner or (down and not self._hotkey_down):
                 self.stop_all_tasks()
-            if self._launch_cancel.is_set():
+            if launch_active and self._launch_cancel.is_set():
                 self._runtime.stop(self.runner)
             self._hotkey_down = down
         else:
             self._hotkey_down = False
-        # 本阶段只显示启动状态；完整日志面板由下一阶段实现。
-        events = self._runtime.drain_logs()
+        # 一条龙由 TaskPage 小批量消费日志，主窗口不抢走它的事件。
+        if self._runtime is None or self.runner is None:
+            return
+        events = [] if daily_active else self._runtime.drain_logs()
         for source_runner, _level, msg, _source in events[-30:]:
             if source_runner is self.runner:
                 self.role_page.status.setText(msg)
@@ -359,6 +383,8 @@ class MainWindow(QMainWindow):
                 self.role_page.status.setText("启动登录：" + names.get(outcome, outcome))
                 self.role_page.set_running(False)
                 self.runner = None
+                if daily is not None:
+                    daily.log_consumption_paused = False
                 self.refresh_windows()
 
     def closeEvent(self, event: QCloseEvent) -> None:
@@ -367,5 +393,7 @@ class MainWindow(QMainWindow):
         self.runtime_timer.stop()
         if self._launching or self._runner_running():
             self.stop_all_tasks()
+        for page in self.pages.values():
+            page.close()
         self._settings.setValue("window/geometry", self.saveGeometry())
         super().closeEvent(event)
