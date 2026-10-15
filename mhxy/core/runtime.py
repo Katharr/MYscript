@@ -107,9 +107,22 @@ class RuntimeService:
     def publish(self, runner, msg, level):
         self._logs.put((runner, level, msg))
 
-    def drain_logs(self):
+    def drain_logs(self, max_events=None):
+        """取出统一日志流中的事件。
+
+        ``max_events`` 供图形界面按小批量消费，避免长时间运行时一次性
+        把所有日志搬到主线程。省略该参数时保持原来的“取空队列”行为。
+        ``None`` 表示不限制；小于等于零表示本次不消费任何事件。
+        """
+        if max_events is not None:
+            try:
+                max_events = int(max_events)
+            except (TypeError, ValueError):
+                max_events = None
+            if max_events is not None and max_events <= 0:
+                return []
         events = []
-        while True:
+        while max_events is None or len(events) < max_events:
             try:
                 runner, level, msg = self._logs.get_nowait()
             except queue.Empty:
@@ -120,6 +133,7 @@ class RuntimeService:
                 runner.log_queue.get_nowait()
             except queue.Empty:
                 pass
+        return events
 
 
 _RUNTIME = RuntimeService()
