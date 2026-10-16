@@ -52,6 +52,33 @@ class SharedSelectionTests(unittest.TestCase):
     def capture(self, cfg):
         self.cfg = copy.deepcopy(cfg)
 
+    def test_startup_defaults_to_first_window_instead_of_saved_captain(self):
+        from mhxy.qtui.window_selection import WindowSelection
+
+        for targets in (
+            {"selected_hwnds": [101, 102, 103], "captain_hwnd": 103},
+            {"multi": True, "multi_indices": [0, 1, 2], "max_windows": 0},
+        ):
+            with self.subTest(targets=targets):
+                cfg = copy.deepcopy(cfg_mod.DEFAULT_CONFIG)
+                cfg["targets"] = targets
+                cfg_mod.set_task_config(cfg, "teaming", {"captain_index": 2})
+                self.window.cfg = cfg
+                self.window.selection = WindowSelection()
+                self.window._apply_windows(self.states, "")
+                self.assertEqual(self.window.selection.captain, 101)
+                self.assertTrue(self.window.role_strip.items[101].captain.isChecked())
+                self.assertEqual(self.window.cfg["targets"]["captain_hwnd"], 101)
+                for name in ("teaming", "taohaiqu"):
+                    self.assertEqual(cfg_mod.task_config(self.window.cfg, name)["captain_index"], 0)
+
+    def test_manual_captain_survives_refresh_and_window_reordering(self):
+        self.window._select_captain(102)
+        self.window._apply_windows(list(reversed(self.states)), "")
+        self.window._apply_windows(self.states, "")
+        self.assertEqual(self.window.selection.captain, 102)
+        self.assertTrue(self.window.role_strip.items[102].captain.isChecked())
+
     def test_card_keyboard_and_captain_click_are_independent_and_exclusive(self):
         first, second = self.window.role_strip.items[101], self.window.role_strip.items[102]
         QTest.mouseClick(first, Qt.MouseButton.LeftButton, pos=QPoint(60, first.height() - 10))

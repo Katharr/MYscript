@@ -20,11 +20,9 @@ class WindowSelection:
             else:
                 from .role_window_page import target_indices
                 self.selected = {order[i] for i in target_indices(targets, len(order), apply_limit=True)}
-            selected = [h for h in order if h in self.selected]
-            index = cfg_mod.task_config(cfg, "teaming").get("captain_index", 0)
-            self.captain = targets.get("captain_hwnd")
-            if self.captain not in order:
-                self.captain = selected[index] if 0 <= index < len(selected) else (order[0] if order else None)
+            # 每次启动以列表第一个窗口为默认队长，不恢复上次保存的队长。
+            # 初始化后继续按句柄保留手动指定，窗口重排不会改掉队长。
+            self.captain = order[0] if order else None
             self.initialized = True
         self.selected.intersection_update(order)
         # 运行中不能转移队长；由主窗口先停止，再在完全退出后重新指定。
