@@ -24,7 +24,8 @@ from PySide6.QtWidgets import (
 from . import theme as T
 from ..core import config as cfg_mod
 from .role_strip import RoleStrip, WindowState
-from .role_window_page import RoleWindowPage, target_indices
+from .role_window_page import RoleWindowPage
+from .window_selection import WindowSelection
 from .log_panel import LogPanel
 
 
@@ -109,6 +110,11 @@ class MainWindow(QMainWindow):
         self.cfg = cfg_mod.load_config()
         T.apply_theme(QApplication.instance(), self.cfg.get("appearance", "light"))
         self.window_states = []
+        self.selection = WindowSelection()
+        self._role_runs = []
+        self._missing_captain_notified = False
+        self._window_scan_error = ""
+        self._windows_observed = False
         self._closed = False
         self._scanning = False
         self._detecting_launcher = False
@@ -177,6 +183,19 @@ class MainWindow(QMainWindow):
         stack_layout.setContentsMargins(0, T.SPACE_MD, 0, T.SPACE_MD)
         stack_layout.setSpacing(12)
         self.role_strip = RoleStrip(shell)
+        self.role_strip.selection_toggled.connect(self._toggle_window)
+        self.role_strip.captain_requested.connect(self._select_captain)
+        selection_actions = QHBoxLayout()
+        self.selection_count = QLabel("已选 0 / 0", shell)
+        selection_actions.addWidget(self.selection_count)
+        selection_actions.addStretch()
+        self.select_all_button = QPushButton("全选", shell)
+        self.clear_selection_button = QPushButton("清空", shell)
+        self.select_all_button.clicked.connect(lambda: self._change_selection("all"))
+        self.clear_selection_button.clicked.connect(lambda: self._change_selection("clear"))
+        selection_actions.addWidget(self.select_all_button)
+        selection_actions.addWidget(self.clear_selection_button)
+        stack_layout.addLayout(selection_actions)
         stack_layout.addWidget(self.role_strip)
         stack_layout.addWidget(self.stack, 1)
         self.log_panel = LogPanel(shell)
@@ -256,7 +275,6 @@ class MainWindow(QMainWindow):
             page = DailyPage(parent=self.stack)
             self._manage_task_page(page)
             page.config_changed.connect(self._config_changed)
-            page.window_selection_requested.connect(lambda: self.show_page("role_window"))
             return page
         if key in ("freeclick", "general"):
             from .freeclick_page import FreeClickPage
@@ -265,7 +283,6 @@ class MainWindow(QMainWindow):
             page = (FreeClickPage if key == "freeclick" else InventoryPanel)(parent=self.stack)
             self._manage_task_page(page)
             page.config_changed.connect(self._config_changed)
-            page.window_selection_requested.connect(lambda: self.show_page("role_window"))
             page.update_windows(self.window_states)
             if key == "general":
                 self._connect_window_tools(page.window_tools)
@@ -276,7 +293,6 @@ class MainWindow(QMainWindow):
             page = DungeonPage(parent=self.stack)
             self._manage_task_page(page)
             page.config_changed.connect(self._config_changed)
-            page.window_selection_requested.connect(lambda: self.show_page("role_window"))
             page.update_windows(self.window_states)
             return page
         if key in ("sniper", "treasure_map", "escort", "secret_realm"):
@@ -290,7 +306,6 @@ class MainWindow(QMainWindow):
             page = page_cls(parent=self.stack)
             self._manage_task_page(page)
             page.config_changed.connect(self._config_changed)
-            page.window_selection_requested.connect(lambda: self.show_page("role_window"))
             page.update_windows(self.window_states)
             return page
         page = QWidget(self.stack)
@@ -321,22 +336,26 @@ class MainWindow(QMainWindow):
         self.current_page = key
         self.nav_buttons[key].setChecked(True)
         self._page_status.setText(titles[key])
+        self._update_strip()
 
     @property
     def role_page(self) -> RoleWindowPage:
         return self.pages["role_window"]
 
     def _config_changed(self, cfg):
+        self.selection.write(cfg)
         self.cfg = cfg
+        self.role_page.cfg = copy.deepcopy(cfg)
         app = QApplication.instance()
         if app.property("appearance") != cfg.get("appearance", "light"):
             T.apply_theme(app, cfg.get("appearance", "light"))
         self._update_strip()
-        for page in self._activity_pages():
+        for page in self._task_pages():
             if (not page._start_pending and not page._runtime_running()
                     and not getattr(page, "_capturing", False) and getattr(page, "_editor", None) is None):
                 page.cfg = copy.deepcopy(cfg)
-                page.update_windows(self.window_states)
+                if hasattr(page, "update_windows"):
+                    page.update_windows(self.window_states)
 
     def _calibration_running(self):
         return (bool(self._window_action) or self._launching or self._runner_running()
@@ -443,6 +462,7 @@ class MainWindow(QMainWindow):
 
     def _manage_task_page(self, page):
         # 独立页面仍可使用原日志面板；嵌入主窗口时只显示一个全局抽屉。
+        page.start_requested.connect(lambda: self._task_starting(page))
         page.log_consumption_paused = True
         page.log_panel.hide()
         page.log_panel.message_added.connect(self.log_panel.append)
@@ -521,11 +541,113 @@ class MainWindow(QMainWindow):
             label = "启动登录"
         self.float_log.update_state(phase, label)
 
-    def _update_strip(self, error=""):
-        selected = target_indices(self.cfg.get("targets") or {}, len(self.window_states), apply_limit=True)
-        index = cfg_mod.task_config(self.cfg, "teaming").get("captain_index", 0)
-        captain = selected[index] if 0 <= index < len(selected) else (selected[0] if selected else None)
-        self.role_strip.update_windows(self.window_states, selected, captain, error)
+    def _selection_locked(self):
+        from ..core.runtime import get_runtime
+        return self._calibration_running() or get_runtime().any_running()
+
+    def prepare_task_config(self, cfg, task_name):
+        if self._selection_locked():
+            raise ValueError("已有任务运行或停止中，请等待结束")
+        draft = self.selection.snapshot(copy.deepcopy(cfg))
+        if self._needs_captain(draft, task_name) and self.selection.captain not in self.selection.selected:
+            raise ValueError("请将顶部队长角色选入本次执行窗口")
+        return draft
+
+    @staticmethod
+    def _needs_captain(cfg, task_name):
+        from ..tasks import get_task
+        task = get_task(task_name)
+        if task_name == "daily":
+            return any(s.get("enabled", True) and s.get("task") == "dungeon"
+                       for s in cfg_mod.task_config(cfg, "daily").get("steps", []))
+        return task_name == "dungeon" or bool(task and getattr(task, "is_dungeon", False))
+
+    def _task_starting(self, page):
+        if page.runner is not None:
+            self._role_runs.append(page.runner)
+            self._role_runs = self._role_runs[-16:]
+        self._update_strip()
+
+    def _toggle_window(self, hwnd):
+        self._change_selection("toggle", hwnd)
+
+    def _select_captain(self, hwnd):
+        self._change_selection("captain", hwnd)
+
+    def _change_selection(self, action, hwnd=None):
+        if self._selection_locked() or (hwnd is not None and hwnd not in self.selection.order):
+            self._update_strip()
+            return
+        previous = copy.deepcopy(self.selection)
+        if action == "all":
+            self.selection.selected = set(self.selection.order)
+        elif action == "clear":
+            self.selection.selected.clear()
+        elif action == "toggle":
+            self.selection.selected.symmetric_difference_update({hwnd})
+        elif action == "captain":
+            self.selection.captain = hwnd
+        try:
+            draft = cfg_mod.load_config()
+            self.selection.write(draft)
+            cfg_mod.save_config(draft)
+        except Exception as exc:
+            self.selection = previous
+            self.log_panel.append("窗口选择保存失败：" + str(exc), "error", "界面")
+            self._update_strip()
+            return
+        self._config_changed(draft)
+
+    def _window_activities(self):
+        activities = {}
+        for runner in self._role_runs:
+            handles = runner.cfg.get("targets", {}).get("window_handles", [])
+            reported = getattr(runner, "window_activities", lambda: {})()
+            pending = any(p.runner is runner and p._start_pending for p in self._task_pages())
+            running = runner.is_running() or pending
+            stopping = runner.stop_event.is_set() and running
+            for h in handles:
+                if reported.get(h, ("", ""))[0] in {"已完成", "执行异常", "部分完成"}:
+                    value = reported[h]
+                elif stopping:
+                    value = ("停止中…", "warning")
+                elif running:
+                    value = reported.get(h, ("等待执行…", "warning"))
+                else:
+                    outcome = runner.outcome
+                    value = {"completed": ("已完成", "success"), "stopped": ("已停止", ""),
+                             "failed": ("执行异常", "error"), "timeout": ("已超时", "warning"),
+                             "partial": ("部分完成", "warning")}.get(outcome, ("启动失败", "error"))
+                activities[h] = value
+        return activities
+
+    def _update_strip(self, error=None):
+        error = self._window_scan_error if error is None else error
+        locked = self._selection_locked()
+        changed = self.selection.reconcile(self.window_states, self.cfg, locked=locked, observed=self._windows_observed)
+        team_running = any((p._start_pending or p._runtime_running())
+                           and self._needs_captain(p.cfg, p.task_name) for p in self._task_pages())
+        if (team_running and self.selection.captain is not None
+                and self.selection.captain not in self.selection.order and not self._missing_captain_notified):
+            self._missing_captain_notified = True
+            self.stop_all_tasks()
+            self.log_panel.append("队长窗口已消失，任务已请求停止；退出后重新指定队长。", "warn", "窗口")
+        if not locked:
+            self._missing_captain_notified = False
+        if changed:
+            self.log_panel.append("队长窗口已变化，已重新指定顶部队长。", "warn", "窗口")
+        self.selection.write(self.cfg)
+        selected = [i for i, h in enumerate(self.selection.order) if h in self.selection.selected]
+        captain = self.selection.order.index(self.selection.captain) if self.selection.captain in self.selection.order else None
+        self.role_strip.update_windows(self.window_states, selected, captain, error,
+                                       activities=self._window_activities(), locked=locked)
+        self.selection_count.setText(f"已选 {len(selected)} / {len(self.window_states)}")
+        self.select_all_button.setEnabled(not locked and bool(self.window_states))
+        self.clear_selection_button.setEnabled(not locked and bool(selected))
+        for page in self._task_pages():
+            if not page._start_pending and not page._runtime_running():
+                page.start_button.setEnabled(not locked and bool(selected) and not error)
+                page.start_button.setToolTip("" if selected else "请在顶部选择目标窗口")
 
     def refresh_windows(self):
         if self._closed or self._scanning:
@@ -550,11 +672,16 @@ class MainWindow(QMainWindow):
         if self._closed:
             return
         self._scanning = False
+        self._window_scan_error = error
+        if not error:
+            self._windows_observed = True
         self.window_states = ([replace(state, status="failed") for state in self.window_states]
                               if error else states)
         self._update_strip(error)
         self.role_page.update_windows(self.window_states, error)
         for page in self._activity_pages():
+            if not page._start_pending and not page._runtime_running():
+                page.cfg = copy.deepcopy(self.cfg)
             page.update_windows(self.window_states, error)
         if self._rescan_after_action:
             self._rescan_after_action = False
@@ -688,6 +815,7 @@ class MainWindow(QMainWindow):
             self._hotkey_down = False
         self._pump_task_logs()
         self._update_float_state()
+        self._update_strip()
         if self._runtime is None or self.runner is None:
             return
         if self.runner is not None:

@@ -69,14 +69,12 @@ class QtStartupIdentityTests(unittest.TestCase):
     def test_late_names_and_window_changes_reuse_unchanged_role_items(self):
         self.window._apply_windows(self.states(), "")
         items = dict(self.window.role_strip.items)
-        boxes = dict(self.window.role_page.boxes)
         first_value = items[101]._value
         self.window._apply_windows(self.states(("号1", "示例乙（60）", "号3")), "")
         self.assertEqual(self.window.role_strip.items, items)
         self.assertIs(items[101]._value, first_value)
-        self.assertEqual(items[102].name.text(), "示例乙（60）")
+        self.assertEqual(items[102].name.full_text, "示例乙（60）")
         self.assertEqual(items[102]._value[0].status, "ready")
-        self.assertEqual(self.window.role_page.boxes, boxes)
         self.window._apply_windows([self.states()[2], self.states()[0]], "")
         self.assertEqual(list(self.window.role_strip._order), [103, 101])
         self.assertEqual(set(self.window.role_strip.items), {101, 103})
@@ -90,9 +88,9 @@ class QtStartupIdentityTests(unittest.TestCase):
         self.assertEqual(items[101].light.styleSheet(), items[102].light.styleSheet())
         self.assertFalse(items[101]._value[2])
         self.assertTrue(items[103]._value[2])
-        self.window.role_page.captain_combo.setCurrentIndex(0)
-        self.window._update_strip()
-        self.assertTrue(items[103]._value[2])  # 未保存的 UI 标记不是配置真相。
+        self.window._select_captain(101)
+        self.assertTrue(items[101]._value[2])
+        self.assertFalse(items[103]._value[2])
         self.window._apply_windows([], "probe unavailable")
         self.assertEqual(len(items), 3)
         self.assertTrue(all(item._value[0].status == "failed" for item in items.values()))
@@ -101,33 +99,23 @@ class QtStartupIdentityTests(unittest.TestCase):
         self.window._apply_windows([], "")
         self.assertEqual(items, {})
 
-    def test_save_subset_single_and_all_preserve_old_targets_and_relative_captain(self):
+    def test_top_selection_saves_shared_captain_and_allows_empty_targets(self):
         self.window._apply_windows(self.states(), "")
-        page = self.window.role_page
-        page.save_selection()
-        self.assertEqual(self.cfg["targets"]["multi_indices"], [0, 2])
-        self.assertEqual(self.cfg["tasks"]["teaming"]["captain_index"], 1)
-        page.boxes[101].setChecked(False)
-        page.save_selection()
+        self.window._toggle_window(101)
         self.assertFalse(self.cfg["targets"]["multi"])
         self.assertEqual(self.cfg["targets"]["single_index"], 2)
-        self.assertEqual(self.cfg["targets"]["multi_indices"], [2])
+        self.assertEqual(self.cfg["targets"]["selected_hwnds"], [103])
         self.assertEqual(self.cfg["tasks"]["teaming"]["captain_index"], 0)
-        for box in page.boxes.values():
-            box.setChecked(True)
-        page.captain_combo.setCurrentIndex(2)
-        page.save_selection()
-        self.assertTrue(self.cfg["targets"]["multi"])
-        self.assertEqual(self.cfg["targets"]["multi_indices"], [])
+        self.window._change_selection("all")
+        self.assertEqual(self.cfg["targets"]["multi_indices"], [0, 1, 2])
         self.assertEqual(self.cfg["tasks"]["teaming"]["captain_index"], 2)
+        self.assertEqual(self.cfg["tasks"]["taohaiqu"]["captain_index"], 2)
         self.assertEqual(self.cfg["targets"]["switch_delay_sec"], 0.15)
         self.assertTrue(self.cfg["tasks"]["launch_login"]["dry_run"])
-        self.assertEqual(self.cfg["tasks"]["taohaiqu"]["captain_index"], 0)
-        self.save.reset_mock()
-        for box in page.boxes.values():
-            box.setChecked(False)
-        page.save_selection()
-        self.save.assert_not_called()
+        self.window._change_selection("clear")
+        self.assertEqual(self.cfg["targets"]["selected_hwnds"], [])
+        with self.assertRaisesRegex(ValueError, "选择目标窗口"):
+            self.window.prepare_task_config(self.cfg, "escort")
 
     def test_profile_and_path_edits_preserve_existing_fields_and_safe_mode(self):
         page = self.window.role_page

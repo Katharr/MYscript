@@ -243,6 +243,8 @@ def _style_sheet(font_height):
     QScrollArea#roleStrip, QWidget#roleStripBody {{ background: {BG}; }}
     QFrame#roleItem {{ background: {SURFACE}; border: 1px solid {DIVIDER}; border-radius: 6px; }}
     QFrame#roleItem[selected="true"] {{ border-color: {ACCENT}; background: {SELECTION}; }}
+    QFrame#roleItem:focus {{ border-color: {ACCENT}; }}
+    QFrame#roleItem QCheckBox {{ min-height: 24px; spacing: 5px; padding: 0; }}
     QPushButton:disabled, QToolButton:disabled, QLineEdit:disabled, QComboBox:disabled,
     QSpinBox:disabled, QDoubleSpinBox:disabled {{
         color: {DISABLED}; background: {DISABLED_BG}; border-color: {DIVIDER};

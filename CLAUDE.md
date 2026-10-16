@@ -48,7 +48,8 @@
    docstring 与 memory `ctklabel-wraplength-gotcha`——**改它前务必看懂，否则极易改回截断/振荡**。
 9. **多开通用约束（贯穿全部任务）**：多开各号窗口须**同尺寸**（共用标定点位）；一只鼠标，多开节奏天然慢于单开；
    **「选择窗口」只有复选框、没有单开/多开模式开关（用户拍板）**：勾 1 个=单开、勾多个=多开，
-   `targets.multi` 由勾选数量派生（字段结构不变，任务照旧读它）；不要再加坡模式开关/单选控件。
+   Qt 顶部角色框是唯一选窗入口，点击即保存；每框队长勾选互斥，所有业务共享同一队长。
+   `targets.multi` 由选择数量派生；Qt 运行快照按句柄固定，空选不执行，窗口重排/新增不替换目标（见 `qtui/window_selection.py`）。
    操作某号前先 `window.activate()` 切前台（`_force_foreground` 绕过焦点抢占并校验，失败则跳过该号、下轮重试，
    绝不在后台号瞎点）。
 10. **界面上的「号N」一律显示真实角色名「角色名（等级）」（用户拍板）**：`UserDefault.xml` / `last_server_info`
@@ -141,11 +142,11 @@ mhxy/
 - **副本中枢（「刷副本」页 = DungeonPage）**：副本统一收进该页用「选择副本」下拉切换、选谁跑谁。
   **加新副本只需写个 `is_dungeon = True` 的 Task**（照 `taohaiqu.py`）、在 `tasks/__init__.py` import——
   `base.dungeon_tasks()` 自动把它列进下拉，GUI 不用改。约定：选谁跑存 `tasks.dungeon.selected`；每个副本自己的
-  队长/演练实战/已组队(skip_team)/标定都在**该副本自己的命名空间**，中枢页只代理读写到选中副本。
+  演练实战/已组队(skip_team)/标定都在**该副本自己的命名空间**，中枢页只代理读写到选中副本。
   - **「已组队」开关（skip_team）**：勾上=已自行组好队，副本跳过组队握手、直接由队长开刷；preflight 随之放宽
     （不要求多开≥2、不查组队资产，只需队长那个号能定位）。
-- **组队是共享能力、单独可一键触发**：握手在 `core/teaming.TeamFormation`；通用页有「选队长 + 一键组队」
-  （跑 `DungeonTask`），角色参数存共享 `tasks.teaming`。任何副本跑之前都先自动组队。
+- **组队是共享能力、单独可一键触发**：握手在 `core/teaming.TeamFormation`；队长在 Qt 顶部统一指定，组队任务
+  （`DungeonTask`）的参数存共享 `tasks.teaming`；各副本 `captain_index` 从全局选择派生。任何副本跑之前都先自动组队。
 - **「队长ID 库」（`gui/leader_gallery.py` + 纯函数 `core/leader_history.py`）非显而易见的约束**：
   **激活图路径永远是 `templates/tm_leader_id.png`**（teaming 与 calibrate 都写死读它），切换当前队长 = 把选中历史图
   **字节复制覆盖**该文件、**绝不改 config 路径串**，故 `TeamFormation` 零改、零回归。⚠ 就绪度判定只看

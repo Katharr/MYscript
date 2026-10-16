@@ -124,10 +124,6 @@ class DungeonPage(TaskPage):
         self.dungeon_combo.currentIndexChanged.connect(self._select_dungeon)
         self.add_control("选择副本", self.dungeon_combo)
 
-        self.captain_combo = QComboBox(self)
-        self.captain_combo.setObjectName("captainCombo")
-        self.captain_combo.currentIndexChanged.connect(self._select_captain)
-        self.add_control("谁当队长", self.captain_combo)
 
         self.live_mode = QCheckBox("实战模式", self)
         self.live_mode.setToolTip("关闭时只做识别自检，不发送游戏输入")
@@ -183,6 +179,9 @@ class DungeonPage(TaskPage):
             return self.cfg
         if not self._cfg_supplied:
             self.cfg = cfg_mod.load_config()
+        selection = getattr(self.window(), "selection", None)
+        if selection is not None:
+            selection.write(self.cfg)
         hub = cfg_mod.task_config(self.cfg, self.TASK_NAME)
         selected = hub.get("selected")
         if selected not in self._dungeon_names:
@@ -267,25 +266,6 @@ class DungeonPage(TaskPage):
         task = self.selected_task
         return str(getattr(task, "title", self._selected or "（无副本）"))
 
-    def _select_captain(self, row):
-        if row < 0 or not self._selected or self._start_pending or self._runtime_running():
-            return
-        index = self.captain_combo.itemData(row)
-        if not isinstance(index, int):
-            return
-        try:
-            cfg = copy.deepcopy(self.cfg) if self._cfg_supplied else cfg_mod.load_config()
-            tc = cfg_mod.task_config(cfg, self._selected)
-            tc["captain_index"] = index
-            cfg_mod.set_task_config(cfg, self._selected, tc)
-            cfg_mod.save_config(cfg)
-        except Exception as exc:
-            self.readiness.setText("保存队长失败：" + str(exc))
-            return
-        self.cfg = cfg
-        self.config_changed.emit(copy.deepcopy(cfg))
-        self._render_readiness()
-
     def _leader_changed(self, cfg):
         self.cfg = cfg
         self.config_changed.emit(copy.deepcopy(cfg))
@@ -293,17 +273,10 @@ class DungeonPage(TaskPage):
 
     def update_windows(self, states, error=""):
         self._window_snapshot = (states, error)
-        indices = target_indices(self.cfg.get("targets") or {}, len(states), apply_limit=True)
-        self.captain_combo.blockSignals(True)
-        self.captain_combo.clear()
-        for position, index in enumerate(indices):
-            label = getattr(states[index], "label", None) or f"号{index + 1}"
-            self.captain_combo.addItem(str(label), position)
-        tc = cfg_mod.task_config(self.cfg, self._selected) if self._selected else {}
-        captain = tc.get("captain_index", 0)
-        if indices:
-            self.captain_combo.setCurrentIndex(max(0, min(int(captain or 0), len(indices) - 1)))
-        self.captain_combo.blockSignals(False)
+        indices = target_indices(self.cfg.get("targets") or {}, len(states), apply_limit=True, states=states)
+        self._selected_count = len(indices)
+        captain_hwnd = (self.cfg.get("targets") or {}).get("captain_hwnd")
+        self._captain_label = next((state.label for state in states if state.hwnd == captain_hwnd), "—")
         if error:
             self.window_status.setText("窗口检测失败：" + str(error))
         elif not indices:
@@ -344,7 +317,7 @@ class DungeonPage(TaskPage):
     def _render_readiness(self):
         if not hasattr(self, "readiness"):
             return
-        n = self.captain_combo.count()
+        n = getattr(self, "_selected_count", 0)
         if not self._selected:
             text = "未收录副本：请先注册一个 is_dungeon=True 的副本任务。"
             self.readiness.setText(text)
@@ -359,9 +332,9 @@ class DungeonPage(TaskPage):
             lines.append("组队标定：已组队，本次跳过组队（无需组队标定）")
         else:
             lines.append(f"组队标定：区域 {trdone}/{trneed}，模板 {ttdone}/{ttneed}")
-        lines.append(f"已选 {n} 个号，队长={self.captain_combo.currentText() or '—'}")
+        lines.append(f"已选 {n} 个号，队长={getattr(self, '_captain_label', '—')}")
         if not n:
-            summary = "未选窗口：请先在「角色与窗口」中选择目标窗口。"
+            summary = "未选窗口：请先在顶部选择目标窗口。"
         elif not skip and n < 2:
             summary = "未选窗口：组队需要至少 2 个目标窗口。"
         elif not skip and (trdone < trneed or ttdone < ttneed):
@@ -403,7 +376,7 @@ class DungeonPage(TaskPage):
         return super()._make_runner()
 
     def _set_editable(self, enabled):
-        for widget in (self.dungeon_combo, self.captain_combo, self.live_mode,
+        for widget in (self.dungeon_combo, self.live_mode,
                        self.skip_team, self.auto_disband, self.refresh_button,
                        self.calibration_button, self.leader_selector):
             widget.setEnabled(bool(enabled))

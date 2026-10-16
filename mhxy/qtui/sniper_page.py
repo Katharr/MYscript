@@ -271,7 +271,7 @@ class SniperPage(TaskPage):
         from .role_window_page import target_indices
 
         self._window_snapshot = (states, error)
-        indices = target_indices(self.cfg.get("targets") or {}, len(states), apply_limit=True)
+        indices = target_indices(self.cfg.get("targets") or {}, len(states), apply_limit=True, states=states)
         labels = [states[i].label for i in indices if states[i].status != "failed"]
         set_window_summary(self.window_status, labels, error)
 

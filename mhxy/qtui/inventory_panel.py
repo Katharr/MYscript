@@ -81,7 +81,7 @@ class _ConfigTaskPage(TaskPage):
         from .role_window_page import target_indices
 
         self._window_snapshot = (states, error)
-        selected = target_indices(self.cfg.get("targets") or {}, len(states), apply_limit=True)
+        selected = target_indices(self.cfg.get("targets") or {}, len(states), apply_limit=True, states=states)
         labels = [states[i].label for i in selected if states[i].status != "failed"]
         set_window_summary(self.window_status, labels, error)
 

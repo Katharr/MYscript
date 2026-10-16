@@ -2,8 +2,8 @@
 
 from dataclasses import dataclass
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QScrollArea, QStyle, QWidget
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import QCheckBox, QFrame, QHBoxLayout, QLabel, QScrollArea, QSizePolicy, QStyle, QVBoxLayout, QWidget
 
 from . import theme as T
 
@@ -17,43 +17,118 @@ class WindowState:
 
 
 STATUS_NAMES = {"ready": "可用", "pending": "身份未确认", "failed": "检测失败"}
+CARD_WIDTH = 180
+CARD_HEIGHT = 68
+CARD_GAP = 6
+
+
+class _ElidedLabel(QLabel):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.full_text = ""
+        self.setTextFormat(Qt.TextFormat.PlainText)
+        self.setMinimumWidth(0)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+
+    def set_full_text(self, text):
+        self.full_text = text
+        self.setToolTip(text)
+        self._elide()
+
+    def _elide(self):
+        self.setText(self.fontMetrics().elidedText(self.full_text, Qt.TextElideMode.ElideRight, self.width()))
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._elide()
 
 
 class RoleItem(QFrame):
+    selection_toggled = Signal()
+    captain_requested = Signal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("roleItem")
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setFixedWidth(CARD_WIDTH)
+        self._interactive = None
         self._value = None
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 6, 12, 6)
-        layout.setSpacing(T.SPACE_SM)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 5, 8, 5)
+        layout.setSpacing(0)
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        self.selected_box = QCheckBox(self)
+        self.selected_box.clicked.connect(self.selection_toggled.emit)
+        self.name = _ElidedLabel(self)
+        row.addWidget(self.selected_box)
+        row.addWidget(self.name, 1)
+        layout.addLayout(row)
+        status_row = QHBoxLayout()
+        status_row.setSpacing(4)
         self.light = QLabel("●", self)
-        self.name = QLabel(self)
-        self.name.setTextFormat(Qt.TextFormat.PlainText)
-        self.captain = QLabel("队长", self)
-        self.captain.setProperty("role", "muted")
-        layout.addWidget(self.light)
-        layout.addWidget(self.name)
-        layout.addWidget(self.captain)
+        self.activity = _ElidedLabel(self)
+        self.activity.set_full_text("空闲")
+        self.activity.setMinimumHeight(self.fontMetrics().height() + 4)
+        self.captain = QCheckBox("队长", self)
+        self.captain.clicked.connect(self.captain_requested.emit)
+        status_row.addWidget(self.light)
+        status_row.addWidget(self.activity, 1)
+        status_row.addWidget(self.captain)
+        layout.addLayout(status_row)
+        for label in (self.light, self.name, self.activity):
+            label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 
-    def update_state(self, state: WindowState, selected: bool, captain: bool):
-        value = (state, selected, captain)
+    def set_interactive(self, enabled):
+        if self._interactive == enabled:
+            return
+        self._interactive = enabled
+        self.selected_box.setEnabled(enabled)
+        self.captain.setEnabled(enabled)
+        self.setCursor(Qt.CursorShape.PointingHandCursor if enabled else Qt.CursorShape.ArrowCursor)
+
+    def mouseReleaseEvent(self, event):
+        if self._interactive and event.button() == Qt.MouseButton.LeftButton and self.rect().contains(event.position().toPoint()):
+            self.selection_toggled.emit()
+        super().mouseReleaseEvent(event)
+
+    def keyPressEvent(self, event):
+        if self._interactive and event.key() in (Qt.Key.Key_Space, Qt.Key.Key_Return):
+            self.selection_toggled.emit()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def update_state(self, state: WindowState, selected: bool, captain: bool, activity=("空闲", "")):
+        self.selected_box.setChecked(selected)
+        self.captain.setChecked(captain)
+        value = (state, selected, captain, activity)
         if value == self._value:
             return
         self._value = value
-        self.name.setText(state.label)
+        self.name.set_full_text(state.label)
+        self.selected_box.setAccessibleName("选择执行窗口：" + state.label)
+        self.captain.setAccessibleName("设为队长：" + state.label)
+        self.setAccessibleName(state.label)
         self.light.setText({"ready": "●", "pending": "?", "failed": "!"}[state.status])
         self.light.setAccessibleName(STATUS_NAMES[state.status])
         T.set_tone(self.light, {"ready": "success", "pending": "warning", "failed": "error"}[state.status])
-        self.captain.setVisible(captain)
-        self.setProperty("selected", selected)
-        self.style().unpolish(self)
-        self.style().polish(self)
-        self.update()
-        self.setToolTip(STATUS_NAMES[state.status] + (" · 已最小化" if state.minimized else ""))
+        self.activity.set_full_text(activity[0])
+        self.activity.setAccessibleName(activity[0])
+        T.set_tone(self.activity, activity[1])
+        if self.property("selected") != selected:
+            self.setProperty("selected", selected)
+            self.style().unpolish(self)
+            self.style().polish(self)
+            self.update()
+        self.setToolTip(state.label + " · " + STATUS_NAMES[state.status] + (" · 已最小化" if state.minimized else ""))
 
 
 class RoleStrip(QScrollArea):
+    selection_toggled = Signal(int)
+    captain_requested = Signal(int)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("roleStrip")
@@ -66,7 +141,7 @@ class RoleStrip(QScrollArea):
         body.setObjectName("roleStripBody")
         self.row = QHBoxLayout(body)
         self.row.setContentsMargins(0, 0, 0, 0)
-        self.row.setSpacing(T.SPACE_SM)
+        self.row.setSpacing(CARD_GAP)
         self.empty = QLabel("检测中…", body)
         self.empty.setProperty("role", "muted")
         self.row.addWidget(self.empty)
@@ -77,10 +152,23 @@ class RoleStrip(QScrollArea):
 
     def _update_height(self):
         scroll_height = self.style().pixelMetric(QStyle.PixelMetric.PM_ScrollBarExtent)
-        self.setFixedHeight(max(48, self.fontMetrics().height() + 16 + scroll_height) if self._order
-                            else max(32, self.fontMetrics().height() + 12))
+        for item in self.items.values():
+            item.ensurePolished()
+            height = max(CARD_HEIGHT, item.minimumSizeHint().height())
+            if item.height() != height:
+                item.setFixedHeight(height)
+        content_height = max((item.height() for item in self.items.values()), default=CARD_HEIGHT)
+        needed = len(self._order) * CARD_WIDTH + max(0, len(self._order) - 1) * CARD_GAP
+        overflow = needed > self.viewport().width()
+        height = content_height + 2 + (scroll_height if overflow else 0) if self._order else max(32, self.fontMetrics().height() + 12)
+        if self.height() != height:
+            self.setFixedHeight(height)
 
-    def update_windows(self, states, selected=(), captain=None, error=""):
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_height()
+
+    def update_windows(self, states, selected=(), captain=None, error="", *, activities=None, locked=False):
         order = [state.hwnd for state in states]
         for hwnd in list(self.items):
             if hwnd not in order:
@@ -91,9 +179,12 @@ class RoleStrip(QScrollArea):
             item = self.items.get(state.hwnd)
             if item is None:
                 item = self.items[state.hwnd] = RoleItem(self.widget())
+                item.selection_toggled.connect(lambda h=state.hwnd: self.selection_toggled.emit(h))
+                item.captain_requested.connect(lambda h=state.hwnd: self.captain_requested.emit(h))
             if order != self._order:
                 self.row.insertWidget(index, item)
-            item.update_state(state, index in selected, index == captain)
+            item.update_state(state, index in selected, index == captain, (activities or {}).get(state.hwnd, ("空闲", "")))
+            item.set_interactive(not locked)
         self._order = order
         self._update_height()
         self.empty.setVisible(not states)

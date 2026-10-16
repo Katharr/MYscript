@@ -1,4 +1,4 @@
-"""角色与窗口页：保存旧 targets/队长索引，启动仍交给既有运行服务。"""
+"""窗口工具和启动档案；执行窗口及队长统一在顶部选择。"""
 
 import uuid
 
@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QCheckBox, QFileDialog, QHBoxLayout, QInputDialog, QLabel, QLayout, QLineEdit,
     QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
-from .widgets import ComboBox as QComboBox, FormLayout as QFormLayout
+from .widgets import FormLayout as QFormLayout
 
 from ..core import config as cfg_mod
 from . import theme as T
@@ -15,10 +15,15 @@ from .widgets import FlowLayout, set_field_width
 from .window_tools import WindowTools
 
 
-def target_indices(targets, count, *, apply_limit=False):
+def target_indices(targets, count, *, apply_limit=False, states=None):
     """与 resolve_targets 同序；编辑时保留勾选集，展示实际目标时应用数量上限。"""
     if not count:
         return []
+    if "selected_hwnds" in targets:
+        if states is not None:
+            selected = set(targets.get("window_handles", targets["selected_hwnds"]))
+            return [i for i, state in enumerate(states) if state.hwnd in selected]
+        return [i for i in targets.get("multi_indices", []) if 0 <= i < count]
     if targets.get("multi"):
         indices = [i for i in (targets.get("multi_indices") or range(count)) if 0 <= i < count]
         indices = indices or list(range(count))
@@ -38,10 +43,7 @@ class RoleWindowPage(QWidget):
         super().__init__(parent)
         self.cfg = cfg
         self.states = []
-        self.boxes = {}
-        self._order = []
         self._busy = False
-        self.captain_ns = "teaming"
         self.setObjectName("page_role_window")
         T.set_role(self, "page")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -79,29 +81,6 @@ class RoleWindowPage(QWidget):
         self.body_scroll.setWidget(body)
         layout.addWidget(self.body_scroll, 1)
         layout = content
-
-        self.window_area = QScrollArea(self)
-        self.window_area.setMinimumHeight(140)
-        self.window_area.setWidgetResizable(True)
-        self.window_body = QWidget(self.window_area)
-        self.window_body.setObjectName("windowBody")
-        self.window_rows = QVBoxLayout(self.window_body)
-        self.window_rows.addStretch()
-        self.window_area.setWidget(self.window_body)
-        layout.addWidget(self.window_area, 1)
-        self.selection_panel = QWidget(self)
-        selection = QHBoxLayout(self.selection_panel)
-        selection.setContentsMargins(0, 0, 0, 0)
-        selection.addWidget(QLabel("组队队长", self))
-        self.captain_combo = QComboBox(self)
-        selection.addWidget(self.captain_combo, 1)
-        self.save_button = QPushButton("保存选择", self)
-        T.set_role(self.save_button, "primary")
-        self.save_button.clicked.connect(self.save_selection)
-        selection.addWidget(self.save_button)
-        selection.addStretch(1)
-        layout.addWidget(self.selection_panel)
-        self.selection_panel.hide()
 
         self.launch_panel = QWidget(self)
         launch_layout = QVBoxLayout(self.launch_panel)
@@ -147,60 +126,14 @@ class RoleWindowPage(QWidget):
         launch_layout.addLayout(launch_actions)
         layout.addWidget(self.launch_panel, 2)
         self.render_profiles()
-        self.save_button.setEnabled(False)
 
     def update_windows(self, states, error=""):
         self.states = states
-        order = [state.hwnd for state in states]
-        if order != self._order:
-            for box in self.boxes.values():
-                self.window_rows.removeWidget(box)
-                box.deleteLater()
-            selected = target_indices(self.cfg.get("targets") or {}, len(states))
-            self.boxes = {}
-            for index, state in enumerate(states):
-                box = QCheckBox(self.window_body)
-                box.setChecked(index in selected)
-                box.toggled.connect(self.update_captains)
-                self.window_rows.insertWidget(index, box)
-                self.boxes[state.hwnd] = box
-            self._order = order
-            self.update_captains(from_config=True)
-        for state in states:
-            box = self.boxes[state.hwnd]
-            text = state.label + (" · 已最小化" if state.minimized else "")
-            if box.text() != text:
-                box.setText(text)
-            box.setToolTip(text)
-        self.update_captains()
-        self.save_button.setEnabled(bool(states) and not self._busy and not error)
-        self.window_area.setVisible(bool(states))
-        self.selection_panel.setVisible(bool(states))
         self.launch_panel.setVisible(not states or self._busy)
         if error:
             self.window_status.setText("检测失败：" + error)
         else:
             self.window_status.setText(f"{len(states)} 个游戏窗口" if states else "未检测到游戏窗口")
-
-    def selected_indices(self):
-        return [i for i, state in enumerate(self.states) if self.boxes[state.hwnd].isChecked()]
-
-    def update_captains(self, _checked=False, *, from_config=False):
-        selected = self.selected_indices()
-        previous = self.captain_combo.currentData()
-        if from_config:
-            index = cfg_mod.task_config(self.cfg, self.captain_ns).get("captain_index", 0)
-            previous = selected[index] if 0 <= index < len(selected) else None
-        entries = [(self.states[i].label, i) for i in selected]
-        current = [(self.captain_combo.itemText(i), self.captain_combo.itemData(i))
-                   for i in range(self.captain_combo.count())]
-        if not from_config and current == entries:
-            return
-        self.captain_combo.clear()
-        for i in selected:
-            self.captain_combo.addItem(self.states[i].label, i)
-        position = self.captain_combo.findData(previous)
-        self.captain_combo.setCurrentIndex(max(0, position) if selected else -1)
 
     def _save(self, update):
         try:
@@ -213,26 +146,6 @@ class RoleWindowPage(QWidget):
         self.cfg = cfg
         self.config_changed.emit(cfg)
         return True
-
-    def save_selection(self):
-        indices = self.selected_indices()
-        if not indices:
-            self.status.setText("请至少勾选 1 个窗口")
-            return
-        captain = self.captain_combo.currentData()
-        captain = captain if captain in indices else indices[0]
-
-        def update(cfg):
-            cfg.setdefault("targets", {}).update(
-                multi=len(indices) > 1, single_index=indices[0],
-                multi_indices=indices if len(indices) != len(self.states) else [],
-            )
-            task = cfg_mod.task_config(cfg, self.captain_ns)
-            task["captain_index"] = indices.index(captain)
-            cfg_mod.set_task_config(cfg, self.captain_ns, task)
-
-        if self._save(update):
-            self.status.setText("已保存窗口选择")
 
     def save_path(self):
         path = self.path.text().strip()
@@ -307,9 +220,8 @@ class RoleWindowPage(QWidget):
     def set_running(self, busy, stopping=False):
         self._busy = busy
         for widget in (self.path, self.browse_button, self.detect_button, self.profile_body,
-                       self.add_button, self.live, self.save_button):
+                       self.add_button, self.live):
             widget.setEnabled(not busy)
         self.run_button.setText("停止中…" if stopping else "停止" if busy else "开始启动登录")
         self.run_button.setEnabled(not stopping)
-        self.save_button.setEnabled(not busy and bool(self.states))
         self.launch_panel.setVisible(not self.states or busy)

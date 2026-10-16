@@ -64,7 +64,6 @@ class TaskPage(QWidget):
     status_changed = Signal(str)
     start_requested = Signal()
     stop_requested = Signal()
-    window_selection_requested = Signal()
 
     def __init__(self, cfg=None, task_name=None, task_factory=None, runtime=None,
                  parent=None, *, task_cls=None, runner_factory=None,
@@ -131,9 +130,6 @@ class TaskPage(QWidget):
         T.set_role(self.stop_button, "danger")
         self.stop_button.clicked.connect(self.stop)
         controls.addWidget(self.stop_button)
-        self.window_button = QPushButton("选择窗口", self)
-        self.window_button.clicked.connect(self.window_selection_requested.emit)
-        controls.addWidget(self.window_button)
         self.window_status = QLabel("窗口配置由任务页提供", self)
         self.window_status.setProperty("role", "muted")
         self.window_status.setWordWrap(True)
@@ -161,7 +157,6 @@ class TaskPage(QWidget):
         self.log_panel = LogPanel(self, collapsed=True)
         layout.addWidget(self.log_panel)
         self.run_button = self.start_button
-        self.select_windows_button = self.window_button
         self.log = self.log_panel
         self.stop_button.setEnabled(False)
 
@@ -180,10 +175,15 @@ class TaskPage(QWidget):
         """重新读取配置并刷新模式/窗口摘要；可由具体页面扩展。"""
         if not self._cfg_supplied:
             self.cfg = cfg_mod.load_config()
+        selection = getattr(self.window(), "selection", None)
+        if selection is not None:
+            selection.write(self.cfg)
         tc = cfg_mod.task_config(self.cfg, self.task_name) if self.task_name else {}
         self.mode_label.setText("实战" if not tc.get("dry_run", True) else "演练")
         targets = self.cfg.get("targets") or {}
-        if targets.get("multi"):
+        if "selected_hwnds" in targets:
+            self.window_status.setText(f"已选择 {len(targets['selected_hwnds'])} 个窗口")
+        elif targets.get("multi"):
             indices = targets.get("multi_indices") or []
             count = targets.get("max_windows") or len(indices)
             self.window_status.setText(f"已选择 {count or '多个'} 个窗口")
@@ -196,6 +196,9 @@ class TaskPage(QWidget):
         self.form.addRow(label, widget)
 
     def _make_runner(self):
+        prepare = getattr(self.window(), "prepare_task_config", None)
+        if callable(prepare):
+            self.cfg = prepare(self.cfg, self.task_name)
         if self.runner_factory is not None:
             try:
                 return self.runner_factory(self.cfg)
@@ -265,6 +268,9 @@ class TaskPage(QWidget):
         self.start_button.setEnabled(False)
         self._set_status("running")
         self.start_requested.emit()
+        update_selection = getattr(self.window(), "_update_strip", None)
+        if callable(update_selection):
+            update_selection()
         runtime, bridge = self.runtime, self.bridge
 
         def work():
