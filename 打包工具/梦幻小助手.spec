@@ -41,7 +41,9 @@ a = Analysis(
     pathex=[PROJECT_ROOT],
     binaries=[],
     # OCR 代码是惰性导入，但默认 YAML 和三个 ONNX 模型也必须随程序收集。
-    datas=collect_data_files("rapidocr_onnxruntime"),
+    datas=collect_data_files("rapidocr_onnxruntime") + [
+        (os.path.join(PROJECT_ROOT, "mhxy", "assets", "app.ico"), "mhxy/assets"),
+    ],
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
@@ -73,5 +75,5 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     uac_admin=True,       # 双击即请求管理员（与游戏同级，SendInput 才生效）
-    icon=None,            # 暂无图标，可后续放 .ico 再填
+    icon=os.path.join(PROJECT_ROOT, "mhxy", "assets", "app.ico"),
 )

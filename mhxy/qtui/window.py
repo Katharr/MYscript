@@ -132,7 +132,7 @@ class MainWindow(QMainWindow):
         self.bridge.launch_ready.connect(self._launch_result, Qt.ConnectionType.QueuedConnection)
         self.bridge.launcher_ready.connect(self._launcher_result, Qt.ConnectionType.QueuedConnection)
         self.bridge.window_action_ready.connect(self._window_action_result, Qt.ConnectionType.QueuedConnection)
-        self.setWindowTitle("梦幻小助手 · Qt")
+        self.setWindowTitle("梦幻小助手")
         self.resize(*T.WINDOW_SIZE)
         self.setMinimumSize(*T.MIN_WINDOW_SIZE)
 

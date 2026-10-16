@@ -1,8 +1,10 @@
 """默认 Qt 入口，也可用 python -m mhxy.qtui.main 独立启动。"""
 
 import sys
+from pathlib import Path
 
 from PySide6.QtCore import QCoreApplication
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
 from .theme import apply_theme
@@ -13,10 +15,17 @@ def get_application(argv: list[str] | None = None) -> QApplication:
     """复用进程中的 QApplication，导入模块本身不创建应用或窗口。"""
     app = QCoreApplication.instance()
     if app is None:
+        if sys.platform == "win32":
+            # 独立任务栏身份，避免源码启动时沿用 Python 的图标与分组。
+            import ctypes
+
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("MHXY.Helper")
         app = QApplication(sys.argv if argv is None else argv)
         app.setApplicationName("梦幻小助手")
     if not isinstance(app, QApplication):
         raise RuntimeError("Qt 界面需要 QApplication，当前进程已有非 GUI Qt 应用")
+    # __file__ 在源码与 PyInstaller 解包目录中都指向包内文件。
+    app.setWindowIcon(QIcon(str(Path(__file__).resolve().parents[1] / "assets" / "app.ico")))
     apply_theme(app)
     return app
 
