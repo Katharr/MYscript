@@ -1,7 +1,6 @@
 """Qt 主窗口及小型线程桥；检测和启动结果只通过 signal 回到 UI。"""
 
 import copy
-from collections import deque
 from dataclasses import replace
 import threading
 
@@ -9,6 +8,7 @@ from PySide6.QtCore import QObject, QSettings, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QApplication,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -23,6 +23,7 @@ from . import theme as T
 from ..core import config as cfg_mod
 from .role_strip import RoleStrip, WindowState
 from .role_window_page import RoleWindowPage, target_indices
+from .log_panel import LogPanel
 
 
 class _Bridge(QObject):
@@ -80,6 +81,7 @@ class MainWindow(QMainWindow):
         self.nav_buttons: dict[str, QPushButton] = {}
         self.current_page: str | None = None
         self.cfg = cfg_mod.load_config()
+        T.apply_theme(QApplication.instance(), self.cfg.get("appearance", "dark"))
         self.window_states = []
         self._closed = False
         self._scanning = False
@@ -88,6 +90,7 @@ class MainWindow(QMainWindow):
         self._hotkey_down = False
         self.runner = None
         self._runtime = None
+        self.float_log = None
         self.bridge = _Bridge(self)
         self.bridge.windows_ready.connect(self._apply_windows, Qt.ConnectionType.QueuedConnection)
         self.bridge.launch_ready.connect(self._launch_result, Qt.ConnectionType.QueuedConnection)
@@ -124,6 +127,9 @@ class MainWindow(QMainWindow):
             self.nav_buttons[key] = button
             nav_layout.addWidget(button)
         nav_layout.addStretch()
+        self.float_button = QPushButton("悬浮信息条", navigation)
+        self.float_button.clicked.connect(self.collapse_to_float)
+        nav_layout.addWidget(self.float_button)
         layout.addWidget(navigation)
 
         self.stack = QStackedWidget(shell)
@@ -132,6 +138,9 @@ class MainWindow(QMainWindow):
         self.role_strip = RoleStrip(shell)
         stack_layout.addWidget(self.role_strip)
         stack_layout.addWidget(self.stack)
+        self.log_panel = LogPanel(shell)
+        self.log_panel.message_added.connect(self._float_message)
+        stack_layout.addWidget(self.log_panel)
         layout.addLayout(stack_layout, 1)
 
         status = self.statusBar()
@@ -156,6 +165,16 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self.refresh_windows)
 
     def _create_page(self, key: str, title: str) -> QWidget:
+        if key == "settings":
+            from .settings_page import SettingsPage
+
+            page = SettingsPage(self.stack)
+            page.config_changed.connect(self._config_changed)
+            return page
+        if key == "about":
+            from .about_page import AboutPage
+
+            return AboutPage(self.stack)
         if key == "calibration":
             from .calibration_page import CalibrationPage
 
@@ -245,6 +264,10 @@ class MainWindow(QMainWindow):
 
     def _config_changed(self, cfg):
         self.cfg = cfg
+        app = QApplication.instance()
+        if app.property("appearance") != cfg.get("appearance", "dark"):
+            T.apply_theme(app, cfg.get("appearance", "dark"))
+            self.log_panel._render()
         self._update_strip()
         for page in self._activity_pages():
             if (not page._start_pending and not page._runtime_running()
@@ -265,11 +288,10 @@ class MainWindow(QMainWindow):
                 if key in ("daily", "sniper", "treasure_map", "escort", "secret_realm", "dungeon", "freeclick", "general")]
 
     def _manage_task_page(self, page):
-        # RuntimeService 只有一个日志流；窗口按 runner 分发，避免空闲页抢日志。
-        # 隐藏页只缓存数据，回到该页后再以固定批量显示。
+        # 独立页面仍可使用原日志面板；嵌入主窗口时只显示一个全局抽屉。
         page.log_consumption_paused = True
-        page._pending_logs = deque(maxlen=page.log_panel.max_lines)
-        page.log_panel.cleared.connect(page._pending_logs.clear)
+        page.log_panel.hide()
+        page.log_panel.message_added.connect(self.log_panel.append)
 
     def _pump_task_logs(self):
         from ..core.runtime import get_runtime
@@ -278,18 +300,13 @@ class MainWindow(QMainWindow):
         runtime = self._runtime or get_runtime()
         for event in runtime.drain_logs(64):
             source_runner, _level, msg, _source = event
-            for page in pages:
-                if source_runner is page.runner:
-                    page._pending_logs.append(event)
-                    break
+            self.log_panel.append_event(event)
             if source_runner is self.runner:
                 self.role_page.status.setText(msg)
                 self.statusBar().showMessage(msg)
         for page in pages:
             if not page._visible:
                 continue
-            for _ in range(min(page.log_batch_size, len(page._pending_logs))):
-                page.log_panel.append_event(page._pending_logs.popleft())
             if page.runner is not None:
                 if page._start_pending or page._runtime_running():
                     page._set_status(page._status_key())
@@ -298,6 +315,57 @@ class MainWindow(QMainWindow):
                     page._set_status(page._status_key())
                     page.start_button.setEnabled(True)
                     page.stop_button.setEnabled(False)
+
+    def collapse_to_float(self):
+        if self._closed:
+            return
+        if self.float_log is None:
+            from .float_log import FloatLogWindow
+
+            self.float_log = FloatLogWindow(self.cfg.get("float_log"))
+            self.float_log.restore_requested.connect(self.restore_from_float)
+            self.float_log.stop_requested.connect(self.stop_all_tasks)
+        self._update_float_state()
+        self.float_log.show()
+        self.hide()
+
+    def restore_from_float(self):
+        floating, self.float_log = self.float_log, None
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+        if floating is not None:
+            preferences = floating.preferences()
+            floating.dispose()
+            self._save_float_preferences(preferences)
+
+    def _save_float_preferences(self, preferences):
+        try:
+            cfg = cfg_mod.load_config()
+            cfg.setdefault("float_log", {}).update(preferences)
+            cfg_mod.save_config(cfg)
+            self.cfg["float_log"] = cfg["float_log"]
+        except (OSError, cfg_mod.ConfigWriteRejected) as exc:
+            self.log_panel.append(f"悬浮条偏好未保存：{exc}", "error", "界面")
+
+    def _float_message(self, message, level, source):
+        if self.float_log is not None:
+            self.float_log.append(message, level, source)
+
+    def _update_float_state(self):
+        if self.float_log is None:
+            return
+        from ..core.runtime import get_runtime
+
+        phase, label, _ = (self._runtime or get_runtime()).state()
+        # start 线程尚未登记或返回时，悬浮条也应能取消启动。
+        pending = next((p for p in self._task_pages() if p._start_pending), None)
+        if pending is not None:
+            phase, label = pending._status_key(), pending.page_title
+        elif self._launching:
+            phase = "stopping" if self._launch_cancel.is_set() else "running"
+            label = "启动登录"
+        self.float_log.update_state(phase, label)
 
     def _update_strip(self, error=""):
         selected = target_indices(self.cfg.get("targets") or {}, len(self.window_states), apply_limit=True)
@@ -419,15 +487,18 @@ class MainWindow(QMainWindow):
         self.refresh_windows()
 
     def stop_all_tasks(self):
+        from ..core.runtime import get_runtime
+
         for page in self._task_pages():
             page.stop()
         if self._runtime is not None:
             if hasattr(self, "_launch_cancel"):
                 self._launch_cancel.set()
             self._runtime.stop(self.runner)
-            self._runtime.stop_all()
             if self.runner is not None:
                 self.role_page.set_running(True, stopping=True)
+        (self._runtime or get_runtime()).stop_all()
+        self._update_float_state()
 
     def _pump_launch(self):
         if self._closed:
@@ -440,7 +511,7 @@ class MainWindow(QMainWindow):
         from ..core.emergency import get_cursor, in_failsafe_corner, vk_down
 
         if launch_active or active_pages:
-            cfg = active_pages[0].cfg if active_pages else self.cfg
+            cfg = self.cfg
             try:
                 cx, cy = get_cursor()
             except Exception:
@@ -456,6 +527,7 @@ class MainWindow(QMainWindow):
         else:
             self._hotkey_down = False
         self._pump_task_logs()
+        self._update_float_state()
         if self._runtime is None or self.runner is None:
             return
         if self.runner is not None:
@@ -473,6 +545,10 @@ class MainWindow(QMainWindow):
         self.scan_timer.stop()
         self.runtime_timer.stop()
         self.stop_all_tasks()
+        if self.float_log is not None:
+            floating, self.float_log = self.float_log, None
+            self._save_float_preferences(floating.preferences())
+            floating.dispose()
         for page in self.pages.values():
             page.close()
         self._settings.setValue("window/geometry", self.saveGeometry())

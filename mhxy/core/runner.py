@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
 """旧任务线程适配器；登记、互斥、停止与 GUI 日志由 runtime 统一管理。"""
 import copy
-import queue
 import threading
 
 from .context import TaskContext
-from .runtime import get_runtime
+from .runtime import _LogQueue, get_runtime
 
 
 _TASK_OUTCOMES = {"completed", "stopped", "failed", "timeout", "partial"}
@@ -15,7 +14,7 @@ class TaskRunner:
     def __init__(self, task, cfg):
         self.task = task
         self.cfg = copy.deepcopy(cfg)
-        self.log_queue = queue.Queue()
+        self.log_queue = _LogQueue()
         self.stop_event = threading.Event()
         self.thread = None
         self.outcome = "idle"

@@ -1,6 +1,6 @@
 """Qt 共用主题令牌；页面只设置语义属性，不各自复制样式。"""
 
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QColor, QFont, QPalette
 from PySide6.QtWidgets import QApplication
 
 
@@ -53,7 +53,41 @@ QStatusBar::item {{ border: none; }}
 """
 
 
-def apply_theme(app: QApplication) -> None:
+LIGHT_COLORS = {
+    BG: "#f2f4f8", SIDEBAR: "#e8ecf3", SURFACE: "#ffffff",
+    BORDER: "#c4ccd8", TEXT: "#202837", TEXT_DIM: "#586579",
+    ACCENT: "#2465ce", BUTTON_HOVER: "#dce6f5",
+}
+_DARK_TOKENS = {name: globals()[name] for name in
+                ("BG", "SIDEBAR", "SURFACE", "BORDER", "TEXT", "TEXT_DIM", "ACCENT", "BUTTON_HOVER")}
+
+
+def apply_theme(app: QApplication, appearance="dark") -> None:
     app.setStyle("Fusion")
     app.setFont(QFont(FONT_FAMILY, FONT_SIZE))
-    app.setStyleSheet(STYLE_SHEET)
+    light = appearance == "light"
+    colors = LIGHT_COLORS if light else {}
+    # 已创建页同步其局部样式；后创建的页面和对话框读取当前主题令牌。
+    replacements = LIGHT_COLORS if light else {v: k for k, v in LIGHT_COLORS.items()}
+    for widget in app.allWidgets():
+        local_style = widget.styleSheet()
+        if local_style:
+            for before, after in replacements.items():
+                local_style = local_style.replace(before, after)
+            widget.setStyleSheet(local_style)
+    for name, dark in _DARK_TOKENS.items():
+        globals()[name] = colors.get(dark, dark)
+    palette = QPalette()
+    for role, color in ((QPalette.ColorRole.Window, BG), (QPalette.ColorRole.Base, SURFACE),
+                        (QPalette.ColorRole.AlternateBase, SIDEBAR), (QPalette.ColorRole.Text, TEXT),
+                        (QPalette.ColorRole.WindowText, TEXT), (QPalette.ColorRole.ButtonText, TEXT),
+                        (QPalette.ColorRole.Button, SURFACE), (QPalette.ColorRole.Highlight, ACCENT),
+                        (QPalette.ColorRole.HighlightedText, "#ffffff"),
+                        (QPalette.ColorRole.ToolTipBase, SURFACE), (QPalette.ColorRole.ToolTipText, TEXT)):
+        palette.setColor(role, QColor(colors.get(color, color)))
+    app.setPalette(palette)
+    style = STYLE_SHEET
+    for dark, bright in colors.items():
+        style = style.replace(dark, bright)
+    app.setStyleSheet(style)
+    app.setProperty("appearance", "light" if light else "dark")

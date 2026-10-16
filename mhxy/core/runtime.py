@@ -9,6 +9,22 @@ import threading
 import weakref
 
 
+class _LogQueue(queue.Queue):
+    """日志突发时丢弃最旧记录；生产者永不等待 UI，不改变任务执行。"""
+
+    def __init__(self, maxsize=5000):
+        super().__init__(maxsize=maxsize)
+
+    def put(self, item, block=True, timeout=None):
+        with self.not_empty:
+            if self._qsize() >= self.maxsize:
+                self._get()
+                self.unfinished_tasks -= 1
+            self._put(item)
+            self.unfinished_tasks += 1
+            self.not_empty.notify()
+
+
 class RuntimeService:
     def __init__(self):
         self._lock = threading.RLock()
@@ -16,7 +32,7 @@ class RuntimeService:
         self._active = None
         self._last = None
         self._restart = None
-        self._logs = queue.Queue()
+        self._logs = _LogQueue()
 
     def create_runner(self, task, cfg):
         from .runner import TaskRunner
