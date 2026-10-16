@@ -98,6 +98,10 @@ def navigate_and_close():
     assert window.width() >= 800 and window.height() >= 640
     window.nav_buttons['sniper'].click()
     assert window.current_page == 'sniper'
+    window.pages['sniper']._open_calibration()
+    window.pages['sniper']._calibration_dialog.reject()
+    window.nav_buttons['calibration'].click()
+    assert window.current_page == 'calibration'
     assert QApplication.instance() is app
     assert 'tkinter' not in sys.modules
     assert 'customtkinter' not in sys.modules

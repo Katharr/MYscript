@@ -4,13 +4,12 @@ import copy
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QDialogButtonBox, QHBoxLayout, QLabel,
-    QPushButton, QVBoxLayout,
+    QCheckBox, QHBoxLayout, QLabel, QPushButton,
 )
 
-from ..core import calib_profiles as calib, calibration_assets, config as cfg_mod, vision
+from ..core import calibration_assets, config as cfg_mod
 from ..tasks.organize_bag import OrganizeBagTask
-from .inventory_items_dialog import InventoryItemsDialog, capture_item
+from .inventory_items_dialog import InventoryItemsDialog
 from .task_page import TaskPage
 
 
@@ -37,7 +36,8 @@ class _ConfigTaskPage(TaskPage):
         self._edit_controls.append(self.live_mode)
 
     def _busy(self):
-        return self._start_pending or self._runtime_running() or self._capturing or self._editor is not None
+        return (self._start_pending or self._runtime_running() or self._capturing
+                or self._editor is not None or getattr(self, "_calibration_dialog", None) is not None)
 
     def refresh_config(self):
         if self._busy():
@@ -199,73 +199,7 @@ class InventoryPanel(_ConfigTaskPage):
         self.config_changed.emit(cfg)
 
     def open_calibration(self):
-        if self._busy():
-            return
-        dialog = QDialog(self)
-        dialog.setWindowTitle("整理背包 · 标定")
-        layout = QVBoxLayout(dialog)
-        choices = QComboBox(dialog)
-        choices.addItem("背包列表区（留空使用整窗）", ("regions", "bag_list"))
-        for key, label, hint in OrganizeBagTask.CALIBRATION["templates"]:
-            choices.addItem(label, ("templates", key))
-            choices.setItemData(choices.count() - 1, hint, Qt.ItemDataRole.ToolTipRole)
-        layout.addWidget(choices)
-        status = QLabel("选择一项后框选；模板和尺寸组一起保存。", dialog)
-        status.setWordWrap(True)
-        layout.addWidget(status)
-        capture = QPushButton("框选 / 重新标定", dialog)
-        layout.addWidget(capture)
-        clear = QPushButton("背包列表区恢复整窗", dialog)
-        layout.addWidget(clear)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, dialog)
-        buttons.rejected.connect(dialog.reject)
-        layout.addWidget(buttons)
+        from .calibration_dialog import open_calibration
 
-        def save(clear_region=False):
-            if self._capturing:
-                return
-            self._capturing = True
-            try:
-                draft = self._draft()
-                tc = cfg_mod.task_config(draft, self.task_name)
-                image = None
-                if clear_region:
-                    tc.setdefault("regions", {})["bag_list"] = None
-                else:
-                    captured = capture_item(dialog, draft, choices.currentText())
-                    if captured is None:
-                        return
-                    roi, crop, pid = captured
-                    group, key = choices.currentData()
-                    if group == "regions":
-                        tc.setdefault(group, {})[key] = roi
-                    else:
-                        path = tc.setdefault(group, {}).get(key) or f"templates/tm_{key}.png"
-                        tc[group][key] = path
-                        image = (path, vision.encode_png(crop))
-                    cfg_mod.set_task_config(draft, self.task_name, tc)
-                    calib.set_task_profile(draft, self.task_name, pid)
-                    if group == "templates":
-                        calib.set_template_profile(draft, self.task_name, key, pid)
-                if clear_region:
-                    cfg_mod.set_task_config(draft, self.task_name, tc)
-                if self._commit(draft, image):
-                    status.setText("已保存")
-                else:
-                    status.setText("保存失败，配置和模板已回滚；详情见任务日志。")
-            except Exception as exc:
-                status.setText(f"标定失败：{exc}")
-            finally:
-                self._capturing = False
-
-        capture.clicked.connect(lambda: save(False))
-        clear.clicked.connect(lambda: save(True))
-        self._editor = dialog
-        self._set_editable(False)
-        try:
-            dialog.exec()
-        finally:
-            self._editor = None
-            dialog.deleteLater()
-            self.refresh_config()
-            self._set_editable(True)
+        if not self._busy():
+            open_calibration(self)

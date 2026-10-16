@@ -67,6 +67,7 @@ class MainWindow(QMainWindow):
         ("secret_realm", "秘境降妖"),
         ("dungeon", "刷副本"),
         ("freeclick", "自由点击"),
+        ("calibration", "标定中心"),
         ("settings", "设置"),
         ("about", "关于"),
     )
@@ -155,6 +156,12 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self.refresh_windows)
 
     def _create_page(self, key: str, title: str) -> QWidget:
+        if key == "calibration":
+            from .calibration_page import CalibrationPage
+
+            page = CalibrationPage(parent=self.stack)
+            page.config_changed.connect(self._config_changed)
+            return page
         if key == "role_window":
             page = RoleWindowPage(self.cfg, self.stack)
             page.config_changed.connect(self._config_changed)
@@ -244,6 +251,10 @@ class MainWindow(QMainWindow):
                     and not getattr(page, "_capturing", False) and getattr(page, "_editor", None) is None):
                 page.cfg = copy.deepcopy(cfg)
                 page.update_windows(self.window_states)
+
+    def _calibration_running(self):
+        return (self._launching or self._runner_running()
+                or any(page._start_pending or page._runtime_running() for page in self._task_pages()))
 
     def _activity_pages(self):
         return [self.pages[key] for key in ("sniper", "treasure_map", "escort", "secret_realm", "dungeon", "freeclick", "general")

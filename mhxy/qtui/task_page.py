@@ -225,6 +225,9 @@ class TaskPage(QWidget):
         if self._start_pending or self._runtime_running():
             self.stop()
             return
+        if getattr(self, "_calibration_dialog", None) is not None:
+            self.log_panel.append("请先关闭标定窗口。", "warn", self.LOG_SOURCE)
+            return
         self.refresh_config()
         try:
             runner = self._make_runner()

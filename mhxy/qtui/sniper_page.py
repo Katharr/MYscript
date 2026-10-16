@@ -7,8 +7,8 @@ import threading
 from PySide6.QtCore import Qt, QSize, Signal, Slot
 from PySide6.QtGui import QIcon, QImage, QPixmap, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QDialog, QDialogButtonBox, QHBoxLayout,
-    QHeaderView, QLabel, QPushButton, QScrollArea, QSpinBox, QTableView, QTextBrowser,
+    QAbstractItemView, QCheckBox, QHBoxLayout,
+    QHeaderView, QLabel, QPushButton, QScrollArea, QSpinBox, QTableView,
     QVBoxLayout, QWidget,
 )
 
@@ -134,7 +134,7 @@ class SniperPage(TaskPage):
         tools = QHBoxLayout()
         hint = QLabel("打开商品页后开始；成功提示确认后计数。", self)
         tools.addWidget(hint, 1)
-        self.calibration_button = QPushButton("查看标定清单", self)
+        self.calibration_button = QPushButton("标定区域与模板", self)
         self.calibration_button.clicked.connect(self._open_calibration)
         tools.addWidget(self.calibration_button)
         self.refresh_button = QPushButton("刷新配置", self)
@@ -178,7 +178,6 @@ class SniperPage(TaskPage):
             for key, label, *_ in SniperTask.CALIBRATION["regions"]))
         if self._window_snapshot is not None:
             self.update_windows(*self._window_snapshot)
-        self._refresh_calibration_dialog()
         return self.cfg
 
     def _save_edits(self, *args):
@@ -211,7 +210,7 @@ class SniperPage(TaskPage):
             path = tc.get("templates", {}).get(key)
             signature = _template_signature(path)
             self.templates_model.item(row, 3).setText(str(path or ""))
-            self.templates_model.item(row, 3).setToolTip(str(path or "未标定；双击查看标定清单"))
+            self.templates_model.item(row, 3).setToolTip(str(path or "未标定；双击打开标定"))
             if key in self._template_signatures and self._template_signatures[key] == signature:
                 continue
             self._template_signatures[key] = signature
@@ -260,7 +259,6 @@ class SniperPage(TaskPage):
             for row, (key, *_rest) in enumerate(SniperTask.CALIBRATION["templates"]):
                 if self._template_signatures.get(key) == signature:
                     self._render_thumbnail(row, image)
-        self._refresh_calibration_dialog()
 
     def _render_progress(self, snapshot):
         snapshot = tuple(snapshot)
@@ -279,37 +277,10 @@ class SniperPage(TaskPage):
         self.progress_label.setText("购买进度：成功 " + str(sum(row[1] for row in snapshot))
                                     + " 件" if snapshot else "购买进度：待启动")
 
-    def _refresh_calibration_dialog(self):
-        if self._calibration_dialog is None:
-            return
-        lines = [self.regions_status.text(), ""]
-        for row, (_key, label, hint) in enumerate(SniperTask.CALIBRATION["templates"]):
-            lines.extend([f"{label}：{self.templates_model.item(row, 2).text()}", hint,
-                          self.templates_model.item(row, 3).text(), ""])
-        lines.append("区域框选与模板裁图请使用原版标定向导，保存后刷新此页。")
-        lines.append("演练只识别，不点击、不刷新、不计数。启动前由原任务检查模板与目标窗口。")
-        self._calibration_dialog.findChild(QTextBrowser).setPlainText("\n".join(lines))
-
     def _open_calibration(self, *args):
-        if self._start_pending or self._runtime_running():
-            return
-        if self._calibration_dialog is not None:
-            self._calibration_dialog.raise_()
-            self._calibration_dialog.activateWindow()
-            return
-        dialog = QDialog(self)
-        dialog.setWindowTitle("秒装备 · 标定清单与完整状态")
-        dialog.resize(600, 540)
-        layout = QVBoxLayout(dialog)
-        layout.addWidget(QTextBrowser(dialog))
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, dialog)
-        buttons.rejected.connect(dialog.close)
-        layout.addWidget(buttons)
-        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
-        dialog.finished.connect(lambda: setattr(self, "_calibration_dialog", None))
-        self._calibration_dialog = dialog
-        self._refresh_calibration_dialog()
-        dialog.show()
+        from .calibration_dialog import open_calibration
+
+        open_calibration(self)
 
     def update_windows(self, states, error=""):
         from .role_window_page import target_indices

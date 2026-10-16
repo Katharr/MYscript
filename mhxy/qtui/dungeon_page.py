@@ -10,13 +10,10 @@ from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
-    QDialog,
-    QDialogButtonBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
     QTextBrowser,
-    QVBoxLayout,
     QWidget,
 )
 
@@ -398,26 +395,10 @@ class DungeonPage(TaskPage):
         templates = cfg_mod.task_config(self.cfg, "teaming").get("templates", {})
         return all(self._template_ready(templates.get(key)) for key in DISBAND_REQUIRED_TEMPLATES)
 
-    def _open_calibration(self):
-        self._render_readiness()
-        if self._calibration_dialog is not None:
-            self._calibration_dialog.raise_()
-            self._calibration_dialog.activateWindow()
-            return
-        dialog = QDialog(self)
-        dialog.setWindowTitle(self._selected_title() + " · 标定清单与运行条件")
-        dialog.resize(620, 520)
-        layout = QVBoxLayout(dialog)
-        details = QTextBrowser(dialog)
-        details.setPlainText(self._summary)
-        layout.addWidget(details)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, dialog)
-        buttons.rejected.connect(dialog.close)
-        layout.addWidget(buttons)
-        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
-        dialog.finished.connect(lambda: setattr(self, "_calibration_dialog", None))
-        self._calibration_dialog = dialog
-        dialog.show()
+    def _open_calibration(self, *args):
+        from .calibration_dialog import open_calibration
+
+        open_calibration(self)
 
     def _make_runner(self):
         self.refresh_config()

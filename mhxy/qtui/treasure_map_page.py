@@ -5,7 +5,7 @@ import threading
 
 from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtWidgets import (
-    QCheckBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFrame,
+    QCheckBox, QDoubleSpinBox, QFrame,
     QHBoxLayout, QLabel, QPushButton, QScrollArea, QSpinBox, QTextBrowser,
     QVBoxLayout, QWidget,
 )
@@ -86,7 +86,7 @@ class _ActivityPage(TaskPage):
         card_layout.setSpacing(T.SPACE_SM)
         tools = QHBoxLayout()
         tools.addWidget(QLabel("标定与运行条件", card), 1)
-        self.calibration_button = QPushButton("标定清单 / 完整状态", card)
+        self.calibration_button = QPushButton("标定区域与模板", card)
         self.calibration_button.clicked.connect(self._open_calibration)
         tools.addWidget(self.calibration_button)
         self.refresh_button = QPushButton("刷新配置", card)
@@ -101,7 +101,7 @@ class _ActivityPage(TaskPage):
         self.calibration_details.setMinimumHeight(80)
         self.calibration_details.setMaximumHeight(160)
         card_layout.addWidget(self.calibration_details)
-        hint = QLabel("区域框选与模板裁图请使用原版标定向导，保存后刷新此页。", card)
+        hint = QLabel("点击标定按钮可框选区域、裁剪模板；保存后自动刷新。", card)
         hint.setProperty("role", "muted")
         hint.setWordWrap(True)
         card_layout.addWidget(hint)
@@ -213,28 +213,11 @@ class _ActivityPage(TaskPage):
             summary = "必要标定齐全；" + ("启动检查通过。" if result["ok"] else "仍有启动条件未满足。")
         self.calibration_status.setText(summary)
         self.calibration_details.setPlainText(self._calibration_text)
-        if self._calibration_dialog is not None:
-            self._calibration_dialog.findChild(QTextBrowser).setPlainText(self._calibration_text)
 
-    def _open_calibration(self):
-        if self._calibration_dialog is not None:
-            self._calibration_dialog.raise_()
-            self._calibration_dialog.activateWindow()
-            return
-        dialog = QDialog(self)
-        dialog.setWindowTitle(self.TITLE + " · 标定清单与完整状态")
-        dialog.resize(580, 540)
-        layout = QVBoxLayout(dialog)
-        details = QTextBrowser(dialog)
-        details.setPlainText(self._calibration_text)
-        layout.addWidget(details)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, dialog)
-        buttons.rejected.connect(dialog.close)
-        layout.addWidget(buttons)
-        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
-        dialog.finished.connect(lambda: setattr(self, "_calibration_dialog", None))
-        self._calibration_dialog = dialog
-        dialog.show()
+    def _open_calibration(self, *args):
+        from .calibration_dialog import open_calibration
+
+        open_calibration(self)
 
     def update_windows(self, states, error=""):
         from .role_window_page import target_indices

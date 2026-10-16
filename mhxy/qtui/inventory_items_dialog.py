@@ -1,14 +1,14 @@
-"""Qt 物品清单及小型截图控件；资产只通过 core 的事务入口保存。"""
+"""Qt 物品清单；框选复用 ROI 浮层，资产只通过 core 的事务入口保存。"""
 
 import copy
 from pathlib import Path
 import threading
 from uuid import uuid4
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, QRect, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QIcon, QImage, QPainter, QPen, QPixmap
+from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, Signal
+from PySide6.QtGui import QIcon, QImage, QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QDialog, QDialogButtonBox, QHBoxLayout, QHeaderView,
+    QComboBox, QDialog, QDialogButtonBox, QHBoxLayout, QHeaderView,
     QInputDialog, QLabel, QPushButton, QStyledItemDelegate, QTableView,
     QAbstractItemView, QVBoxLayout, QWidget,
 )
@@ -31,138 +31,11 @@ def _load_item_thumb(path):
         return None
 
 
-class _CropCanvas(QWidget):
-    """只在冻结图片上框选；逻辑坐标按显示比例换回截图物理像素。"""
-
-    def __init__(self, pixels, parent):
-        super().__init__(parent)
-        h, w = pixels.shape[:2]
-        self.image = QImage(pixels.tobytes(), w, h, w * 3,
-                            QImage.Format.Format_BGR888).copy()
-        self.selection = QRect()
-        self.origin = None
-        self.setMinimumSize(320, 240)
-        self.setCursor(Qt.CursorShape.CrossCursor)
-
-    def image_rect(self):
-        size = self.image.size().scaled(self.size(), Qt.AspectRatioMode.KeepAspectRatio)
-        return QRect((self.width() - size.width()) // 2,
-                     (self.height() - size.height()) // 2, size.width(), size.height())
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor("#15191f"))
-        painter.drawImage(self.image_rect(), self.image)
-        painter.setPen(QPen(QColor("#45d6a2"), 2))
-        painter.drawRect(self.selection)
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton and self.image_rect().contains(event.position().toPoint()):
-            self.origin = event.position().toPoint()
-            self.selection = QRect()
-            self.update()
-
-    def mouseMoveEvent(self, event):
-        if self.origin is not None:
-            self.selection = QRect(self.origin, event.position().toPoint()).normalized().intersected(self.image_rect())
-            self.update()
-
-    def mouseReleaseEvent(self, event):
-        self.mouseMoveEvent(event)
-        self.origin = None
-
-    def crop_rect(self):
-        box, selected = self.image_rect(), self.selection
-        if selected.isEmpty():
-            return None
-        x = int((selected.x() - box.x()) * self.image.width() / box.width())
-        y = int((selected.y() - box.y()) * self.image.height() / box.height())
-        w = int(selected.width() * self.image.width() / box.width())
-        h = int(selected.height() * self.image.height() / box.height())
-        return [x, y, w, h] if w >= 6 and h >= 6 else None
-
-
 def capture_item(parent, draft, prompt):
-    """不写配置、不激活游戏；隐藏助手后截取选中游戏的可见画面。"""
-    from ..core import window as win_mod
+    """统一复用 Qt 冻结屏幕框选；草稿由物品/自由点击提交入口负责保存。"""
+    from .calibration_dialog import capture_item as capture
 
-    win_mod.set_game_process(draft.get("window_process") or win_mod.DEFAULT_GAME_PROCESS_SPEC)
-    title, offset = draft.get("window_title", "梦幻西游"), draft.get("window_offset", [0, 0])
-    wins = win_mod.locate_all(title, offset)
-    if not wins:
-        raise ValueError("没找到游戏窗口，请先打开游戏。")
-    labels = [f"窗口 {i + 1}" for i in range(len(wins))]
-    label, ok = QInputDialog.getItem(parent, "截图窗口", "请先让目标游戏窗口完整可见：", labels, 0, False)
-    if not ok:
-        return None
-    win = wins[labels.index(label)]
-    hidden = [w for w in QApplication.topLevelWidgets() if w.isVisible()]
-    result = {}
-    dialog = QDialog(parent)
-    dialog.setWindowTitle(prompt)
-    dialog.resize(1000, 720)
-    layout = QVBoxLayout(dialog)
-    layout.addWidget(QLabel("在冻结的游戏画面上拖动框选；Esc 取消。", dialog))
-    try:
-        for widget in hidden:
-            widget.hide()
-
-        def grab():
-            try:
-                rect = win.rect()
-                pixels = win_mod.grab(rect) if rect else None
-                if pixels is None or pixels.size == 0:
-                    raise ValueError("截图失败，请重试。")
-                canvas = _CropCanvas(pixels, dialog)
-                layout.insertWidget(1, canvas, 1)
-                result.update(rect=rect, pixels=pixels, canvas=canvas)
-                dialog.setWindowOpacity(1)
-            except Exception as exc:
-                result["error"] = exc
-                dialog.reject()
-
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel, dialog)
-        buttons.accepted.connect(dialog.accept)
-        buttons.rejected.connect(dialog.reject)
-        layout.addWidget(buttons)
-        # exec 提供事件循环，让隐藏助手的窗口先完成重绘；截图不含助手。
-        timer = QTimer(dialog)
-        timer.setSingleShot(True)
-        timer.timeout.connect(grab)
-        timer.start(150)
-        dialog.setWindowOpacity(0)
-        accepted = dialog.exec() == QDialog.DialogCode.Accepted
-        if "error" in result:
-            raise result["error"]
-        if not accepted:
-            return None
-        roi = result["canvas"].crop_rect()
-        if roi is None:
-            raise ValueError("请框选至少 6×6 像素的目标。")
-        x, y, w, h = roi
-        rect = result["rect"]
-        ref = win_mod.window_at_point(title, offset, rect[0] + x + w // 2, rect[1] + y + h // 2)
-        if ref is None or ref.rect() != rect:
-            raise ValueError("框选处不是目标游戏窗口，或窗口已移动，请重试。")
-        try:
-            pid = calib.get_or_create(draft, rect[2:4])
-        except ValueError:
-            profiles = calib.items(draft)
-            choices = [str(p["id"]) for p in profiles]
-            selected, ok = QInputDialog.getItem(dialog, "尺寸组已满", "替换尺寸组（保留模板文件）：", choices, 0, False)
-            if not ok:
-                return None
-            calib.delete(draft, int(selected))
-            pid = calib.get_or_create(draft, rect[2:4])
-        return roi, result["pixels"][y:y + h, x:x + w].copy(), pid
-    finally:
-        if 'timer' in locals():
-            timer.stop()
-        dialog.close()
-        dialog.deleteLater()
-        for widget in hidden:
-            widget.show()
-        parent.window().raise_()
+    return capture(parent, draft, prompt)
 
 
 class ItemsModel(QAbstractTableModel):
