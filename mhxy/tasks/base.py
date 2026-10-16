@@ -53,6 +53,8 @@ def register(cls):
             @wraps(step)
             def guarded_step(*step_args, **step_kwargs):
                 with _input_policy(ctx, self.name):
+                    from ..core.task_activity import report
+                    report(ctx)
                     return step(*step_args, **step_kwargs)
 
             return rec, guarded_step

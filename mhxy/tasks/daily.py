@@ -117,6 +117,8 @@ class DailyTask(Task):
                 continue
             # 部分号已停靠等待：各提示一次（节流），免得用户以为卡住
             for c in parked:
+                from ..core.task_activity import report
+                report(c["wctx"], "等待副本集合…", "warning")
                 if not c["park_logged"]:
                     c["wctx"].log("已推进到「刷副本」，等其它号汇合后一起组队…")
                     c["park_logged"] = True
@@ -205,6 +207,9 @@ class DailyTask(Task):
             if c["sub_step"] is None:
                 if c["idx"] >= len(steps):
                     c["done"] = True
+                    from ..core.task_activity import report
+                    clean = bool(c["outcomes"]) and all(o == "completed" for o in c["outcomes"])
+                    report(c["wctx"], "已完成" if clean else "部分完成", "" if clean else "warning")
                     return
                 if steps[c["idx"]] == "dungeon":
                     return                              # 停靠集体屏障，交回主循环

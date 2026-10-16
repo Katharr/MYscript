@@ -21,7 +21,7 @@ def current_session():
 
 
 class InputSession:
-    def __init__(self, cfg, stop_event, task_name):
+    def __init__(self, cfg, stop_event, task_name, activity_fn=None):
         self.cfg = cfg
         self.stop_event = stop_event
         self.task_name = task_name
@@ -32,6 +32,15 @@ class InputSession:
         self._activation_rect = None
         self._observation = None
         self._action_lock = threading.RLock()
+        self.activity_fn = activity_fn
+
+    def report_activity(self, window, text=None, tone="success"):
+        hwnd = self._identity(window)
+        if self.activity_fn is not None and hwnd and not self._preflight:
+            if text is None:
+                from .task_activity import activity_text
+                text = activity_text(self._policy)
+            self.activity_fn(hwnd, text, tone)
 
     @contextmanager
     def activate(self, preflight=False):
@@ -84,6 +93,8 @@ class InputSession:
         previous = self._observation
         self.invalidate()
         self._window = window if ok and self._foreground(window) else None
+        if self._window is not None:
+            self.report_activity(window)
         self._activation_rect = self._rect(self._window)
         identity = self._identity(self._window)
         if (previous is not None and previous[0] is self._window

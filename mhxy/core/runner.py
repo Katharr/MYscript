@@ -18,6 +18,8 @@ class TaskRunner:
         self.stop_event = threading.Event()
         self.thread = None
         self.outcome = "idle"
+        self._activity_lock = threading.Lock()
+        self._activities = {}
         self.label = getattr(task, "title", None) or getattr(task, "name", "任务")
         self.runtime = get_runtime()
         self.runtime.register(self)
@@ -25,6 +27,14 @@ class TaskRunner:
     def _log(self, msg, level="info"):
         self.log_queue.put((level, msg))
         self.runtime.publish(self, msg, level)
+
+    def report_activity(self, hwnd, text, tone=""):
+        with self._activity_lock:
+            self._activities[int(hwnd)] = (text, tone)
+
+    def window_activities(self):
+        with self._activity_lock:
+            return dict(self._activities)
 
     def is_running(self):
         # preflight 和线程启动间隙也持有输入席位；请求停止不会提前释放。
@@ -35,7 +45,10 @@ class TaskRunner:
 
     def _start_registered(self):
         from .input_session import InputSession
-        session = InputSession(self.cfg, self.stop_event, getattr(self.task, "name", ""))
+        with self._activity_lock:
+            self._activities.clear()
+        session = InputSession(self.cfg, self.stop_event, getattr(self.task, "name", ""),
+                               activity_fn=self.report_activity)
         ctx = TaskContext(self.cfg, log_fn=self._log, stop_event=self.stop_event,
                           input_session=session)
         # preflight 也在禁止真实输入的会话中执行。

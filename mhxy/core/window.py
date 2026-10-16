@@ -948,6 +948,8 @@ def resolve_targets(title_substr, offset, targets):
 
     targets 结构见 config.DEFAULT_CONFIG["targets"]（「选择窗口」里勾 1 个=单开、勾多个=多开，
     multi 由勾选数量派生）：
+      - Qt window_handles：固定启动快照，按句柄及原顺序返回；任一缺失返回 []。
+      - Qt selected_hwnds：明确的当前集合，空集合返回 []，不执行旧序号兜底。
       - 单开(multi=False)：返回 [第 single_index 个窗口]（序号越界自动回退 0）。
       - 多开(multi=True) ：按 multi_indices 选子集（空=全部），再按 max_windows 截断。
     找不到任何窗口返回 []。
@@ -956,6 +958,13 @@ def resolve_targets(title_substr, offset, targets):
     # 任务目标需要把最小化窗口也视作仍存在；真正开始操作前 GameWindow.activate()
     # 会先还原窗口再校验前台，不能因用户暂时最小化而误判窗口已经消失。
     wins = locate_all(title_substr, offset, include_minimized=True)
+    # Qt 启动快照必须完整保留顺序；任何目标缺失都不能回退到其它窗口或压缩队长索引。
+    if "window_handles" in targets or "selected_hwnds" in targets:
+        handles = targets.get("window_handles", targets.get("selected_hwnds", []))
+        by_handle = {int(w._win._hWnd): w for w in wins}
+        if "window_handles" in targets and any(h not in by_handle for h in handles):
+            return []
+        return [by_handle[h] for h in handles if h in by_handle]
     if not wins:
         return []
     if targets.get("multi"):

@@ -119,6 +119,10 @@ def _drive_until_yield(c, rec):
         c.step_once(rec)                       # 各任务现有 step，内部自带拟人 sleep
         steps += 1
         if c.is_done(rec):
+            from .task_activity import report
+            outcome = rec.get("outcome") if isinstance(rec, dict) else None
+            report(c.get_ctx(rec), "已完成" if outcome == "completed" else "执行异常" if outcome == "failed" else "本项结束",
+                   "error" if outcome == "failed" else "")
             return YIELD_DONE
         after = c.get_state(rec)
         if after == before:                    # state 没变 = 在等待 → 让出
