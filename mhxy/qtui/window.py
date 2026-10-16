@@ -170,6 +170,16 @@ class MainWindow(QMainWindow):
             page.config_changed.connect(self._config_changed)
             page.window_selection_requested.connect(lambda: self.show_page("role_window"))
             return page
+        if key in ("freeclick", "general"):
+            from .freeclick_page import FreeClickPage
+            from .inventory_panel import InventoryPanel
+
+            page = (FreeClickPage if key == "freeclick" else InventoryPanel)(parent=self.stack)
+            self._manage_task_page(page)
+            page.config_changed.connect(self._config_changed)
+            page.window_selection_requested.connect(lambda: self.show_page("role_window"))
+            page.update_windows(self.window_states)
+            return page
         if key in ("sniper", "treasure_map", "escort", "secret_realm"):
             from .sniper_page import SniperPage
             from .treasure_map_page import TreasureMapPage
@@ -221,17 +231,18 @@ class MainWindow(QMainWindow):
         self.cfg = cfg
         self._update_strip()
         for page in self._activity_pages():
-            if not page._start_pending and not page._runtime_running():
+            if (not page._start_pending and not page._runtime_running()
+                    and not getattr(page, "_capturing", False) and getattr(page, "_editor", None) is None):
                 page.cfg = copy.deepcopy(cfg)
                 page.update_windows(self.window_states)
 
     def _activity_pages(self):
-        return [self.pages[key] for key in ("sniper", "treasure_map", "escort", "secret_realm")
+        return [self.pages[key] for key in ("sniper", "treasure_map", "escort", "secret_realm", "freeclick", "general")
                 if key in self.pages]
 
     def _task_pages(self):
         return [page for key, page in self.pages.items()
-                if key in ("daily", "sniper", "treasure_map", "escort", "secret_realm")]
+                if key in ("daily", "sniper", "treasure_map", "escort", "secret_realm", "freeclick", "general")]
 
     def _manage_task_page(self, page):
         # RuntimeService 只有一个日志流；窗口按 runner 分发，避免空闲页抢日志。
