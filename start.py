@@ -12,12 +12,12 @@ import ctypes
 import subprocess
 import importlib.util
 
-BASE = os.path.dirname(os.path.abspath(__file__))
+BASE = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, "frozen", False) else __file__))
 os.chdir(BASE)
 sys.path.insert(0, BASE)
 
 # 运行时依赖的 import 名（注意 Pillow 的 import 名是 PIL）。
-_DEP_MODULES = ["cv2", "mss", "numpy", "pyautogui", "pygetwindow", "customtkinter", "PIL",
+_DEP_MODULES = ["cv2", "mss", "numpy", "pyautogui", "pygetwindow", "PySide6", "PIL",
                 "rapidocr_onnxruntime"]
 
 # 提权/去黑窗最多发起一次。一旦发起（无论成功还是被拒），就通过环境变量把这个标记
@@ -44,7 +44,7 @@ def _elevate(executable):
     在发起前先打提权标记进环境，子进程据此不再重复提权。"""
     os.environ[_ELEVATED_FLAG] = "1"
     try:
-        params = '"{}"'.format(os.path.abspath(__file__))
+        params = subprocess.list2cmdline([os.path.abspath(__file__), *sys.argv[1:]])
         # ShellExecuteW + "runas" 触发 UAC；返回值 >32 表示成功发起。
         r = ctypes.windll.shell32.ShellExecuteW(None, "runas", executable, params, BASE, 1)
         return int(r) > 32
@@ -106,7 +106,7 @@ def _relaunch_windowless():
     DETACHED_PROCESS = 0x00000008
     CREATE_NEW_PROCESS_GROUP = 0x00000200
     try:
-        subprocess.Popen([pyw, os.path.abspath(__file__)],
+        subprocess.Popen([pyw, os.path.abspath(__file__), *sys.argv[1:]],
                          creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
                          close_fds=True)
         return True
@@ -115,10 +115,7 @@ def _relaunch_windowless():
 
 
 def _set_dpi_aware_early():
-    """进程级 DPI 感知，必须在创建任何窗口（含启动页）之前调。
-    直接走 ctypes，不导入 mhxy.core.window——那个模块顶部会 import cv2/numpy/mss，
-    一导入就把重库加载提前到启动页之前，正好是我们要用后台线程盖住的那 3 秒。
-    与 window.set_dpi_aware() 行为一致（PER_MONITOR_AWARE，失败回退到 system-DPI-aware）。"""
+    """在 Qt 和截图库加载前设置进程 DPI 感知，保持物理坐标规则。"""
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(2)
     except Exception:
@@ -128,49 +125,7 @@ def _set_dpi_aware_early():
             pass
 
 
-def _make_splash():
-    """创建并显示一个轻量启动页（纯 tkinter，导入极快），返回相关句柄。
-    不在这里跑 mainloop——调用方掌控它的生命周期，好让它盖住「导入+建窗口+建页面」整段。
-
-    启动页是本进程第一个 Tk 根。等主窗口（另一个 ctk.CTk 根）要接管时，调用方会把
-    tkinter._default_root 置 None，使主窗口成为默认根（字体/控件都挂到主窗口，避免双根串台）。"""
-    import tkinter as tk
-    from tkinter import ttk
-
-    splash = tk.Tk()
-    splash.overrideredirect(True)          # 无边框，像启动页
-    try:
-        splash.attributes("-topmost", True)
-    except Exception:
-        pass
-    W, H = 380, 132
-    sw, sh = splash.winfo_screenwidth(), splash.winfo_screenheight()
-    splash.geometry(f"{W}x{H}+{(sw - W) // 2}+{(sh - H) // 2}")
-
-    BG, FG, DIM, ACC, TROUGH, EDGE = "#13161c", "#e7eaf0", "#8a93a3", "#4f8cff", "#20252f", "#2a313d"
-    outer = tk.Frame(splash, bg=BG, highlightbackground=EDGE, highlightthickness=1)
-    outer.pack(fill="both", expand=True)
-    tk.Label(outer, text="梦幻小助手", bg=BG, fg=FG,
-             font=("Microsoft YaHei UI", 15, "bold")).pack(pady=(26, 4))
-    status = tk.Label(outer, text="正在加载图像识别库，请稍候…", bg=BG, fg=DIM,
-                      font=("Microsoft YaHei UI", 10))
-    status.pack()
-    try:
-        style = ttk.Style(splash)
-        style.theme_use("default")
-        style.configure("Splash.Horizontal.TProgressbar", troughcolor=TROUGH,
-                        background=ACC, bordercolor=BG, lightcolor=ACC, darkcolor=ACC)
-        pb = ttk.Progressbar(outer, mode="indeterminate", length=300,
-                             style="Splash.Horizontal.TProgressbar")
-    except Exception:
-        pb = ttk.Progressbar(outer, mode="indeterminate", length=300)
-    pb.pack(pady=18)
-    pb.start(12)
-    splash.update()                        # 立刻画出来，别等到 mainloop
-    return {"root": splash, "status": status, "pb": pb}
-
-
-def _report_fatal(stage):
+def _report_fatal(stage, exc_info=None):
     """把启动期未捕获异常写进 startup_error.log 并弹窗提示。
 
     pythonw.exe **没有控制台**：启动过程中任何异常都会让进程静默消失（用户只看到
@@ -178,7 +133,7 @@ def _report_fatal(stage):
     必须自己把异常落盘 + 弹窗，否则这类问题无法定位。
     """
     import traceback
-    tb = traceback.format_exc()
+    tb = "".join(traceback.format_exception(*exc_info)) if exc_info else traceback.format_exc()
     try:
         with open(os.path.join(BASE, "startup_error.log"), "w", encoding="utf-8") as f:
             f.write("阶段：{}\n\n{}".format(stage, tb))
@@ -195,173 +150,27 @@ def _report_fatal(stage):
         pass
 
 
-def _wake_existing_windows(app):
-    """后台启动扫描：逐窗唤出后识别当前标签条，禁止集中扫描后台像素。"""
-    from mhxy.core import accounts
-    from mhxy.core import window as win_mod
-
-    cfg = app.cfg
-    title = cfg.get("window_title", "梦幻西游")
-    offset = cfg.get("window_offset", [0, 0])
-    failures = []
-
-    def identify(win):
-        try:
-            # wake_all_to_front 仅在 activate 校验通过后调用；识别必须在切下个窗口前完成。
-            accounts.labels_for([win])
-        except Exception:
-            failures.append(win)
-
-    try:
-        total, woken = win_mod.wake_all_to_front(title, offset, on_woken=identify)
-    except Exception as exc:
-        message = "启动唤窗与角色识别失败：%s" % exc
-        app.ui_post(lambda: app.log_line(message, "warn", "启动"))
-        return
-
-    def apply():
-        if not total:
-            return
-        app.log_line(
-            "启动唤出游戏窗口：检测到 %d 个，%d 个成功切到前台；已逐窗执行角色名检测。" % (total, woken),
-            "info" if woken and not failures else "warn", "启动")
-        if failures:
-            app.log_line("部分窗口角色名检测失败，暂使用已有身份或号N。", "warn", "启动")
-        # 常驻定位只读角色缓存；使启动时已绘制的号N和目标摘要立即重新计算。
-        app._game_connected = None
-        app._kick_locate()
-
-    app.ui_post(apply)
-
-
 def _launch_gui():
-    """设 DPI → 启动页轻量探测 → 亮出主窗口 → 后台逐窗唤出并识别角色名。
-    任一步异常都回退到无启动页的直接启动，保证一定能起来。"""
-    import threading
-
+    """只启动 Qt；导入、构窗和回调失败均落盘，pythonw 下也可定位。"""
     _set_dpi_aware_early()
+    previous_hook = sys.excepthook
 
-    splash = None
+    def report_callback(exc_type, exc, tb):
+        _report_fatal("Qt 回调", (exc_type, exc, tb))
+        from PySide6.QtWidgets import QApplication
+        app = QApplication.instance()
+        if app is not None:
+            app.exit(1)
+
     try:
-        splash = _make_splash()
+        sys.excepthook = report_callback
+        from mhxy.qtui.main import main as qt_main
+        return qt_main()
     except Exception:
-        splash = None
-
-    # —— 阶段一：预热重库 → 再建主界面 ——
-    # 启动页阶段仅轻量探测；完整界面显示后逐窗唤出并识别角色名。
-    # 探测失败按已有窗口路径处理，避免误判为零窗口而重复启动游戏。
-    shared = {"decision": "unknown"}
-    if splash is not None:
-        warm_ready = threading.Event()
-        allow_scan = threading.Event()
-        done = threading.Event()
-
-        def _warm_and_scan():
-            try:
-                import mhxy.gui.app  # noqa: F401  —— 触发 cv2/numpy/customtkinter 一次性加载
-                try:
-                    from mhxy.core import config as cfg_mod
-                    from mhxy.core import window_probe
-                    shared["decision"] = window_probe.startup_decision(cfg_mod.load_config())
-                except Exception:
-                    shared["decision"] = "unknown"
-            except Exception:
-                pass               # 主线程随后再 import，会暴露真实错误
-            finally:
-                warm_ready.set()
-            allow_scan.wait()
-            done.set()
-
-        threading.Thread(target=_warm_and_scan, daemon=True).start()
-        scan_started = {"value": False}
-
-        def _poll():
-            if warm_ready.is_set() and not scan_started["value"]:
-                scan_started["value"] = True
-                try:
-                    splash["root"].attributes("-alpha", 0.0)
-                    splash["root"].update_idletasks()
-                except Exception:
-                    pass
-                allow_scan.set()
-            if done.is_set():
-                splash["root"].quit()       # 退出 mainloop，回到下面继续（启动页先不销毁）
-            else:
-                splash["root"].after(40, _poll)
-
-        splash["root"].after(40, _poll)
-        splash["root"].mainloop()           # 预热期间显示启动页；扫描阶段透明，绝不遮挡游戏
-    else:
-        # 启动页创建失败时直接继续建主界面；身份不在启动阶段扫描。
-        pass
-
-    # 关键：创建主窗口（另一个 ctk Tk 根）之前，必须先销毁启动页这个根——
-    # 两个 Tk 根并存会让 customtkinter 直接崩（之前「正在准备界面」后闪退就是这个）。
-    # 试过「先建主窗口、再销启动页」来消除这两步之间的空隙，结果引入更难查的问题
-    # （默认根归属、CTk 的首次显示逻辑），已回退。保持这个顺序。
-    if splash is not None:
-        try:
-            splash["pb"].stop()             # 先停进度条动画：其 after 定时器在根销毁后会报错
-        except Exception:
-            pass
-        try:
-            splash["root"].destroy()
-        except Exception:
-            pass
-        try:
-            import tkinter as _tk
-            _tk._default_root = None        # 复位默认根，让主窗口接管
-        except Exception:
-            pass
-
-    # —— 阶段二：建主窗口；用主窗口自带的同根不透明遮罩盖住「建全部页面」的过程 ——
-    from mhxy.gui.app import App
-    compact = shared["decision"] == "none"
-    app = None
-    try:
-        app = App(compact=compact)
-    except Exception:
-        _report_fatal("创建主窗口 App()")
-        return
-
-    # ⚠ 必须放在 if splash 之外：App 的唯一显示入口就在这里，嵌进去的话
-    #   「启动页没建成（splash 为 None）」时窗口就永远不显示了。踩过。
-    # 建页期只跑 update_idletasks（不重绘），建完撤遮罩，全程只有一次整窗重绘。
-    try:
-        if compact:
-            app.reveal_compact()
-        else:
-            app.reveal_with_overlay()
-    except Exception:
-        _report_fatal("建全部页面 / 亮出主窗口")
-        try:
-            app.deiconify()
-        except Exception:
-            pass
-    # 再兜一次：无论上面走哪条路，窗口都必须可见。
-    try:
-        app.deiconify()
-    except Exception:
-        pass
-
-    # 兜底：窗口可见后切前台（App 内部也有 after_idle 兜底显示，覆盖无启动页的回退路径）。
-    try:
-        app.lift()
-        app.focus_force()
-    except Exception:
-        pass
-
-    if shared["decision"] == "unknown":
-        app.log_line("窗口探测失败，按已有窗口处理。", "warn", "启动")
-
-    if not compact:
-        threading.Thread(target=_wake_existing_windows, args=(app,), daemon=True).start()
-
-    # mainloop 期间的异常（Tk 回调里抛出）同样会静默杀死窗口，一并落盘。
-    try:
-        app.mainloop()
-    except Exception:
-        _report_fatal("主循环 mainloop()")
+        _report_fatal("启动 Qt 主窗口")
+        return 1
+    finally:
+        sys.excepthook = previous_hook
 
 
 def main():
@@ -384,7 +193,7 @@ def main():
             if not _is_admin() and not no_elevate:
                 if _elevate(sys.executable):
                     return  # 用带控制台的 python.exe 提权重启，去装依赖。
-                print("⚠ 未获得管理员权限：切换到游戏窗口后鼠标可能无法移动/点击。\n"
+                print("未获得管理员权限：切换到游戏窗口后鼠标可能无法移动/点击。\n"
                       "  建议右键『启动.bat』→『以管理员身份运行』，或在 UAC 弹窗点『是』。\n")
             if not ensure_deps():
                 input("\n按回车退出……")
@@ -402,15 +211,15 @@ def main():
             if _elevate(exe):
                 return  # 已发起管理员实例，本进程退出。
             # 提权被拒：以普通权限继续（界面可用，但切到游戏多半点不动），下面再去黑窗。
-            print("⚠ 未获得管理员权限：切换到游戏窗口后鼠标可能无法移动/点击。\n"
+            print("未获得管理员权限：切换到游戏窗口后鼠标可能无法移动/点击。\n"
                   "  建议右键『启动.bat』→『以管理员身份运行』，或在 UAC 弹窗点『是』。\n")
 
         # 仍带控制台（如提权被拒、或本就以管理员+console 启动）：用 pythonw 去黑窗。
         if _has_console() and _relaunch_windowless():
             return
 
-    _launch_gui()
+    return _launch_gui()
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

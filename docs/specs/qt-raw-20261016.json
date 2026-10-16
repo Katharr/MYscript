@@ -1,0 +1,558 @@
+{
+  "generated_at": "2026-10-16T12:20:14.352896+08:00",
+  "python": "3.14.3 (tags/v3.14.3:323c59a, Feb  3 2026, 16:04:56) [MSC v.1944 64 bit (AMD64)]",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "config_sha256": "bc1b6e8523bcd3e5a87649bef8dda324558e51624dc84d629632228281c35527",
+  "actual_window_count": 3,
+  "samples": {
+    "no-game": {
+      "status": "unavailable",
+      "reason": "实测 3 窗，需要 0 窗"
+    },
+    "three-game": [
+      {
+        "mode": "three-game",
+        "status": "ok",
+        "actions": {
+          "cold_start_to_operable": {
+            "duration_ms": 1414.05,
+            "memory_mb": 84.18
+          },
+          "first_page_open": {
+            "duration_ms": 106.25,
+            "memory_mb": 117.76
+          },
+          "repeat_page_switch_5_cycles": {
+            "duration_ms": 2138.62,
+            "memory_mb": 135.3
+          },
+          "restore_from_floating": {
+            "duration_ms": 59.17,
+            "memory_mb": 135.51
+          }
+        },
+        "ready_at": 518638.7228017,
+        "switch_raw_ms": [
+          54.015,
+          59.452,
+          77.671,
+          91.94,
+          65.52,
+          77.268,
+          47.542,
+          45.037,
+          20.607,
+          35.461,
+          47.879,
+          45.783,
+          54.118,
+          58.558,
+          76.0,
+          55.487,
+          40.844,
+          18.352,
+          29.206,
+          42.625,
+          63.23,
+          57.411,
+          57.695,
+          58.089,
+          46.626,
+          35.895,
+          19.515,
+          31.855,
+          42.325,
+          45.508,
+          44.204,
+          53.887,
+          53.815,
+          45.553,
+          43.954,
+          18.182,
+          29.508,
+          42.544,
+          48.289,
+          46.413,
+          47.666,
+          55.293,
+          46.537,
+          38.47,
+          21.547
+        ],
+        "switch_p95_ms": 77.268,
+        "expand_full_interface": "not_applicable: Qt 启动即完整界面，没有 compact",
+        "stall_max_ms": 931.41,
+        "peak_working_set_mb": 136.71,
+        "window_count": 3,
+        "process_wall_ms": 5943.0,
+        "process_start_to_operable_ms": 1414.05
+      },
+      {
+        "mode": "three-game",
+        "status": "ok",
+        "actions": {
+          "cold_start_to_operable": {
+            "duration_ms": 1080.64,
+            "memory_mb": 83.44
+          },
+          "first_page_open": {
+            "duration_ms": 250.64,
+            "memory_mb": 107.8
+          },
+          "repeat_page_switch_5_cycles": {
+            "duration_ms": 2391.27,
+            "memory_mb": 125.38
+          },
+          "restore_from_floating": {
+            "duration_ms": 55.99,
+            "memory_mb": 125.49
+          }
+        },
+        "ready_at": 518644.3515622,
+        "switch_raw_ms": [
+          44.378,
+          61.355,
+          71.246,
+          142.893,
+          65.575,
+          72.221,
+          62.058,
+          55.223,
+          21.09,
+          45.556,
+          48.192,
+          68.849,
+          44.994,
+          64.053,
+          54.08,
+          54.149,
+          38.454,
+          43.683,
+          32.99,
+          42.655,
+          54.989,
+          53.869,
+          52.095,
+          58.138,
+          48.055,
+          46.079,
+          21.437,
+          37.716,
+          47.762,
+          56.911,
+          54.253,
+          68.609,
+          75.268,
+          59.295,
+          43.894,
+          29.086,
+          40.663,
+          52.486,
+          67.136,
+          43.983,
+          49.491,
+          73.545,
+          63.855,
+          36.017,
+          22.053
+        ],
+        "switch_p95_ms": 73.545,
+        "expand_full_interface": "not_applicable: Qt 启动即完整界面，没有 compact",
+        "stall_max_ms": 2136.21,
+        "peak_working_set_mb": 126.68,
+        "window_count": 3,
+        "process_wall_ms": 7860.05,
+        "process_start_to_operable_ms": 1080.64
+      },
+      {
+        "mode": "three-game",
+        "status": "ok",
+        "actions": {
+          "cold_start_to_operable": {
+            "duration_ms": 2811.29,
+            "memory_mb": 79.78
+          },
+          "first_page_open": {
+            "duration_ms": 233.31,
+            "memory_mb": 117.01
+          },
+          "repeat_page_switch_5_cycles": {
+            "duration_ms": 2027.63,
+            "memory_mb": 135.0
+          },
+          "restore_from_floating": {
+            "duration_ms": 62.49,
+            "memory_mb": 135.18
+          }
+        },
+        "ready_at": 518654.0532328,
+        "switch_raw_ms": [
+          41.309,
+          48.709,
+          68.86,
+          63.481,
+          51.643,
+          67.674,
+          50.052,
+          36.297,
+          21.089,
+          32.445,
+          42.725,
+          45.815,
+          46.674,
+          48.351,
+          78.743,
+          44.296,
+          36.453,
+          17.801,
+          37.625,
+          43.991,
+          45.716,
+          61.172,
+          69.923,
+          65.936,
+          46.886,
+          41.65,
+          12.034,
+          25.891,
+          45.713,
+          38.212,
+          55.91,
+          47.764,
+          53.924,
+          44.237,
+          39.154,
+          19.552,
+          27.023,
+          43.715,
+          44.433,
+          56.136,
+          47.828,
+          53.711,
+          40.054,
+          55.55,
+          20.479
+        ],
+        "switch_p95_ms": 68.86,
+        "expand_full_interface": "not_applicable: Qt 启动即完整界面，没有 compact",
+        "stall_max_ms": 6341.92,
+        "peak_working_set_mb": 136.43,
+        "window_count": 3,
+        "process_wall_ms": 13367.36,
+        "process_start_to_operable_ms": 2811.29
+      },
+      {
+        "mode": "three-game",
+        "status": "ok",
+        "actions": {
+          "cold_start_to_operable": {
+            "duration_ms": 2653.77,
+            "memory_mb": 80.38
+          },
+          "first_page_open": {
+            "duration_ms": 334.04,
+            "memory_mb": 118.39
+          },
+          "repeat_page_switch_5_cycles": {
+            "duration_ms": 2467.13,
+            "memory_mb": 135.74
+          },
+          "restore_from_floating": {
+            "duration_ms": 58.3,
+            "memory_mb": 135.92
+          }
+        },
+        "ready_at": 518667.3025188,
+        "switch_raw_ms": [
+          50.764,
+          56.076,
+          113.72,
+          103.2,
+          109.578,
+          83.913,
+          84.552,
+          46.603,
+          29.594,
+          34.789,
+          70.536,
+          70.446,
+          65.435,
+          78.207,
+          107.876,
+          62.895,
+          45.925,
+          23.691,
+          42.936,
+          51.191,
+          62.921,
+          57.408,
+          52.388,
+          58.166,
+          47.826,
+          45.917,
+          23.807,
+          32.399,
+          49.704,
+          43.747,
+          47.97,
+          48.334,
+          62.559,
+          60.476,
+          37.152,
+          18.135,
+          30.228,
+          42.868,
+          44.66,
+          49.867,
+          47.805,
+          55.301,
+          47.066,
+          46.422,
+          20.951
+        ],
+        "switch_p95_ms": 107.876,
+        "expand_full_interface": "not_applicable: Qt 启动即完整界面，没有 compact",
+        "stall_max_ms": 3820.75,
+        "peak_working_set_mb": 137.15,
+        "window_count": 3,
+        "process_wall_ms": 10984.21,
+        "process_start_to_operable_ms": 2653.77
+      },
+      {
+        "mode": "three-game",
+        "status": "ok",
+        "actions": {
+          "cold_start_to_operable": {
+            "duration_ms": 1134.39,
+            "memory_mb": 84.48
+          },
+          "first_page_open": {
+            "duration_ms": 96.26,
+            "memory_mb": 117.93
+          },
+          "repeat_page_switch_5_cycles": {
+            "duration_ms": 1217.13,
+            "memory_mb": 135.86
+          },
+          "restore_from_floating": {
+            "duration_ms": 60.15,
+            "memory_mb": 136.06
+          }
+        },
+        "ready_at": 518676.7886308,
+        "switch_raw_ms": [
+          18.147,
+          25.186,
+          27.051,
+          41.323,
+          52.914,
+          33.602,
+          24.774,
+          21.156,
+          8.089,
+          18.823,
+          15.967,
+          26.581,
+          23.716,
+          23.019,
+          35.551,
+          21.228,
+          19.626,
+          11.283,
+          12.902,
+          17.071,
+          19.483,
+          22.777,
+          33.764,
+          40.059,
+          33.85,
+          28.669,
+          12.97,
+          22.839,
+          31.127,
+          30.025,
+          32.414,
+          38.064,
+          44.69,
+          36.916,
+          28.305,
+          15.898,
+          22.724,
+          30.352,
+          28.458,
+          33.668,
+          31.87,
+          39.872,
+          36.664,
+          28.679,
+          14.109
+        ],
+        "switch_p95_ms": 41.323,
+        "expand_full_interface": "not_applicable: Qt 启动即完整界面，没有 compact",
+        "stall_max_ms": 892.58,
+        "peak_working_set_mb": 137.3,
+        "window_count": 3,
+        "process_wall_ms": 4241.7,
+        "process_start_to_operable_ms": 1134.39
+      }
+    ]
+  },
+  "summary": {
+    "three-game": {
+      "cold_start_to_operable": {
+        "raw_ms": [
+          1414.05,
+          1080.64,
+          2811.29,
+          2653.77,
+          1134.39
+        ],
+        "median_ms": 1414.05,
+        "max_ms": 2811.29
+      },
+      "first_page_open": {
+        "raw_ms": [
+          106.25,
+          250.64,
+          233.31,
+          334.04,
+          96.26
+        ],
+        "median_ms": 233.31,
+        "max_ms": 334.04
+      },
+      "repeat_page_switch_5_cycles": {
+        "raw_ms": [
+          2138.62,
+          2391.27,
+          2027.63,
+          2467.13,
+          1217.13
+        ],
+        "median_ms": 2138.62,
+        "max_ms": 2467.13
+      },
+      "restore_from_floating": {
+        "raw_ms": [
+          59.17,
+          55.99,
+          62.49,
+          58.3,
+          60.15
+        ],
+        "median_ms": 59.17,
+        "max_ms": 62.49
+      },
+      "main_thread_stall": {
+        "raw_ms": [
+          931.41,
+          2136.21,
+          6341.92,
+          3820.75,
+          892.58
+        ],
+        "median_ms": 2136.21,
+        "max_ms": 6341.92
+      },
+      "switch_p95_ms": {
+        "raw": [
+          77.268,
+          73.545,
+          68.86,
+          107.876,
+          41.323
+        ],
+        "median": 73.545,
+        "max": 107.876
+      },
+      "peak_working_set_mb": {
+        "raw": [
+          136.71,
+          126.68,
+          136.43,
+          137.15,
+          137.3
+        ],
+        "median": 136.71,
+        "max": 137.3
+      }
+    }
+  },
+  "warmup": {
+    "mode": "three-game",
+    "status": "ok",
+    "actions": {
+      "cold_start_to_operable": {
+        "duration_ms": 1260.92,
+        "memory_mb": 86.57
+      },
+      "first_page_open": {
+        "duration_ms": 137.58,
+        "memory_mb": 119.2
+      },
+      "repeat_page_switch_5_cycles": {
+        "duration_ms": 1683.46,
+        "memory_mb": 136.96
+      },
+      "restore_from_floating": {
+        "duration_ms": 60.72,
+        "memory_mb": 137.14
+      }
+    },
+    "ready_at": 518633.3908559,
+    "switch_raw_ms": [
+      22.013,
+      36.421,
+      55.51,
+      65.907,
+      39.202,
+      64.825,
+      45.986,
+      42.223,
+      16.555,
+      29.255,
+      34.17,
+      40.634,
+      37.187,
+      40.216,
+      46.196,
+      38.821,
+      31.893,
+      18.559,
+      26.519,
+      35.106,
+      36.097,
+      42.927,
+      45.18,
+      55.776,
+      39.926,
+      33.945,
+      17.503,
+      24.012,
+      37.977,
+      53.928,
+      40.661,
+      41.125,
+      48.341,
+      35.384,
+      32.583,
+      19.555,
+      23.576,
+      32.87,
+      35.066,
+      37.254,
+      39.649,
+      63.527,
+      34.53,
+      28.233,
+      15.667
+    ],
+    "switch_p95_ms": 63.527,
+    "expand_full_interface": "not_applicable: Qt 启动即完整界面，没有 compact",
+    "stall_max_ms": 969.06,
+    "peak_working_set_mb": 138.38,
+    "window_count": 3,
+    "process_wall_ms": 5161.02,
+    "process_start_to_operable_ms": 1260.92
+  }
+}

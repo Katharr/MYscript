@@ -3,8 +3,7 @@
 PyInstaller 打包配置。产出单文件、无黑窗、双击请求管理员的 dist\梦幻小助手.exe。
 
 为什么这么配（每条都对应一个会让 exe 跑不起来的坑）：
-  - collect_all('customtkinter')：customtkinter 自带主题 json + 图片资源，
-    默认收集不全，onefile 启动会报缺资源直接崩 —— 必须显式整包收集。
+  - PySide6 QtWidgets 的官方 hook 收集 Qt DLL 和平台插件，不收集无关 Qt 模块。
   - hiddenimports 里点名 cv2 / mss / pygetwindow / PIL 及任务模块：
     这些有的是动态 import / 插件注册，PyInstaller 静态分析可能漏，兜底加上。
   - 不打包 templates/ captures/ config.json：它们要在「运行时」生成在 exe 同级
@@ -15,17 +14,17 @@ PyInstaller 打包配置。产出单文件、无黑窗、双击请求管理员�
 """
 
 import os
-from PyInstaller.utils.hooks import collect_all, collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 # 本 spec 住在 <项目根>\打包工具\ 下。PyInstaller 执行 spec 时注入 SPECPATH=本文件所在目录，
 # 故项目根 = 它的父目录。入口与搜索路径都用绝对路径锚定，避免依赖调用时的工作目录。
 PROJECT_ROOT = os.path.dirname(SPECPATH)
 ENTRY = os.path.join(PROJECT_ROOT, "start.py")
 
-# customtkinter 整包（数据/子模块/隐藏导入）一次收齐
-ctk_datas, ctk_binaries, ctk_hidden = collect_all("customtkinter")
-
-hiddenimports = ctk_hidden + [
+hiddenimports = [
+    "PySide6.QtCore",
+    "PySide6.QtGui",
+    "PySide6.QtWidgets",
     "cv2",
     "numpy",
     "mss",
@@ -33,21 +32,22 @@ hiddenimports = ctk_hidden + [
     "pyautogui",
     "PIL",
     "PIL.Image",
-    "PIL.ImageTk",
     # 任务在 mhxy/tasks/__init__.py 里 import 注册，点名兜底
     "mhxy.tasks.sniper",
-] + collect_submodules("mhxy")
+] + collect_submodules("mhxy.qtui") + collect_submodules("mhxy.tasks")
 
 a = Analysis(
     [ENTRY],
     pathex=[PROJECT_ROOT],
-    binaries=ctk_binaries,
-    datas=ctk_datas,
+    binaries=[],
+    # OCR 代码是惰性导入，但默认 YAML 和三个 ONNX 模型也必须随程序收集。
+    datas=collect_data_files("rapidocr_onnxruntime"),
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=["mhxy.gui", "customtkinter", "tkinter", "_tkinter", "PIL.ImageTk",
+              "PyQt5", "PyQt6", "PySide2", "PySide6.QtQml", "PySide6.QtQuick"],
     noarchive=False,
 )
 

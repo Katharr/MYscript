@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..core import config as cfg_mod
-from ..gui.shortcuts import (
+from .shortcuts import (
     DEFAULT_FAILSAFE, DEFAULT_STOP_HOTKEY, FAILSAFE_CORNERS, HOTKEY_NAMES,
     _compose_stop_hotkey, _split_stop_hotkey,
 )

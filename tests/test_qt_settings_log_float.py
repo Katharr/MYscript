@@ -15,7 +15,7 @@ from PySide6.QtTest import QSignalSpy
 from mhxy.core import config as cfg_mod
 from mhxy.core.runner import TaskRunner
 from mhxy.core.runtime import RuntimeService
-from mhxy.gui import shortcuts
+from mhxy.qtui import shortcuts
 from mhxy.qtui.float_log import FloatLogWindow
 from mhxy.qtui.log_panel import LogPanel
 from mhxy.qtui.main import get_application

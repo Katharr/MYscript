@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-主窗口：导航、全局状态和日志视图。
-页面实现各自独立；增加页面时在 App.PAGE_CLASSES 与 NAV 显式绑定。
+历史 Tk 主窗口，仅供原回归测试与 Spec00 性能对照；无可执行入口。
+当前默认界面见 mhxy.qtui；本包不进入发布产物。
 """
 
 import queue
@@ -840,10 +840,41 @@ class App(ctk.CTk):
         self.destroy()
 
 
-def main():
-    app = App()
-    app.mainloop()
 
+def _wake_existing_windows(app):
+    """后台启动扫描：逐窗唤出后识别当前标签条，禁止集中扫描后台像素。"""
+    from mhxy.core import accounts
+    from mhxy.core import window as win_mod
 
-if __name__ == "__main__":
-    main()
+    cfg = app.cfg
+    title = cfg.get("window_title", "梦幻西游")
+    offset = cfg.get("window_offset", [0, 0])
+    failures = []
+
+    def identify(win):
+        try:
+            # wake_all_to_front 仅在 activate 校验通过后调用；识别必须在切下个窗口前完成。
+            accounts.labels_for([win])
+        except Exception:
+            failures.append(win)
+
+    try:
+        total, woken = win_mod.wake_all_to_front(title, offset, on_woken=identify)
+    except Exception as exc:
+        message = "启动唤窗与角色识别失败：%s" % exc
+        app.ui_post(lambda: app.log_line(message, "warn", "启动"))
+        return
+
+    def apply():
+        if not total:
+            return
+        app.log_line(
+            "启动唤出游戏窗口：检测到 %d 个，%d 个成功切到前台；已逐窗执行角色名检测。" % (total, woken),
+            "info" if woken and not failures else "warn", "启动")
+        if failures:
+            app.log_line("部分窗口角色名检测失败，暂使用已有身份或号N。", "warn", "启动")
+        # 常驻定位只读角色缓存；使启动时已绘制的号N和目标摘要立即重新计算。
+        app._game_connected = None
+        app._kick_locate()
+
+    app.ui_post(apply)

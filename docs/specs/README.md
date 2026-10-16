@@ -46,3 +46,4 @@ python -m unittest discover -t . -v
 | spec8：`08-dungeon-page.md` | 完成 Qt 刷副本页迁移，接入副本注册表、队长选择、已组队、跑完解散和队长 ID 历史库；复用原有副本任务与组队流程 | `python -m unittest discover -t . -v`：507 项通过 | `0f3400a`：完成 Qt 刷副本页迁移 |
 | spec9：`09-calibration.md` | 完成 Qt 标定中心、尺寸组、异步缩略图和冻结屏幕 ROI 框选；任务页、装备与物品入口接通；复用现有保存与回滚，修订必要配套修改的范围规则 | `python -m unittest discover -t . -v`：529 项通过（新增 22 项 Qt 标定测试） | `00a027d`：完成 Qt 标定中心与框选浮层迁移并修订阶段范围规则 |
 | spec10：`10-settings-log-float.md` | 完成 Qt 设置、关于页、全局日志抽屉和可选悬浮条；补齐配置校验、深浅外观、有界日志缓存及隐藏主窗急停 | `python -m unittest discover -t . -v`：545 项通过（新增 16 项设置、日志与悬浮回归测试） | `e437773`：完成 Qt 设置、日志抽屉与悬浮条迁移 |
+| spec11：`11-switch-default.md` | 切换 `start.py` 默认 Qt 入口，移除发布路径中的 Tk/compact/splash，补齐依赖预检、Qt/OCR 打包资源、只读启动诊断与性能复测 | `python -m unittest discover -t . -v`：557 项通过；Python 3.11 PyInstaller 构建成功，134.8 MB，含 Qt 平台插件与 OCR 模型 | `4b30370`：完成 Qt 默认入口切换与发布验收 |

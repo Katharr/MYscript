@@ -507,7 +507,7 @@ class MainWindow(QMainWindow):
                         if page._start_pending or page._runtime_running()]
         launch_active = self._launching or self._runner_running()
         # 沿用原 GUI 的热键解析与 core 的只读急停判据，不引入 Tk 窗口。
-        from ..gui.shortcuts import _parse_stop_hotkey
+        from .shortcuts import _parse_stop_hotkey
         from ..core.emergency import get_cursor, in_failsafe_corner, vk_down
 
         if launch_active or active_pages:

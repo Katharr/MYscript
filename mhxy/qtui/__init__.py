@@ -1,1 +1,1 @@
-"""独立的 PySide6 Widgets 界面；默认启动入口仍使用原有 GUI。"""
+"""PySide6 Qt Widgets 界面；start.py 和发布包默认使用此入口。"""

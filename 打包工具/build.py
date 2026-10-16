@@ -62,6 +62,15 @@ def run():
         print("找不到 梦幻小助手.spec，无法打包。期望路径：", SPEC)
         return 1
 
+    if PROJECT_ROOT not in sys.path:
+        sys.path.insert(0, PROJECT_ROOT)
+    from start import _missing_dep_modules
+    missing = _missing_dep_modules()
+    if missing:
+        print("缺少运行依赖，拒绝生成不完整发布包：" + ", ".join(missing))
+        print("请使用 Python 3.10–3.12 安装 requirements.txt 后重新打包。")
+        return 1
+
     # 清掉上次产物，避免旧文件混入
     for d in (DIST, BUILD):
         if os.path.isdir(d):
@@ -92,7 +101,8 @@ def run():
     shutil.copy2(exe_path, dest_exe)
 
     # 2) 发布配置 config.json（以项目真实配置为准，保留全部标定→templates 才真正链接到功能）
-    _write_packaged_config(os.path.join(release_dir, "config.json"))
+    if not _write_packaged_config(os.path.join(release_dir, "config.json")):
+        return 1
 
     # 3) templates\ 整目录随包（标定/识别要用）
     dest_templates = os.path.join(release_dir, "templates")
@@ -101,7 +111,9 @@ def run():
         n = sum(len(fs) for _, _, fs in os.walk(dest_templates))
         print(f"  [OK] 已随包 templates（{n} 个文件）：{dest_templates}")
     else:
-        print(f"  ! 没找到 templates 源目录，跳过：{TEMPLATES_SRC}")
+        # 全新源码还没有标定时也交付空目录，保持运行时同目录规则。
+        os.makedirs(dest_templates, exist_ok=True)
+        print(f"  [OK] 尚无标定，已创建空 templates：{dest_templates}")
 
     size_mb = os.path.getsize(dest_exe) / 1024 / 1024
     print("\n[OK] 打包完成！")
@@ -132,10 +144,10 @@ def _write_packaged_config(path):
         from mhxy.core.config import load_config, DEFAULT_CONFIG
     except Exception as e:
         print(f"  ! 生成 config.json 失败（导入 config 出错）：{e}")
-        return
+        return False
     try:
         # build.py 非 frozen 运行 -> config.DATA_ROOT=项目根 -> load_config 读的就是项目根 config.json
-        cfg = load_config()
+        cfg = copy.deepcopy(load_config())
     except Exception as e:
         print(f"  ! 读真实 config.json 失败，退回 DEFAULT_CONFIG：{e}")
         cfg = copy.deepcopy(DEFAULT_CONFIG)
@@ -143,9 +155,10 @@ def _write_packaged_config(path):
     # 交付默认演练：把各任务 dry_run 强制为 True（只动这一项，标定原样保留）
     coerced = []
     for name, tcfg in (cfg.get("tasks") or {}).items():
-        if isinstance(tcfg, dict) and tcfg.get("dry_run") is False:
+        if isinstance(tcfg, dict):
+            if tcfg.get("dry_run") is not True:
+                coerced.append(name)
             tcfg["dry_run"] = True
-            coerced.append(name)
 
     try:
         with open(path, "w", encoding="utf-8") as f:
@@ -153,8 +166,10 @@ def _write_packaged_config(path):
         print(f"  [OK] 已写入发布配置（保留标定，已链接 templates）：{path}")
         if coerced:
             print(f"       安全：以下任务 dry_run 已置演练（用户自行开实战）：{', '.join(coerced)}")
+        return True
     except OSError as e:
         print(f"  ! 写 config.json 失败：{e}")
+        return False
 
 
 if __name__ == "__main__":

@@ -10,7 +10,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from start import _wake_existing_windows
+from mhxy.gui.app import _wake_existing_windows
 from mhxy.core import accounts, window as win_mod
 from mhxy.gui.app import App, GeneralPage
 

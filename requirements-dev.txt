@@ -1,0 +1,4 @@
+# 历史 Tk 回归和 Spec00 对照测量保留在开发环境；发布包不包含 Tk。
+-r requirements.txt
+customtkinter
+pyinstaller
