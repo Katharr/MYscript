@@ -8,14 +8,9 @@ import copy
 
 from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtWidgets import (
-    QCheckBox,
-    QComboBox,
-    QHBoxLayout,
-    QLabel,
-    QPushButton,
-    QTextBrowser,
-    QWidget,
+    QCheckBox, QHBoxLayout, QLabel, QPushButton, QTextBrowser, QWidget, QVBoxLayout,
 )
+from .widgets import ComboBox as QComboBox
 
 from ..core import config as cfg_mod
 from ..core import leader_history as lh
@@ -27,9 +22,9 @@ from ..core.teaming import (
 )
 from ..tasks import get_task
 from ..tasks.base import dungeon_tasks
-from . import theme as T
 from .role_window_page import target_indices
 from .task_page import TaskPage
+from .widgets import FlowLayout
 
 
 class LeaderIdSelector(QWidget):
@@ -39,17 +34,21 @@ class LeaderIdSelector(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        layout = QHBoxLayout(self)
+        layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        row = QHBoxLayout()
         self.combo = QComboBox(self)
         self.combo.setObjectName("leaderIdCombo")
         self.combo.currentIndexChanged.connect(self._activate)
-        layout.addWidget(self.combo, 1)
+        row.addWidget(self.combo, 1)
         self.refresh_button = QPushButton("刷新", self)
         self.refresh_button.clicked.connect(self.refresh)
-        layout.addWidget(self.refresh_button)
+        row.addWidget(self.refresh_button)
+        row.addStretch(1)
+        layout.addLayout(row)
         self.status = QLabel("暂无队长 ID", self)
         self.status.setProperty("role", "muted")
+        self.status.setWordWrap(True)
         layout.addWidget(self.status)
         self.cfg = None
         self._loading = False
@@ -119,12 +118,6 @@ class DungeonPage(TaskPage):
 
     def _build_ui(self):
         super()._build_ui()
-        self.setStyleSheet(f"""
-            QComboBox, QTextBrowser {{ background: {T.BG}; color: {T.TEXT};
-                border: 1px solid {T.BORDER}; border-radius: 6px; padding: 6px; }}
-            QComboBox QAbstractItemView {{ background: {T.SURFACE}; color: {T.TEXT}; }}
-            QCheckBox {{ spacing: 8px; padding: 4px; }}
-        """)
 
         self.dungeon_combo = QComboBox(self)
         self.dungeon_combo.setObjectName("dungeonCombo")
@@ -141,21 +134,22 @@ class DungeonPage(TaskPage):
         self.live_mode.toggled.connect(self._save_options)
         self.add_control("运行模式", self.live_mode)
 
-        self.skip_team = QCheckBox("已组队（跳过组队，直接开刷）", self)
+        self.skip_team = QCheckBox("已组队", self)
+        self.skip_team.setToolTip("跳过组队，直接开刷")
         self.skip_team.toggled.connect(self._save_options)
         self.add_control("组队方式", self.skip_team)
-        self.auto_disband = QCheckBox("跑完解散队伍（所有号退队）", self)
+        self.auto_disband = QCheckBox("跑完解散队伍", self)
+        self.auto_disband.setToolTip("所有所选角色退出队伍")
         self.auto_disband.toggled.connect(self._save_options)
         self.add_control("收尾方式", self.auto_disband)
 
-        tools = QHBoxLayout()
+        tools = FlowLayout()
         self.refresh_button = QPushButton("刷新配置", self)
         self.refresh_button.clicked.connect(self.refresh_config)
         tools.addWidget(self.refresh_button)
         self.calibration_button = QPushButton("标定清单 / 状态", self)
         self.calibration_button.clicked.connect(self._open_calibration)
         tools.addWidget(self.calibration_button)
-        tools.addStretch()
         self.content_layout.addLayout(tools)
 
         leader_title = QLabel("队长 ID 库", self)

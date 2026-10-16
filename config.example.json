@@ -9,7 +9,7 @@
   ],
   "hotkey_stop": "ctrl+alt+F12",
   "failsafe_corner": "top_right",
-  "appearance": "dark",
+  "appearance": "light",
   "account_launch": {
     "launcher_path": "",
     "launcher_args": [],

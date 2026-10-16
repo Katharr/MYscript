@@ -8,7 +8,7 @@ from . import theme as T
 class AboutPage(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setProperty("role", "page")
+        T.set_role(self, "page")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(*([T.SPACE_LG] * 4))
         heading = QLabel("关于", self)

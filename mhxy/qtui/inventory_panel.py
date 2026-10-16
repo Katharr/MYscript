@@ -2,15 +2,15 @@
 
 import copy
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import (
-    QCheckBox, QHBoxLayout, QLabel, QPushButton,
-)
+from PySide6.QtCore import Signal
+from PySide6.QtWidgets import QCheckBox, QLabel, QPushButton
 
 from ..core import calibration_assets, config as cfg_mod
 from ..tasks.organize_bag import OrganizeBagTask
 from .inventory_items_dialog import InventoryItemsDialog
 from .task_page import TaskPage
+from .widgets import FlowLayout, set_window_summary
+from .window_tools import WindowTools
 
 
 class _ConfigTaskPage(TaskPage):
@@ -83,9 +83,7 @@ class _ConfigTaskPage(TaskPage):
         self._window_snapshot = (states, error)
         selected = target_indices(self.cfg.get("targets") or {}, len(states), apply_limit=True)
         labels = [states[i].label for i in selected if states[i].status != "failed"]
-        self.window_status.setText("窗口检测失败：" + error if error else
-                                   "已连接：" + "、".join(labels) if labels else "未连接目标窗口")
-        self.window_status.setWordWrap(True)
+        set_window_summary(self.window_status, labels, error)
 
     def toggle_run(self):
         if self._start_pending or self._runtime_running():
@@ -132,11 +130,14 @@ class InventoryPanel(_ConfigTaskPage):
 
     def _build_ui(self):
         super()._build_ui()
-        self.auto_organize = QCheckBox("背包满时自动整理（共享设置）", self)
+        self.window_tools = WindowTools(self)
+        self.body.layout().insertWidget(0, self.window_tools)
+        self.auto_organize = QCheckBox("背包满时自动整理", self)
+        self.auto_organize.setToolTip("所有任务共享此设置")
         self.auto_organize.toggled.connect(self._save_auto)
         self.add_control("自动整理", self.auto_organize)
         self._edit_controls.append(self.auto_organize)
-        controls = QHBoxLayout()
+        controls = FlowLayout()
         self.items_button = QPushButton("管理物品", self)
         self.items_button.clicked.connect(self.open_items)
         self.calibrate_button = QPushButton("标定（整理背包）", self)
@@ -150,10 +151,7 @@ class InventoryPanel(_ConfigTaskPage):
         self.summary = QLabel(self)
         self.summary.setWordWrap(True)
         self.content_layout.addWidget(self.summary)
-        hint = QLabel("自动整理沿用各任务现有的背包维护入口；演练只识别当前一屏。\n"
-                      "运行前请配置 open_bag 快捷键，并将游戏包裹保持可见。", self)
-        hint.setWordWrap(True)
-        self.content_layout.addWidget(hint)
+        self.items_button.setToolTip("运行前配置 open_bag 快捷键，并将游戏包裹保持可见。")
         self.content_layout.addStretch()
 
     def refresh_config(self):

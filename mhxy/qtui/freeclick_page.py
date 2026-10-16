@@ -4,13 +4,15 @@ import copy
 from uuid import uuid4
 
 from PySide6.QtCore import QMimeData, Qt
-from PySide6.QtWidgets import QComboBox, QHBoxLayout, QInputDialog, QLabel, QPushButton
+from PySide6.QtWidgets import QInputDialog, QLabel, QPushButton
+from .widgets import ComboBox as QComboBox
 
 from ..core import calib_profiles as calib, config as cfg_mod, vision
 from ..tasks.freeclick import FreeClickTask
 from .inventory_items_dialog import ItemsModel, capture_item, items_view
 from .inventory_panel import _ConfigTaskPage
 from . import theme as T
+from .widgets import FlowLayout
 
 
 class _StepsModel(ItemsModel):
@@ -78,21 +80,22 @@ class FreeClickPage(_ConfigTaskPage):
 
     def _build_ui(self):
         super()._build_ui()
-        self.setStyleSheet(f"QTableView, QComboBox {{ background: {T.BG}; color: {T.TEXT}; }} "
-                          f"QHeaderView::section {{ background: {T.SURFACE}; color: {T.TEXT_DIM}; }}")
-        bar = QHBoxLayout()
+        bar = FlowLayout()
         self.list_combo = QComboBox(self)
         self.list_combo.currentIndexChanged.connect(self._select_list)
-        bar.addWidget(self.list_combo, 1)
+        self.list_combo.setMinimumWidth(240)
+        self.content_layout.addWidget(self.list_combo)
         self._edit_controls.append(self.list_combo)
         for text, callback in (("新建清单", self.create_list), ("重命名清单", self.rename_list),
                                ("删除清单", self.delete_list)):
             button = QPushButton(text, self)
+            if text == "删除清单":
+                T.set_role(button, "danger")
             button.clicked.connect(callback)
             bar.addWidget(button)
             self._edit_controls.append(button)
         self.content_layout.addLayout(bar)
-        tools = QHBoxLayout()
+        tools = FlowLayout()
         for text, callback in (("框选加截图", self.add_shot), ("重新标定", self.recalibrate),
                                ("上移", lambda: self.move_step(-1)), ("下移", lambda: self.move_step(1)),
                                ("删除步骤", self.delete_step), ("刷新配置", self.refresh_config)):
@@ -101,14 +104,13 @@ class FreeClickPage(_ConfigTaskPage):
             tools.addWidget(button)
             self._edit_controls.append(button)
         self.content_layout.addLayout(tools)
-        region_tools = QHBoxLayout()
+        region_tools = FlowLayout()
         for text, callback in (("框选识别区", lambda: self.set_region(False)),
                                ("识别区恢复整窗", lambda: self.set_region(True))):
             button = QPushButton(text, self)
             button.clicked.connect(callback)
             region_tools.addWidget(button)
             self._edit_controls.append(button)
-        region_tools.addStretch()
         self.content_layout.addLayout(region_tools)
         self.model = _StepsModel(self, self.edit_step, self.reorder_step)
         self.view = items_view(self, self.model)
@@ -119,9 +121,7 @@ class FreeClickPage(_ConfigTaskPage):
         self.view.setDragDropOverwriteMode(False)
         self.view.setDefaultDropAction(Qt.DropAction.MoveAction)
         self.content_layout.addWidget(self.view, 1)
-        hint = QLabel("按清单顺序循环识别；拖动行或点上移/下移排序，双击名称编辑。", self)
-        hint.setWordWrap(True)
-        self.content_layout.addWidget(hint)
+        self.view.setToolTip("拖动行或点上移/下移排序，双击名称编辑。")
         self.region_status = QLabel(self)
         self.content_layout.addWidget(self.region_status)
 

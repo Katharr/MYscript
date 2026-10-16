@@ -4,12 +4,15 @@ import uuid
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QFileDialog, QFormLayout, QHBoxLayout, QInputDialog,
-    QLabel, QLineEdit, QPushButton, QScrollArea, QVBoxLayout, QWidget,
+    QCheckBox, QFileDialog, QHBoxLayout, QInputDialog, QLabel, QLayout, QLineEdit,
+    QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
+from .widgets import ComboBox as QComboBox, FormLayout as QFormLayout
 
 from ..core import config as cfg_mod
 from . import theme as T
+from .widgets import FlowLayout, set_field_width
+from .window_tools import WindowTools
 
 
 def target_indices(targets, count, *, apply_limit=False):
@@ -40,16 +43,8 @@ class RoleWindowPage(QWidget):
         self._busy = False
         self.captain_ns = "teaming"
         self.setObjectName("page_role_window")
-        self.setProperty("role", "page")
+        T.set_role(self, "page")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setStyleSheet(f"""
-            QScrollArea {{ background: {T.SURFACE}; border: 1px solid {T.BORDER}; border-radius: 8px; }}
-            QWidget#windowBody, QWidget#profileBody {{ background: {T.SURFACE}; }}
-            QLineEdit, QComboBox {{ background: {T.BG}; border: 1px solid {T.BORDER};
-                                  border-radius: 6px; padding: 6px; min-height: 22px; }}
-            QComboBox QAbstractItemView {{ background: {T.SURFACE}; color: {T.TEXT}; }}
-            QCheckBox {{ spacing: 8px; padding: 6px; }}
-        """)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(T.SPACE_LG, T.SPACE_LG, T.SPACE_LG, T.SPACE_LG)
         layout.setSpacing(T.SPACE_MD)
@@ -65,12 +60,28 @@ class RoleWindowPage(QWidget):
         self.refresh_button.clicked.connect(self.refresh_requested.emit)
         header.addWidget(self.refresh_button)
         layout.addLayout(header)
+        self.window_tools = WindowTools(self)
+        layout.addWidget(self.window_tools)
         self.status = QLabel("", self)
         self.status.setTextFormat(Qt.TextFormat.PlainText)
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
 
+        self.body_scroll = QScrollArea(self)
+        self.body_scroll.setWidgetResizable(True)
+        self.body_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        body = QWidget(self.body_scroll)
+        body.setObjectName("taskBody")
+        content = QVBoxLayout(body)
+        content.setContentsMargins(0, 0, 4, 0)
+        content.setSpacing(T.SPACE_MD)
+        content.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+        self.body_scroll.setWidget(body)
+        layout.addWidget(self.body_scroll, 1)
+        layout = content
+
         self.window_area = QScrollArea(self)
+        self.window_area.setMinimumHeight(140)
         self.window_area.setWidgetResizable(True)
         self.window_body = QWidget(self.window_area)
         self.window_body.setObjectName("windowBody")
@@ -85,8 +96,10 @@ class RoleWindowPage(QWidget):
         self.captain_combo = QComboBox(self)
         selection.addWidget(self.captain_combo, 1)
         self.save_button = QPushButton("保存选择", self)
+        T.set_role(self.save_button, "primary")
         self.save_button.clicked.connect(self.save_selection)
         selection.addWidget(self.save_button)
+        selection.addStretch(1)
         layout.addWidget(self.selection_panel)
         self.selection_panel.hide()
 
@@ -94,16 +107,19 @@ class RoleWindowPage(QWidget):
         launch_layout = QVBoxLayout(self.launch_panel)
         launch_layout.setContentsMargins(0, 0, 0, 0)
         form = QFormLayout()
-        path_row = QHBoxLayout()
+        path_row = QVBoxLayout()
         self.path = QLineEdit((cfg.get("account_launch") or {}).get("launcher_path", ""), self)
+        set_field_width(self.path, "path")
         self.path.editingFinished.connect(self.save_path)
-        path_row.addWidget(self.path, 1)
+        path_row.addWidget(self.path)
+        path_actions = FlowLayout()
         self.browse_button = QPushButton("浏览…", self)
         self.browse_button.clicked.connect(self.browse)
-        path_row.addWidget(self.browse_button)
+        path_actions.addWidget(self.browse_button)
         self.detect_button = QPushButton("自动检测", self)
         self.detect_button.clicked.connect(self.detect_launcher_requested.emit)
-        path_row.addWidget(self.detect_button)
+        path_actions.addWidget(self.detect_button)
+        path_row.addLayout(path_actions)
         form.addRow("启动器", path_row)
         launch_layout.addLayout(form)
         self.profile_body = QWidget(self)
@@ -112,7 +128,7 @@ class RoleWindowPage(QWidget):
         self.profile_rows.setContentsMargins(0, 0, 0, 0)
         profiles = QScrollArea(self)
         profiles.setWidgetResizable(True)
-        profiles.setMinimumHeight(90)
+        profiles.setMinimumHeight(120)
         profiles.setWidget(self.profile_body)
         launch_layout.addWidget(profiles)
         launch_actions = QHBoxLayout()
@@ -125,6 +141,7 @@ class RoleWindowPage(QWidget):
         launch_actions.addWidget(self.live)
         launch_actions.addStretch()
         self.run_button = QPushButton("开始启动登录", self)
+        T.set_role(self.run_button, "primary")
         self.run_button.clicked.connect(self.launch_requested.emit)
         launch_actions.addWidget(self.run_button)
         launch_layout.addLayout(launch_actions)
@@ -154,6 +171,7 @@ class RoleWindowPage(QWidget):
             text = state.label + (" · 已最小化" if state.minimized else "")
             if box.text() != text:
                 box.setText(text)
+            box.setToolTip(text)
         self.update_captains()
         self.save_button.setEnabled(bool(states) and not self._busy and not error)
         self.window_area.setVisible(bool(states))
@@ -254,6 +272,7 @@ class RoleWindowPage(QWidget):
             box.toggled.connect(lambda enabled, pid=profile["id"]: self.set_profile_enabled(pid, enabled))
             layout.addWidget(box, 1)
             remove = QPushButton("删除", row)
+            T.set_role(remove, "danger")
             remove.clicked.connect(lambda checked=False, pid=profile["id"]: self.delete_profile(pid))
             layout.addWidget(remove)
             self.profile_rows.addWidget(row)

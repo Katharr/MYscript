@@ -10,6 +10,7 @@ import unittest
 from unittest.mock import patch
 
 from PySide6.QtCore import QSettings
+from PySide6.QtGui import QPalette
 from PySide6.QtTest import QSignalSpy
 
 from mhxy.core import config as cfg_mod
@@ -122,19 +123,25 @@ class QtSettingsLogFloatTests(unittest.TestCase):
 
     def test_settings_apply_light_theme_to_existing_and_new_pages(self):
         window = self.window()
-        original_style = window.role_page.styleSheet()
+        original_appearance = self.app.property("appearance")
+        original_color = window.role_page.palette().color(QPalette.ColorRole.Window)
         window.show_page("settings")
         settings = window.pages["settings"]
         settings.appearance.setCurrentIndex(settings.appearance.findData("light"))
         self.assertTrue(settings.save())
         self.assertEqual(self.app.property("appearance"), "light")
-        self.assertIn("#ffffff", window.role_page.styleSheet())
+        window.role_page.ensurePolished()
+        self.assertEqual(window.role_page.palette().color(QPalette.ColorRole.Window).name(), "#ffffff")
         window.show_page("daily")
-        self.assertIn("#f2f4f8", window.pages["daily"].styleSheet())
+        window.pages["daily"].ensurePolished()
+        self.assertEqual(window.pages["daily"].palette().color(QPalette.ColorRole.Window).name(), "#ffffff")
         window.show_page("settings")
         settings.appearance.setCurrentIndex(settings.appearance.findData("dark"))
         self.assertTrue(settings.save())
-        self.assertEqual(window.role_page.styleSheet(), original_style)
+        self.assertEqual(window.role_page.palette().color(QPalette.ColorRole.Window).name(), "#222d3d")
+        settings.appearance.setCurrentIndex(settings.appearance.findData(original_appearance))
+        self.assertTrue(settings.save())
+        self.assertEqual(window.role_page.palette().color(QPalette.ColorRole.Window), original_color)
 
     def test_log_filter_preserves_other_sources_and_clear_clears_history(self):
         panel = self.widget(LogPanel(collapsed=False, max_lines=4))

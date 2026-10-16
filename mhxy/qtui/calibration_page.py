@@ -3,13 +3,13 @@
 import copy
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import (
-    QComboBox, QHBoxLayout, QInputDialog, QLabel, QPushButton, QVBoxLayout, QWidget,
-)
+from PySide6.QtWidgets import QInputDialog, QLabel, QPushButton, QVBoxLayout, QWidget
+from .widgets import ComboBox as QComboBox
 
 from ..core import calib_profiles as calib, config as cfg_mod, window as win_mod
 from .calibration_dialog import CalibrationDialog, calibration_tasks, resolve_profile
 from . import theme as T
+from .widgets import FlowLayout
 
 
 class CalibrationPage(QWidget):
@@ -21,28 +21,29 @@ class CalibrationPage(QWidget):
         self.cfg = copy.deepcopy(cfg) if cfg is not None else cfg_mod.load_config()
         self._editor = None
         self.setObjectName("page_calibration")
-        self.setProperty("role", "page")
-        self.setStyleSheet(f"QComboBox {{ background: {T.BG}; color: {T.TEXT}; padding: 6px; }} "
-                          f"QComboBox QAbstractItemView {{ background: {T.SURFACE}; color: {T.TEXT}; }}")
+        T.set_role(self, "page")
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(*([T.SPACE_LG] * 4))
+        layout.setSpacing(T.SPACE_MD)
         title = QLabel("标定中心", self)
         title.setProperty("role", "heading")
         layout.addWidget(title)
-        hint = QLabel("最多保留三个尺寸组；激活组为绿色。切换尺寸组会更新识别基准，模板文件共用。", self)
-        hint.setWordWrap(True)
-        layout.addWidget(hint)
-        profiles = QHBoxLayout()
+        profiles = FlowLayout()
         self.profile_buttons = []
         for index in range(calib.MAX_PROFILES):
             button = QPushButton(self)
+            button.setCheckable(True)
+            button.setAutoExclusive(True)
+            T.set_role(button, "profile")
             button.clicked.connect(lambda checked=False, i=index: self.activate_profile(i))
             profiles.addWidget(button)
             self.profile_buttons.append(button)
         layout.addLayout(profiles)
-        tools = QHBoxLayout()
+        tools = FlowLayout()
         self.record_button = QPushButton("记录当前窗口尺寸", self)
         self.record_button.clicked.connect(self.record_size)
         self.delete_button = QPushButton("删除当前组（保留模板）", self)
+        T.set_role(self.delete_button, "danger")
         self.delete_button.clicked.connect(self.delete_active)
         self.refresh_button = QPushButton("刷新配置", self)
         self.refresh_button.clicked.connect(self.refresh_config)
@@ -53,10 +54,11 @@ class CalibrationPage(QWidget):
         for name, title in calibration_tasks():
             self.tasks.addItem(title, name)
         layout.addWidget(self.tasks)
-        self.open_button = QPushButton("打开标定（区域 / 模板 / 装备 / 物品）", self)
+        self.open_button = QPushButton("打开标定", self)
+        T.set_role(self.open_button, "primary")
         self.open_button.clicked.connect(self.open_task)
         layout.addWidget(self.open_button)
-        self.status = QLabel("将游戏目标窗口放到前面，再打开标定并框选。取消框选不保存。", self)
+        self.status = QLabel("", self)
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
         layout.addStretch()
@@ -81,8 +83,7 @@ class CalibrationPage(QWidget):
             prof = self.profiles[index] if index < len(self.profiles) else None
             button.setEnabled(prof is not None)
             button.setText(f"{prof['label']} · {calib.size_text(prof)}" if prof else "未记录")
-            button.setStyleSheet("QPushButton { color: "
-                                + ("#45d6a2" if prof and prof["id"] == aid else "#8a93a3") + "; }")
+            button.setChecked(bool(prof and prof["id"] == aid))
         self.delete_button.setEnabled(bool(self.profiles))
 
     def _publish(self, cfg):

@@ -8,15 +8,16 @@ from uuid import uuid4
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, Signal
 from PySide6.QtGui import QIcon, QImage, QPixmap
 from PySide6.QtWidgets import (
-    QComboBox, QDialog, QDialogButtonBox, QHBoxLayout, QHeaderView,
-    QInputDialog, QLabel, QPushButton, QStyledItemDelegate, QTableView,
-    QAbstractItemView, QVBoxLayout, QWidget,
+    QDialog, QDialogButtonBox, QInputDialog, QLabel, QPushButton, QStyledItemDelegate,
+    QAbstractItemView, QVBoxLayout,
 )
+from .widgets import ComboBox as QComboBox, TableView as QTableView
 
 from ..core import calib_profiles as calib, calibration_assets, config as cfg_mod, vision
 from ..core.inventory import ACTION_LABELS, ACTION_ORDER
 from .sniper_page import _template_signature
 from . import theme as T
+from .widgets import FlowLayout
 
 
 def _load_item_thumb(path):
@@ -76,11 +77,12 @@ class ItemsModel(QAbstractTableModel):
             if col == 1:
                 return "" if self.cache.get(_template_signature(item.get("template"))) else "未标定"
             if col == 2:
-                return item.get("template", "")
+                path = str(item.get("template") or "")
+                return path if role == Qt.ItemDataRole.EditRole else Path(path).name
             action = item.get("action", "use")
             return action if role == Qt.ItemDataRole.EditRole else ACTION_LABELS.get(action, action)
         if role == Qt.ItemDataRole.ToolTipRole:
-            return str(item.get("template") or "图片缺失，可重新截图")
+            return str(item.get("name") or "") + "\n" + str(item.get("template") or "图片缺失，可重新截图")
 
     def flags(self, index):
         flags = super().flags(index)
@@ -187,9 +189,8 @@ def items_view(parent, model):
     view.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
     view.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
     view.setIconSize(QSize(180, 48))
-    view.verticalHeader().setDefaultSectionSize(56)
-    view.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-    view.horizontalHeader().setStretchLastSection(True)
+    view.verticalHeader().setDefaultSectionSize(72)
+    view.set_column_widths((144, 160, 96) if model.actions else (144, 160))
     if model.actions:
         view.setItemDelegateForColumn(3, _ActionDelegate(view))
     return view
@@ -204,22 +205,21 @@ class InventoryItemsDialog(QDialog):
         self.setWindowTitle("整理背包 · 物品清单")
         self.resize(800, 560)
         self._adding = False
-        self.setStyleSheet(f"QDialog {{ background: {T.SURFACE}; }} "
-                          f"QTableView, QComboBox {{ background: {T.BG}; color: {T.TEXT}; }} "
-                          f"QHeaderView::section {{ background: {T.SURFACE}; color: {T.TEXT_DIM}; }}")
         layout = QVBoxLayout(self)
-        tools = QHBoxLayout()
+        tools = FlowLayout()
         for text, callback in (("添加一个", lambda: self.add_items(False)),
                                ("批量添加", lambda: self.add_items(True)),
                                ("重新截图", self.recalibrate), ("删除", self.delete_item)):
             button = QPushButton(text, self)
+            if text == "删除":
+                T.set_role(button, "danger")
             button.clicked.connect(callback)
             tools.addWidget(button)
         layout.addLayout(tools)
-        layout.addWidget(QLabel("双击名称或动作即可编辑；每项修改保存后立即生效。", self))
         self.model = ItemsModel(self, self.edit_item, actions=True)
         self.view = items_view(self, self.model)
-        layout.addWidget(self.view)
+        self.view.setToolTip("双击名称或动作编辑")
+        layout.addWidget(self.view, 1)
         self.status = QLabel(self)
         self.status.setWordWrap(True)
         layout.addWidget(self.status)

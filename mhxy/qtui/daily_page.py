@@ -3,10 +3,11 @@
 import copy
 import threading
 
-from PySide6.QtCore import Qt, Signal, Slot
+from PySide6.QtCore import QRect, QSize, Qt, Signal, Slot
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QAbstractItemView, QDoubleSpinBox, QLabel, QListWidget, QListWidgetItem,
-    QPushButton, QTextBrowser,
+    QAbstractItemView, QLabel, QListWidget, QListWidgetItem,
+    QPushButton, QTextBrowser, QStyle, QStyledItemDelegate, QStyleOptionViewItem,
 )
 
 from ..core import config as cfg_mod
@@ -15,6 +16,43 @@ from ..core.input_session import InputSession
 from ..tasks.daily import CHAINABLE, DailyTask
 from . import theme as T
 from .task_page import TaskPage
+from .widgets import DoubleSpinBox as QDoubleSpinBox
+
+
+class _DailyRowDelegate(QStyledItemDelegate):
+    """保留原生选择、勾选与排序，仅把任务信息按列绘制。"""
+
+    ROW_ROLE = int(Qt.ItemDataRole.UserRole) + 1
+
+    def sizeHint(self, option, index):
+        return QSize(240, max(T.ROW_HEIGHT, option.fontMetrics.height() + 24))
+
+    def paint(self, painter, option, index):
+        row = index.data(self.ROW_ROLE)
+        if not row:
+            return super().paint(painter, option, index)
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        opt.text = ""
+        style = opt.widget.style()
+        style.drawControl(QStyle.ControlElement.CE_ItemViewItem, opt, painter, opt.widget)
+        area = style.subElementRect(QStyle.SubElement.SE_ItemViewItemText, opt, opt.widget).adjusted(8, 0, -10, 0)
+        mode_width = max(60, opt.fontMetrics.horizontalAdvance(row[2]) + 12)
+        status_width = min(160, max(110, opt.fontMetrics.horizontalAdvance(row[3]) + 12))
+        name_width = max(40, area.width() - mode_width - status_width - 48)
+        widths = (28, name_width, mode_width, status_width)
+        colors = (T.TEXT_DIM, T.TEXT, T.TEXT_DIM,
+                  T.WARNING if row[3] in ("缺少标定", "未选窗口") else T.TEXT_DIM)
+        painter.save()
+        painter.setClipRect(option.rect)
+        x = area.x()
+        for text, width, color in zip(row, widths, colors):
+            painter.setPen(QColor(color))
+            painter.drawText(QRect(x, area.y(), width, area.height()),
+                             Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                             opt.fontMetrics.elidedText(text, Qt.TextElideMode.ElideRight, width - 8))
+            x += width + 4
+        painter.restore()
 
 
 def normalize_steps(stored):
@@ -88,15 +126,6 @@ class DailyPage(TaskPage):
 
     def _build_ui(self):
         super()._build_ui()
-        self.setStyleSheet(f"""
-            QListWidget, QTextBrowser, QPlainTextEdit, QDoubleSpinBox {{
-                background: {T.BG}; color: {T.TEXT};
-                border: 1px solid {T.BORDER}; border-radius: 8px; padding: 6px;
-            }}
-            QListWidget::item {{ padding: 6px 8px; border-radius: 6px; }}
-            QListWidget::item:selected {{ background: {T.BUTTON_HOVER}; color: {T.ACCENT}; }}
-            QToolButton {{ background: {T.SURFACE}; color: {T.TEXT}; padding: 6px; }}
-        """)
         self.summary_ready.connect(self._apply_summary, Qt.ConnectionType.QueuedConnection)
         self.time_limit = QDoubleSpinBox(self)
         self.time_limit.setRange(0, 999999)
@@ -104,21 +133,20 @@ class DailyPage(TaskPage):
         self.time_limit.setSuffix(" 分钟")
         self.time_limit.setSpecialValueText("不限")
         self.time_limit.editingFinished.connect(self._save_edits)
-        self.add_control("整体时间上限（0 = 不限）", self.time_limit)
+        self.add_control("整体时间上限", self.time_limit)
         self.refresh_button = QPushButton("刷新配置", self)
         self.refresh_button.setToolTip("重新读取配置并在后台检查本次执行条件")
         self.refresh_button.clicked.connect(self.refresh_config)
         self.layout().itemAt(0).layout().insertWidget(1, self.refresh_button)
         self.content_layout.setSpacing(T.SPACE_SM)
-        hint = QLabel("拖动任务行排序，勾选启用。模式与参数沿用各任务页；演练任务将跳过。", self)
-        hint.setWordWrap(True)
-        self.content_layout.addWidget(hint)
         self.steps_list = QListWidget(self)
+        self.steps_list.setItemDelegate(_DailyRowDelegate(self.steps_list))
+        self.steps_list.setToolTip("拖动任务行排序，勾选启用。模式与参数沿用各任务页。")
         self.steps_list.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
         self.steps_list.setDefaultDropAction(Qt.DropAction.MoveAction)
         self.steps_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.steps_list.setSpacing(4)
-        self.steps_list.setMinimumHeight(64)
+        self.steps_list.setSpacing(0)
+        self.steps_list.setMinimumHeight(220)
         self.steps_list.itemChanged.connect(self._steps_changed)
         self.steps_list.model().rowsMoved.connect(self._steps_changed)
         self.steps_list.currentItemChanged.connect(self._show_details)
@@ -127,8 +155,9 @@ class DailyPage(TaskPage):
         self.summary_label.setWordWrap(True)
         self.content_layout.addWidget(self.summary_label)
         self.details = QTextBrowser(self)
-        self.details.setMinimumHeight(60)
-        self.details.setMaximumHeight(72)
+        self.details.setMinimumHeight(80)
+        self.details.setMaximumHeight(120)
+        self.details.hide()
         self.details.setPlaceholderText("选择任务行查看具体缺失项")
         self.content_layout.addWidget(self.details)
 
@@ -185,10 +214,13 @@ class DailyPage(TaskPage):
             row = self._summary_rows.get(step["task"], {})
             order += int(step["enabled"])
             number = str(order) if step["enabled"] else "·"
+            item.setData(_DailyRowDelegate.ROW_ROLE, [number, str(row.get("title", step["task"])),
+                         str(row.get("mode", "检查中…")),
+                         str(row.get("result", "检查中…") if step["enabled"] else "已停用")])
             item.setText(f"{number}  {row.get('title', step['task'])}  ·  "
                          f"{row.get('mode', '检查中…')}  ·  "
                          f"{row.get('result', '检查中…') if step['enabled'] else '已停用'}")
-            item.setToolTip("\n".join(row.get("problems", [])))
+            item.setToolTip("\n".join([str(row.get("title", step["task"])), *row.get("problems", [])]))
         self.steps_list.blockSignals(False)
 
     def _request_summary(self):
@@ -232,8 +264,7 @@ class DailyPage(TaskPage):
         execute = sum(row["result"] == "将执行" for row in rows)
         dry = sum(row["result"] == "演练将跳过" for row in rows)
         missing = sum(row["result"] in ("缺少标定", "未选窗口") for row in rows)
-        self.summary_label.setText(f"本次：将执行 {execute} 项，演练将跳过 {dry} 项，缺少条件 {missing} 项。"
-                                   "缺少条件的任务将按原策略跳过。")
+        self.summary_label.setText(f"执行 {execute} 项 · 演练跳过 {dry} 项 · 缺少条件 {missing} 项")
         if self.steps_list.currentRow() < 0 and self.steps_list.count():
             self.steps_list.setCurrentRow(0)
         self._show_details()
@@ -242,6 +273,7 @@ class DailyPage(TaskPage):
         item = self.steps_list.currentItem()
         row = self._summary_rows.get(item.data(Qt.ItemDataRole.UserRole), {}) if item else {}
         self.details.setPlainText("\n".join([row.get("title", ""), *row.get("problems", [])]))
+        self.details.setVisible(bool(row.get("problems")))
 
     def _make_runner(self):
         # TaskPage 的 worker 调 runtime.start；本计划也在同一个受保护的

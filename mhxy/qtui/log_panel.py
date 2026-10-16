@@ -9,15 +9,9 @@ from collections import Counter
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
-    QComboBox,
-    QHBoxLayout,
-    QLabel,
-    QPlainTextEdit,
-    QPushButton,
-    QToolButton,
-    QVBoxLayout,
-    QWidget,
+    QHBoxLayout, QLabel, QPlainTextEdit, QPushButton, QToolButton, QVBoxLayout, QWidget,
 )
+from .widgets import ComboBox as QComboBox, set_field_width
 
 from . import theme as T
 
@@ -29,16 +23,6 @@ class LogPanel(QWidget):
     在每行文本中，级别只影响颜色。``append_event`` 可直接接收
     ``RuntimeService.drain_logs`` 返回的四元组。
     """
-
-    LEVEL_COLORS = {
-        "debug": T.TEXT_DIM,
-        "info": T.TEXT,
-        "hit": "#58c98b",
-        "success": "#58c98b",
-        "warn": "#e3b65a",
-        "warning": "#e3b65a",
-        "error": "#ed7474",
-    }
 
     cleared = Signal()
     collapsed_changed = Signal(bool)
@@ -73,6 +57,7 @@ class LogPanel(QWidget):
         header.addWidget(self.title_label)
         header.addStretch(1)
         self.source_filter = QComboBox(self)
+        set_field_width(self.source_filter, "short")
         self.source_filter.addItem("全部来源", None)
         self.source_filter.setMinimumWidth(110)
         self.source_filter.currentIndexChanged.connect(self._render)
@@ -96,6 +81,13 @@ class LogPanel(QWidget):
         body.addLayout(header)
         body.addWidget(self.text_edit)
         self._apply_collapsed()
+        T.events().changed.connect(self._theme_changed)
+
+    def _theme_changed(self):
+        if self._collapsed:
+            self._dirty = True
+        else:
+            self._render()
 
     @property
     def is_collapsed(self):
@@ -174,9 +166,7 @@ class LogPanel(QWidget):
         if not self.text_edit.document().isEmpty():
             cursor.insertBlock()
         fmt = QTextCharFormat()
-        color = (T.TEXT if level == "info" else T.TEXT_DIM if level == "debug"
-                 else self.LEVEL_COLORS.get(str(level).lower(), T.TEXT))
-        fmt.setForeground(QColor(color))
+        fmt.setForeground(QColor(T.log_color(level)))
         cursor.insertText(line, fmt)
         if standalone:
             self.text_edit.setTextCursor(cursor)

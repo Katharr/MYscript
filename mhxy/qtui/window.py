@@ -13,7 +13,9 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMessageBox,
     QPushButton,
+    QScrollArea,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -30,6 +32,7 @@ class _Bridge(QObject):
     windows_ready = Signal(object, str)
     launch_ready = Signal(bool, object)
     launcher_ready = Signal(object, str)
+    window_action_ready = Signal(str, object, str)
 
 
 def scan_windows(cfg):
@@ -57,6 +60,29 @@ def scan_windows(cfg):
     return states
 
 
+def run_window_action(cfg, action):
+    """显式窗口操作；普通定时扫描仍只读身份缓存。"""
+    from ..core import accounts, window as win_mod
+
+    win_mod.set_game_process(cfg.get("window_process") or win_mod.DEFAULT_GAME_PROCESS_SPEC)
+    title, offset = cfg.get("window_title", "梦幻西游"), cfg.get("window_offset", [0, 0])
+    if action == "close":
+        return win_mod.close_all(title, offset)
+    if action != "wake":
+        raise ValueError("未知窗口操作")
+    accounts.set_game_dir(cfg.get("game_dir"))
+    accounts.set_launcher_path((cfg.get("account_launch") or {}).get("launcher_path"))
+
+    def identify(win):
+        # 切过角色的窗口需两次一致观察才更新身份；首次识别后第二次会命中缓存。
+        accounts.labels_for([win])
+        accounts.labels_for([win])
+
+    total, woken = win_mod.wake_all_to_front(title, offset, on_woken=identify)
+    states = scan_windows(cfg)
+    return total, woken, sum(s.status == "ready" for s in states), accounts.ocr_status()
+
+
 class MainWindow(QMainWindow):
     NAV = (
         ("role_window", "角色与窗口"),
@@ -81,12 +107,16 @@ class MainWindow(QMainWindow):
         self.nav_buttons: dict[str, QPushButton] = {}
         self.current_page: str | None = None
         self.cfg = cfg_mod.load_config()
-        T.apply_theme(QApplication.instance(), self.cfg.get("appearance", "dark"))
+        T.apply_theme(QApplication.instance(), self.cfg.get("appearance", "light"))
         self.window_states = []
         self._closed = False
         self._scanning = False
         self._detecting_launcher = False
         self._launching = False
+        self._window_action = ""
+        self._window_action_message = ""
+        self._window_action_level = "info"
+        self._rescan_after_action = False
         self._hotkey_down = False
         self.runner = None
         self._runtime = None
@@ -95,6 +125,7 @@ class MainWindow(QMainWindow):
         self.bridge.windows_ready.connect(self._apply_windows, Qt.ConnectionType.QueuedConnection)
         self.bridge.launch_ready.connect(self._launch_result, Qt.ConnectionType.QueuedConnection)
         self.bridge.launcher_ready.connect(self._launcher_result, Qt.ConnectionType.QueuedConnection)
+        self.bridge.window_action_ready.connect(self._window_action_result, Qt.ConnectionType.QueuedConnection)
         self.setWindowTitle("梦幻小助手 · Qt")
         self.resize(*T.WINDOW_SIZE)
         self.setMinimumSize(*T.MIN_WINDOW_SIZE)
@@ -102,20 +133,29 @@ class MainWindow(QMainWindow):
         shell = QWidget(self)
         shell.setObjectName("shell")
         layout = QHBoxLayout(shell)
-        layout.setContentsMargins(0, 0, T.SPACE_LG, 0)
-        layout.setSpacing(T.SPACE_LG)
+        layout.setContentsMargins(0, 0, T.SPACE_MD, 0)
+        layout.setSpacing(T.SPACE_MD)
         self.setCentralWidget(shell)
 
         navigation = QFrame(shell)
         navigation.setObjectName("navigation")
         navigation.setFixedWidth(T.NAV_WIDTH)
         nav_layout = QVBoxLayout(navigation)
-        nav_layout.setContentsMargins(T.SPACE_SM, T.SPACE_LG, T.SPACE_SM, T.SPACE_MD)
+        nav_layout.setContentsMargins(T.SPACE_SM, T.SPACE_MD, T.SPACE_SM, T.SPACE_MD)
         nav_layout.setSpacing(T.SPACE_SM)
         brand = QLabel("梦幻小助手", navigation)
         brand.setProperty("role", "brand")
         nav_layout.addWidget(brand)
-        nav_layout.addSpacing(T.SPACE_MD)
+        nav_scroll = QScrollArea(navigation)
+        nav_scroll.setWidgetResizable(True)
+        nav_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        nav_body = QWidget(nav_scroll)
+        nav_body.setObjectName("navigationBody")
+        buttons_layout = QVBoxLayout(nav_body)
+        buttons_layout.setContentsMargins(0, 0, 0, 0)
+        buttons_layout.setSpacing(4)
+        nav_scroll.setWidget(nav_body)
+        nav_layout.addWidget(nav_scroll, 1)
         self._nav_group = QButtonGroup(self)
         self._nav_group.setExclusive(True)
         for key, title in self.NAV:
@@ -125,8 +165,8 @@ class MainWindow(QMainWindow):
             button.clicked.connect(lambda checked=False, page_key=key: self.show_page(page_key))
             self._nav_group.addButton(button)
             self.nav_buttons[key] = button
-            nav_layout.addWidget(button)
-        nav_layout.addStretch()
+            buttons_layout.addWidget(button)
+        buttons_layout.addStretch()
         self.float_button = QPushButton("悬浮信息条", navigation)
         self.float_button.clicked.connect(self.collapse_to_float)
         nav_layout.addWidget(self.float_button)
@@ -134,10 +174,11 @@ class MainWindow(QMainWindow):
 
         self.stack = QStackedWidget(shell)
         stack_layout = QVBoxLayout()
-        stack_layout.setContentsMargins(0, T.SPACE_LG, 0, T.SPACE_LG)
+        stack_layout.setContentsMargins(0, T.SPACE_MD, 0, T.SPACE_MD)
+        stack_layout.setSpacing(12)
         self.role_strip = RoleStrip(shell)
         stack_layout.addWidget(self.role_strip)
-        stack_layout.addWidget(self.stack)
+        stack_layout.addWidget(self.stack, 1)
         self.log_panel = LogPanel(shell)
         self.log_panel.message_added.connect(self._float_message)
         stack_layout.addWidget(self.log_panel)
@@ -152,6 +193,7 @@ class MainWindow(QMainWindow):
         geometry = self._settings.value("window/geometry")
         if geometry is not None:
             self.restoreGeometry(geometry)
+        self._fit_work_area()
         self.show_page(self.NAV[0][0])
         self.scan_timer = QTimer(self)
         self.scan_timer.setInterval(1500)
@@ -163,6 +205,25 @@ class MainWindow(QMainWindow):
         self.runtime_timer.start()
         # 窗口先显示，再开始后台检测；零窗口和检测慢都不改变启动入口。
         QTimer.singleShot(0, self.refresh_windows)
+
+    def _fit_work_area(self, screen=None):
+        """高缩放或小屏幕下，最小尺寸也不能超过实际可用逻辑空间。"""
+        screen = screen or self.screen()
+        area = screen.availableGeometry()
+        frame_width = max(0, self.frameGeometry().width() - self.width())
+        frame_height = max(0, self.frameGeometry().height() - self.height())
+        if QApplication.platformName() == "offscreen":
+            frame_width = frame_height = 0
+        width, height = max(1, area.width() - frame_width), max(1, area.height() - frame_height)
+        self.setMinimumSize(min(T.MIN_WINDOW_SIZE[0], width), min(T.MIN_WINDOW_SIZE[1], height))
+        self.resize(min(self.width(), width), min(self.height(), height))
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not getattr(self, "_screen_connected", False) and self.windowHandle():
+            self.windowHandle().screenChanged.connect(self._fit_work_area)
+            self._screen_connected = True
+        self._fit_work_area()
 
     def _create_page(self, key: str, title: str) -> QWidget:
         if key == "settings":
@@ -187,6 +248,7 @@ class MainWindow(QMainWindow):
             page.refresh_requested.connect(self.refresh_windows)
             page.launch_requested.connect(self.toggle_launch)
             page.detect_launcher_requested.connect(self.detect_launcher)
+            self._connect_window_tools(page.window_tools)
             return page
         if key == "daily":
             from .daily_page import DailyPage
@@ -205,6 +267,8 @@ class MainWindow(QMainWindow):
             page.config_changed.connect(self._config_changed)
             page.window_selection_requested.connect(lambda: self.show_page("role_window"))
             page.update_windows(self.window_states)
+            if key == "general":
+                self._connect_window_tools(page.window_tools)
             return page
         if key == "dungeon":
             from .dungeon_page import DungeonPage
@@ -265,9 +329,8 @@ class MainWindow(QMainWindow):
     def _config_changed(self, cfg):
         self.cfg = cfg
         app = QApplication.instance()
-        if app.property("appearance") != cfg.get("appearance", "dark"):
-            T.apply_theme(app, cfg.get("appearance", "dark"))
-            self.log_panel._render()
+        if app.property("appearance") != cfg.get("appearance", "light"):
+            T.apply_theme(app, cfg.get("appearance", "light"))
         self._update_strip()
         for page in self._activity_pages():
             if (not page._start_pending and not page._runtime_running()
@@ -276,8 +339,99 @@ class MainWindow(QMainWindow):
                 page.update_windows(self.window_states)
 
     def _calibration_running(self):
-        return (self._launching or self._runner_running()
+        return (bool(self._window_action) or self._launching or self._runner_running()
                 or any(page._start_pending or page._runtime_running() for page in self._task_pages()))
+
+    def _connect_window_tools(self, tools):
+        tools.wake_requested.connect(self.wake_game_windows)
+        tools.close_requested.connect(self.close_game_windows)
+        tools.update_state(self._window_action, self._window_action_message, self._window_action_level)
+
+    def _show_window_action(self, message, level="info"):
+        self._window_action_message, self._window_action_level = message, level
+        for page in self.pages.values():
+            tools = getattr(page, "window_tools", None)
+            if tools is not None:
+                tools.update_state(self._window_action, message, level)
+        self.statusBar().showMessage(message)
+
+    def wake_game_windows(self):
+        from ..core.runtime import get_runtime
+
+        if self._closed or self._window_action:
+            return
+        if self._calibration_running() or get_runtime().any_running():
+            self._show_window_action("请先停止任务，再唤出并识别角色名。", "warn")
+            return
+        if any(getattr(page, "_capturing", False) or getattr(page, "_editor", None) is not None
+               or getattr(page, "_calibration_dialog", None) is not None for page in self.pages.values()):
+            self._show_window_action("请先关闭编辑或标定窗口。", "warn")
+            return
+        self._start_window_action("wake")
+
+    def close_game_windows(self):
+        if self._closed or self._window_action:
+            return
+        dialog = QMessageBox(QMessageBox.Icon.Warning, "关闭所有游戏窗口",
+                             "将强制结束全部游戏进程，未保存的进度会丢失；正在运行的任务会先停止。",
+                             QMessageBox.StandardButton.NoButton, self)
+        confirm = dialog.addButton("确认关闭", QMessageBox.ButtonRole.DestructiveRole)
+        T.set_role(confirm, "danger")
+        cancel = dialog.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+        dialog.setDefaultButton(cancel)
+        dialog.setEscapeButton(cancel)
+        dialog.exec()
+        accepted = dialog.clickedButton() is confirm
+        dialog.deleteLater()
+        if accepted and not self._closed:
+            self._start_window_action("close")
+
+    def _start_window_action(self, action):
+        self._window_action = action
+        self._show_window_action("正在唤出窗口并识别角色名…" if action == "wake" else "正在关闭游戏窗口…")
+        if action == "close":
+            self.stop_all_tasks()
+        cfg, bridge = copy.deepcopy(self.cfg), self.bridge
+
+        def work():
+            try:
+                result, error = run_window_action(cfg, action), ""
+            except Exception as exc:
+                result, error = None, str(exc)
+            try:
+                bridge.window_action_ready.emit(action, result, error)
+            except RuntimeError:
+                pass
+
+        threading.Thread(target=work, name="mhxy-window-" + action, daemon=True).start()
+
+    @Slot(str, object, str)
+    def _window_action_result(self, action, result, error):
+        if self._closed:
+            return
+        self._window_action = ""
+        level = "info"
+        if error:
+            message, level = "窗口操作失败：" + error, "error"
+        elif action == "wake":
+            total, woken, identified, ocr = result
+            message = f"检测到 {total} 个窗口 · 已唤出 {woken} 个 · 角色名已确认 {identified} 个"
+            if woken < total or identified < total:
+                level = "warn"
+            if total and identified < total and ocr.startswith("unavailable:"):
+                message += "；角色名识别不可用：" + ocr.partition(":")[2].strip()
+        else:
+            total, killed = result
+            message = f"已关闭 {killed}/{total} 个游戏进程" if total else "未检测到游戏进程"
+            if killed < total:
+                message += "；部分进程未退出，请检查运行权限后重试。"
+                level = "warn"
+        self._show_window_action(message, level)
+        self.log_panel.append(message, level, "窗口管理")
+        if self._scanning:
+            self._rescan_after_action = True
+        else:
+            self.refresh_windows()
 
     def _activity_pages(self):
         return [self.pages[key] for key in ("sniper", "treasure_map", "escort", "secret_realm", "dungeon", "freeclick", "general")
@@ -402,6 +556,9 @@ class MainWindow(QMainWindow):
         self.role_page.update_windows(self.window_states, error)
         for page in self._activity_pages():
             page.update_windows(self.window_states, error)
+        if self._rescan_after_action:
+            self._rescan_after_action = False
+            self.refresh_windows()
 
     def detect_launcher(self):
         if self._closed or self._detecting_launcher:
@@ -440,6 +597,9 @@ class MainWindow(QMainWindow):
 
     def toggle_launch(self):
         if self._closed:
+            return
+        if self._window_action:
+            self.role_page.status.setText("请等待窗口操作完成。")
             return
         if self._launching or self._runner_running():
             self.stop_all_tasks()

@@ -10,10 +10,11 @@ import threading
 
 from PySide6.QtCore import Qt, QTimer, Signal, Slot
 from PySide6.QtWidgets import (
-    QFormLayout,
     QHBoxLayout,
+    QLayout,
     QLabel,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -22,6 +23,7 @@ from ..core import config as cfg_mod
 from ..core.runtime import get_runtime
 from . import theme as T
 from .log_panel import LogPanel
+from .widgets import FormLayout as QFormLayout
 
 
 class _TaskBridge(QWidget):
@@ -76,7 +78,7 @@ class TaskPage(QWidget):
             parent, task_name = task_name, None
         super().__init__(parent)
         self.setObjectName("taskPage")
-        self.setProperty("role", "page")
+        T.set_role(self, "page")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.task_name = task_name or self.TASK_NAME
         self.task_factory = task_factory or task_cls
@@ -122,9 +124,11 @@ class TaskPage(QWidget):
 
         controls = QHBoxLayout()
         self.start_button = QPushButton(self.START_TEXT, self)
+        T.set_role(self.start_button, "primary")
         self.start_button.clicked.connect(self.toggle_run)
         controls.addWidget(self.start_button)
         self.stop_button = QPushButton("停止", self)
+        T.set_role(self.stop_button, "danger")
         self.stop_button.clicked.connect(self.stop)
         controls.addWidget(self.stop_button)
         self.window_button = QPushButton("选择窗口", self)
@@ -132,15 +136,27 @@ class TaskPage(QWidget):
         controls.addWidget(self.window_button)
         self.window_status = QLabel("窗口配置由任务页提供", self)
         self.window_status.setProperty("role", "muted")
+        self.window_status.setWordWrap(True)
         controls.addWidget(self.window_status, 1)
         layout.addLayout(controls)
 
+        self.body_scroll = QScrollArea(self)
+        self.body_scroll.setWidgetResizable(True)
+        self.body_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.body = QWidget(self.body_scroll)
+        self.body.setObjectName("taskBody")
+        body_layout = QVBoxLayout(self.body)
+        body_layout.setContentsMargins(0, 0, 4, 0)
+        body_layout.setSpacing(T.SPACE_MD)
+        body_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         self.form = QFormLayout()
-        self.form.setContentsMargins(0, 0, 0, 0)
-        layout.addLayout(self.form)
+        body_layout.addLayout(self.form)
         self.content_layout = QVBoxLayout()
         self.content_layout.setContentsMargins(0, 0, 0, 0)
-        layout.addLayout(self.content_layout, 1)
+        self.content_layout.setSpacing(T.SPACE_MD)
+        body_layout.addLayout(self.content_layout, 1)
+        self.body_scroll.setWidget(self.body)
+        layout.addWidget(self.body_scroll, 1)
 
         self.log_panel = LogPanel(self, collapsed=True)
         layout.addWidget(self.log_panel)
@@ -203,6 +219,8 @@ class TaskPage(QWidget):
         return runner
 
     def _set_status(self, status):
+        T.set_tone(self.status_label, {"failed": "error", "timeout": "error", "partial": "warning",
+                                     "stopping": "warning", "running": "success", "completed": "success"}.get(status, ""))
         status = self.STATUS_NAMES.get(status, str(status))
         if self.status_label.text() != status:
             self.status_label.setText(status)
@@ -224,6 +242,9 @@ class TaskPage(QWidget):
     def toggle_run(self):
         if self._start_pending or self._runtime_running():
             self.stop()
+            return
+        if getattr(self.window(), "_window_action", ""):
+            self.log_panel.append("请等待窗口操作完成。", "warn", self.LOG_SOURCE)
             return
         if getattr(self, "_calibration_dialog", None) is not None:
             self.log_panel.append("请先关闭标定窗口。", "warn", self.LOG_SOURCE)

@@ -5,8 +5,7 @@ import threading
 
 from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtWidgets import (
-    QCheckBox, QDoubleSpinBox, QFrame,
-    QHBoxLayout, QLabel, QPushButton, QScrollArea, QSpinBox, QTextBrowser,
+    QCheckBox, QFrame, QLabel, QPushButton, QTextBrowser,
     QVBoxLayout, QWidget,
 )
 
@@ -17,6 +16,7 @@ from ..core.input_session import InputSession
 from ..tasks.treasure_map import TreasureMapTask
 from . import theme as T
 from .task_page import TaskPage
+from .widgets import DoubleSpinBox as QDoubleSpinBox, SpinBox as QSpinBox, FlowLayout, set_window_summary
 
 
 class _ActivityPage(TaskPage):
@@ -40,26 +40,15 @@ class _ActivityPage(TaskPage):
 
     def _build_ui(self):
         super()._build_ui()
-        self.layout().itemAt(1).layout().removeWidget(self.window_status)
-        self.layout().itemAt(0).layout().insertWidget(1, self.window_status, 1)
         self.calibration_ready.connect(self._apply_calibration, Qt.ConnectionType.QueuedConnection)
-        self.setStyleSheet(f"""
-            QWidget#activityBody {{ background: {T.SURFACE}; }}
-            QFrame#activityCard {{ background: {T.SURFACE};
-                border: 1px solid {T.BORDER}; border-radius: 8px; }}
-            QSpinBox, QDoubleSpinBox, QTextBrowser {{ background: {T.BG};
-                border: 1px solid {T.BORDER}; border-radius: 6px; padding: 6px; }}
-            QCheckBox {{ spacing: 8px; padding: 4px; }}
-            QScrollArea {{ border: none; background: transparent; }}
-            QToolButton {{ background: {T.SURFACE}; color: {T.TEXT}; padding: 6px; }}
-        """)
         self.live_mode = QCheckBox("实战模式", self)
         self.live_mode.setToolTip("关闭时只识别自检，不发送游戏输入")
         self.live_mode.toggled.connect(self._save_edits)
         self.add_control("运行模式", self.live_mode)
         self.skip_collect = None
         if self.TASK_NAME == "treasure_map":
-            self.skip_collect = QCheckBox("已有宝图：跳过领取，直接开背包挖图", self)
+            self.skip_collect = QCheckBox("已有宝图", self)
+            self.skip_collect.setToolTip("跳过领取，直接开背包挖图")
             self.skip_collect.toggled.connect(self._save_edits)
             self.add_control("宝图来源", self.skip_collect)
         self.parameters = {}
@@ -69,14 +58,18 @@ class _ActivityPage(TaskPage):
             control.setRange(minimum, 2147483647 if integer else 999999999)
             if not integer:
                 control.setDecimals(1)
+            if key == "time_limit_min":
+                control.setSuffix(" 分钟")
+                control.setSpecialValueText("不限")
+            elif key.endswith("_sec"):
+                control.setSuffix(" 秒")
+            control.setToolTip(label)
             control.setKeyboardTracking(False)
             control.editingFinished.connect(self._save_edits)
             self.parameters[key] = control
-            self.add_control(label, control)
+            self.add_control(label.partition("（")[0], control)
 
-        area = QScrollArea(self)
-        area.setWidgetResizable(True)
-        body = QWidget(area)
+        body = QWidget(self)
         body.setObjectName("activityBody")
         body_layout = QVBoxLayout(body)
         body_layout.setContentsMargins(0, 0, 0, 0)
@@ -84,8 +77,8 @@ class _ActivityPage(TaskPage):
         card.setObjectName("activityCard")
         card_layout = QVBoxLayout(card)
         card_layout.setSpacing(T.SPACE_SM)
-        tools = QHBoxLayout()
-        tools.addWidget(QLabel("标定与运行条件", card), 1)
+        card_layout.addWidget(QLabel("标定与运行条件", card))
+        tools = FlowLayout()
         self.calibration_button = QPushButton("标定区域与模板", card)
         self.calibration_button.clicked.connect(self._open_calibration)
         tools.addWidget(self.calibration_button)
@@ -101,14 +94,9 @@ class _ActivityPage(TaskPage):
         self.calibration_details.setMinimumHeight(80)
         self.calibration_details.setMaximumHeight(160)
         card_layout.addWidget(self.calibration_details)
-        hint = QLabel("点击标定按钮可框选区域、裁剪模板；保存后自动刷新。", card)
-        hint.setProperty("role", "muted")
-        hint.setWordWrap(True)
-        card_layout.addWidget(hint)
         body_layout.addWidget(card)
         body_layout.addStretch()
-        area.setWidget(body)
-        self.content_layout.addWidget(area, 1)
+        self.content_layout.addWidget(body, 1)
 
     def refresh_config(self):
         if self._start_pending or self._runtime_running():
@@ -225,9 +213,7 @@ class _ActivityPage(TaskPage):
         self._window_snapshot = (states, error)
         indices = target_indices(self.cfg.get("targets") or {}, len(states), apply_limit=True)
         labels = [states[i].label for i in indices if states[i].status != "failed"]
-        self.window_status.setText("窗口检测失败：" + error if error else
-                                   "已连接：" + "、".join(labels) if labels else "未连接目标窗口")
-        self.window_status.setWordWrap(True)
+        set_window_summary(self.window_status, labels, error)
 
     def toggle_run(self):
         if self._start_pending or self._runtime_running():

@@ -7,15 +7,15 @@ import threading
 from PySide6.QtCore import Qt, QSize, Signal, Slot
 from PySide6.QtGui import QIcon, QImage, QPixmap, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QHBoxLayout,
-    QHeaderView, QLabel, QPushButton, QScrollArea, QSpinBox, QTableView,
-    QVBoxLayout, QWidget,
+    QAbstractItemView, QCheckBox, QLabel, QPushButton, QVBoxLayout, QWidget,
 )
+from .widgets import SpinBox as QSpinBox, TableView as QTableView
 
 from ..core import config as cfg_mod
 from ..tasks.sniper import SniperTask
 from . import theme as T
 from .task_page import TaskPage
+from .widgets import FlowLayout, set_window_summary
 
 
 def _template_signature(path):
@@ -72,8 +72,7 @@ def _table(parent, headers):
     view.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
     view.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
     view.verticalHeader().hide()
-    view.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-    view.horizontalHeader().setStretchLastSection(True)
+    view.set_column_widths((144, 96, 160) if headers[-1] == "模板路径" else (88, 88, 128))
     view.setWordWrap(False)
     return view, model
 
@@ -100,19 +99,8 @@ class SniperPage(TaskPage):
 
     def _build_ui(self):
         super()._build_ui()
-        self.setStyleSheet(f"""
-            QTableView, QSpinBox, QTextBrowser {{ background: {T.BG};
-                color: {T.TEXT}; border: 1px solid {T.BORDER}; }}
-            QTableView {{ gridline-color: {T.BORDER};
-                selection-background-color: {T.BUTTON_HOVER}; }}
-            QHeaderView::section {{ background: {T.SURFACE}; color: {T.TEXT_DIM};
-                border: 1px solid {T.BORDER}; padding: 4px; }}
-            QCheckBox {{ spacing: 8px; }}
-            QScrollArea {{ border: none; background: transparent; }}
-            QWidget#sniperBody {{ background: {T.SURFACE}; }}
-        """)
         self.thumbnails_ready.connect(self._apply_thumbnails, Qt.ConnectionType.QueuedConnection)
-        self.live_mode = QCheckBox("实战模式（命中会真正购买）", self)
+        self.live_mode = QCheckBox("实战模式", self)
         self.live_mode.setToolTip("默认演练：只识别，不点击、不刷新、不计数。")
         self.live_mode.toggled.connect(self._save_edits)
         self.add_control("运行模式", self.live_mode)
@@ -122,18 +110,13 @@ class SniperPage(TaskPage):
         self.target_count.editingFinished.connect(self._save_edits)
         self.add_control("每窗口购买数量", self.target_count)
 
-        area = QScrollArea(self)
-        area.setWidgetResizable(True)
-        body = QWidget(area)
+        body = QWidget(self)
         body.setObjectName("sniperBody")
         body_layout = QVBoxLayout(body)
         body_layout.setContentsMargins(0, 0, 0, 0)
         body_layout.setSpacing(T.SPACE_SM)
-        area.setWidget(body)
-        self.content_layout.addWidget(area, 1)
-        tools = QHBoxLayout()
-        hint = QLabel("打开商品页后开始；成功提示确认后计数。", self)
-        tools.addWidget(hint, 1)
+        self.content_layout.addWidget(body, 1)
+        tools = FlowLayout()
         self.calibration_button = QPushButton("标定区域与模板", self)
         self.calibration_button.clicked.connect(self._open_calibration)
         tools.addWidget(self.calibration_button)
@@ -143,23 +126,25 @@ class SniperPage(TaskPage):
         body_layout.addLayout(tools)
         self.regions_status = QLabel(self)
         self.regions_status.setTextFormat(Qt.TextFormat.PlainText)
+        self.regions_status.setWordWrap(True)
         body_layout.addWidget(self.regions_status)
 
         self.templates_view, self.templates_model = _table(
             self, ("商品 / 按钮模板", "缩略图", "标定状态", "模板路径"))
-        self.templates_view.setIconSize(QSize(240, 64))
+        self.templates_view.setIconSize(QSize(128, 64))
         self.templates_view.verticalHeader().setDefaultSectionSize(72)
-        self.templates_view.setMinimumHeight(100)
+        self.templates_view.setMinimumHeight(220)
         for key, label, _ in SniperTask.CALIBRATION["templates"]:
             self.templates_model.appendRow([QStandardItem(label), QStandardItem("未标定"),
                                             QStandardItem("未标定"), QStandardItem("")])
         self.templates_view.doubleClicked.connect(self._open_calibration)
         body_layout.addWidget(self.templates_view, 3)
         self.progress_label = QLabel("购买进度：待启动", self)
+        self.progress_label.setWordWrap(True)
         body_layout.addWidget(self.progress_label)
         self.progress_view, self.progress_model = _table(
             self, ("目标窗口", "成功数量", "目标数量", "当前状态"))
-        self.progress_view.setMinimumHeight(65)
+        self.progress_view.setMinimumHeight(150)
         body_layout.addWidget(self.progress_view, 2)
 
     def refresh_config(self):
@@ -209,7 +194,7 @@ class SniperPage(TaskPage):
         for row, (key, _label, _hint) in enumerate(SniperTask.CALIBRATION["templates"]):
             path = tc.get("templates", {}).get(key)
             signature = _template_signature(path)
-            self.templates_model.item(row, 3).setText(str(path or ""))
+            self.templates_model.item(row, 3).setText(os.path.basename(str(path or "")))
             self.templates_model.item(row, 3).setToolTip(str(path or "未标定；双击打开标定"))
             if key in self._template_signatures and self._template_signatures[key] == signature:
                 continue
@@ -288,9 +273,7 @@ class SniperPage(TaskPage):
         self._window_snapshot = (states, error)
         indices = target_indices(self.cfg.get("targets") or {}, len(states), apply_limit=True)
         labels = [states[i].label for i in indices if states[i].status != "failed"]
-        self.window_status.setText("窗口检测失败：" + error if error else
-                                   "已连接：" + "、".join(labels) if labels else "未连接目标窗口")
-        self.window_status.setWordWrap(True)
+        set_window_summary(self.window_status, labels, error)
 
     def toggle_run(self):
         if self._start_pending or self._runtime_running():

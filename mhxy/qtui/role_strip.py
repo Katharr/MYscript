@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QScrollArea, QWidget
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QScrollArea, QStyle, QWidget
 
 from . import theme as T
 
@@ -16,13 +16,13 @@ class WindowState:
     minimized: bool = False
 
 
-STATUS_COLORS = {"ready": "#58c98b", "pending": "#e3b65a", "failed": "#ed7474"}
 STATUS_NAMES = {"ready": "可用", "pending": "身份未确认", "failed": "检测失败"}
 
 
 class RoleItem(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setObjectName("roleItem")
         self._value = None
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 6, 12, 6)
@@ -42,26 +42,28 @@ class RoleItem(QFrame):
             return
         self._value = value
         self.name.setText(state.label)
-        self.light.setStyleSheet(f"color: {STATUS_COLORS[state.status]};")
+        self.light.setText({"ready": "●", "pending": "?", "failed": "!"}[state.status])
+        self.light.setAccessibleName(STATUS_NAMES[state.status])
+        T.set_tone(self.light, {"ready": "success", "pending": "warning", "failed": "error"}[state.status])
         self.captain.setVisible(captain)
         self.setProperty("selected", selected)
-        border = T.ACCENT if selected else T.BORDER
-        self.setStyleSheet(f"RoleItem {{ background: {T.SURFACE}; border: 1px solid {border}; border-radius: 8px; }}")
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.update()
         self.setToolTip(STATUS_NAMES[state.status] + (" · 已最小化" if state.minimized else ""))
 
 
 class RoleStrip(QScrollArea):
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setObjectName("roleStrip")
         self.items: dict[int, RoleItem] = {}
         self._order = []
         self.setWidgetResizable(True)
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setFixedHeight(70)
         body = QWidget(self)
         body.setObjectName("roleStripBody")
-        self.setStyleSheet(f"QScrollArea {{ background: {T.BG}; }} QWidget#roleStripBody {{ background: {T.BG}; }}")
         self.row = QHBoxLayout(body)
         self.row.setContentsMargins(0, 0, 0, 0)
         self.row.setSpacing(T.SPACE_SM)
@@ -70,6 +72,13 @@ class RoleStrip(QScrollArea):
         self.row.addWidget(self.empty)
         self.row.addStretch()
         self.setWidget(body)
+        self._update_height()
+        T.events().changed.connect(self._update_height)
+
+    def _update_height(self):
+        scroll_height = self.style().pixelMetric(QStyle.PixelMetric.PM_ScrollBarExtent)
+        self.setFixedHeight(max(48, self.fontMetrics().height() + 16 + scroll_height) if self._order
+                            else max(32, self.fontMetrics().height() + 12))
 
     def update_windows(self, states, selected=(), captain=None, error=""):
         order = [state.hwnd for state in states]
@@ -86,5 +95,6 @@ class RoleStrip(QScrollArea):
                 self.row.insertWidget(index, item)
             item.update_state(state, index in selected, index == captain)
         self._order = order
+        self._update_height()
         self.empty.setVisible(not states)
         self.empty.setText("检测失败" if error else "未检测到游戏窗口")

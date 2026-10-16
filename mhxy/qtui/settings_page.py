@@ -2,11 +2,11 @@
 
 import math
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton, QScrollArea, QVBoxLayout, QWidget,
+    QCheckBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
+from .widgets import ComboBox as QComboBox, FormLayout as QFormLayout, number_with_unit, set_field_width
 
 from ..core import config as cfg_mod
 from .shortcuts import (
@@ -35,9 +35,16 @@ class SettingsPage(QWidget):
         ("humanize", "interval_jitter", "间隔抖动比例", 0.0, 0.8),
     )
 
+    SPEED_UNITS = {
+        "speed": "倍", "snipe_speed": "倍", "px_per_step": "px", "click_radius": "px",
+        "shelf_load_wait_sec": "秒", "shop_close_wait_sec": "秒",
+        "second_buy_load_wait_sec": "秒", "second_buy_retry_interval_sec": "秒",
+        "second_buy_timeout_sec": "秒", "purchase_timeout_sec": "秒",
+    }
+
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setProperty("role", "page")
+        T.set_role(self, "page")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(*([T.SPACE_LG] * 4))
         heading = QLabel("设置", self)
@@ -46,11 +53,20 @@ class SettingsPage(QWidget):
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
         content = QWidget(scroll)
-        form = QFormLayout(content)
-        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        content.setObjectName("settingsBody")
+        content.setMaximumWidth(720)
+        form = QFormLayout(content, label_width=176)
+        self._section(form, "窗口与识别", content)
         self.window_title = QLineEdit(content)
+        set_field_width(self.window_title, "name")
         form.addRow("游戏窗口标题关键字", self.window_title)
+        self.threshold = QLineEdit(content)
+        self.threshold.setToolTip("0.60～0.99")
+        set_field_width(self.threshold, "number")
+        form.addRow("识别置信度", self.threshold)
+        self._section(form, "输入与外观", content)
         self.backend = QComboBox(content)
+        set_field_width(self.backend, "short")
         self.backend.addItems(["sendinput", "pyautogui", "pydirectinput"])
         form.addRow("鼠标输入后端", self.backend)
         hotkey = QWidget(content)
@@ -60,35 +76,50 @@ class SettingsPage(QWidget):
         for checkbox in self.modifiers:
             row.addWidget(checkbox)
         self.hotkey_key = QComboBox(hotkey)
+        set_field_width(self.hotkey_key, "hotkey")
         self.hotkey_key.addItems(HOTKEY_NAMES)
         row.addWidget(self.hotkey_key)
-        form.addRow("急停快捷键（停止全部任务）", hotkey)
+        row.addStretch()
+        hotkey.setToolTip("停止全部任务")
+        form.addRow("急停快捷键", hotkey)
         self.failsafe = QComboBox(content)
+        set_field_width(self.failsafe, "short")
         for value, label in FAILSAFE_CORNERS.items():
             self.failsafe.addItem(label, value)
         form.addRow("失控急停角", self.failsafe)
         self.appearance = QComboBox(content)
+        set_field_width(self.appearance, "short")
         self.appearance.addItem("夜间", "dark")
         self.appearance.addItem("白天", "light")
         form.addRow("外观", self.appearance)
-        self.threshold = QLineEdit(content)
-        form.addRow("识别置信度（0.60～0.99）", self.threshold)
-        form.addRow(QLabel("速度与节奏（手速）", content))
+        self._section(form, "速度与节奏", content)
         self.speed_fields = {}
         for _loc, key, label, lo, hi in self.SPEED_FIELDS:
             edit = QLineEdit(content)
             edit.setToolTip(f"{lo}～{hi}")
             self.speed_fields[key] = edit
-            form.addRow(f"{label}（{lo}～{hi}）", edit)
+            form.addRow(label.partition("(")[0], number_with_unit(edit, self.SPEED_UNITS.get(key, "")))
         scroll.setWidget(content)
+        scroll.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         layout.addWidget(scroll, 1)
         self.status = QLabel(self)
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
         self.save_button = QPushButton("保存设置", self)
+        self.save_button.setFixedWidth(128)
+        T.set_role(self.save_button, "primary")
         self.save_button.clicked.connect(self.save)
-        layout.addWidget(self.save_button)
+        footer = QFormLayout(label_width=176)
+        footer.addRow(" ", self.save_button)
+        layout.addLayout(footer)
         self.refresh()
+
+    @staticmethod
+    def _section(form, text, parent):
+        title = QLabel(text, parent)
+        T.set_role(title, "section")
+        title.setContentsMargins(0, 12, 0, 0)
+        form.addRow(title)
 
     def refresh(self):
         cfg = cfg_mod.load_config()
@@ -99,7 +130,7 @@ class SettingsPage(QWidget):
             checkbox.setChecked(checked)
         self.hotkey_key.setCurrentText(key)
         for combo, value in ((self.failsafe, cfg.get("failsafe_corner", DEFAULT_FAILSAFE)),
-                             (self.appearance, cfg.get("appearance", "dark"))):
+                             (self.appearance, cfg.get("appearance", "light"))):
             combo.setCurrentIndex(max(0, combo.findData(value)))
         loop = cfg_mod.task_config(cfg, "sniper")["loop"]
         self.threshold.setText(str(loop.get("match_threshold", 0.85)))

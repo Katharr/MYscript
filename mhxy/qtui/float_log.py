@@ -6,6 +6,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
 )
+from . import theme as T
 
 
 class FloatLogWindow(QWidget):
@@ -40,6 +41,7 @@ class FloatLogWindow(QWidget):
         row.addWidget(self.topmost)
         row.addStretch()
         self.stop_button = QPushButton("停止", self)
+        T.set_role(self.stop_button, "danger")
         self.stop_button.clicked.connect(self.stop_requested.emit)
         row.addWidget(self.stop_button)
         self.expand_button = QPushButton("展开", self)
@@ -78,6 +80,8 @@ class FloatLogWindow(QWidget):
 
     def append(self, message, level="info", source=""):
         self.message_label.setText(((f"[{source}] " if source else "") + str(message))[:240])
+        T.set_tone(self.message_label, {"error": "error", "warn": "warning", "warning": "warning",
+                                      "hit": "success", "success": "success"}.get(level, ""))
 
     def dispose(self):
         self._disposing = True

@@ -53,7 +53,7 @@ DEFAULT_CONFIG = {
                                          #   （鼠标被脚本拉着失控时随时叫停）。设置里可改修饰键(Ctrl/Alt/Shift)+主键。
     "failsafe_corner": "top_right",      # 失控急停：任务运行时把鼠标甩到屏幕哪个角即停（独立于鼠标后端，始终生效）。
                                          #   top_right/top_left/bottom_right/bottom_left/off(关闭)。设置里可改。
-    "appearance": "dark",                # 界面外观：dark(夜间) / light(白天)，侧栏可切换
+    "appearance": "light",               # 界面外观：light(白天) / dark(夜间)，设置页可切换
 
     # ---- 一键启动 / 登录（只保存本机启动器路径和目标角色，不保存账号密码/Cookie/Token）----
     "account_launch": {

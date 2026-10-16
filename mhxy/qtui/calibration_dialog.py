@@ -8,9 +8,10 @@ import threading
 from PySide6.QtCore import Qt, Signal, QSize
 from PySide6.QtGui import QColor, QIcon, QImage, QPixmap, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
-    QAbstractItemView, QComboBox, QDialog, QDialogButtonBox, QHBoxLayout,
-    QHeaderView, QInputDialog, QLabel, QPushButton, QTableView, QVBoxLayout,
+    QAbstractItemView, QDialog, QDialogButtonBox, QInputDialog, QLabel, QPushButton,
+    QVBoxLayout,
 )
+from .widgets import ComboBox as QComboBox, TableView as QTableView
 
 from ..core import calib_profiles as calib, calibration_assets, config as cfg_mod, vision
 from ..core.activity import ACTIVITY_CALIBRATION
@@ -19,6 +20,7 @@ from ..tasks import all_tasks, get_task
 from .roi_overlay import capture_roi
 from .sniper_page import _template_signature
 from . import theme as T
+from .widgets import FlowLayout
 
 
 VIRTUAL_SPECS = {
@@ -90,9 +92,6 @@ class CalibrationDialog(QDialog):
         self._generation = 0
         self._thumb_cache = {}
         self.setWindowModality(Qt.WindowModality.WindowModal)
-        self.setStyleSheet(f"QDialog {{ background: {T.SURFACE}; }} "
-                          f"QTableView, QComboBox {{ background: {T.BG}; color: {T.TEXT}; }} "
-                          f"QHeaderView::section {{ background: {T.SURFACE}; color: {T.TEXT_DIM}; }}")
         self.resize(900, 640)
         layout = QVBoxLayout(self)
         self.tasks = QComboBox(self)
@@ -114,28 +113,29 @@ class CalibrationDialog(QDialog):
         self.view.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.view.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.view.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.view.setIconSize(QSize(200, 64))
+        self.view.setIconSize(QSize(144, 64))
         self.view.verticalHeader().hide()
         self.view.verticalHeader().setDefaultSectionSize(72)
-        self.view.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        self.view.horizontalHeader().setStretchLastSection(True)
+        self.view.set_column_widths((180, 144, 200))
         self.view.doubleClicked.connect(self.calibrate_selected)
         layout.addWidget(self.view, 1)
-        actions = QHBoxLayout()
+        actions = FlowLayout()
         self.capture_button = QPushButton("框选 / 重新标定", self)
+        T.set_role(self.capture_button, "primary")
         self.capture_button.clicked.connect(self.calibrate_selected)
         self.clear_button = QPushButton("设为整窗检测", self)
         self.clear_button.clicked.connect(self.use_full_window)
         self.add_button = QPushButton("添加装备", self)
         self.add_button.clicked.connect(self.add_item)
         self.delete_button = QPushButton("删除装备", self)
+        T.set_role(self.delete_button, "danger")
         self.delete_button.clicked.connect(self.delete_item)
         self.items_button = QPushButton("管理物品", self)
         self.items_button.clicked.connect(self.open_items)
         for button in (self.capture_button, self.clear_button, self.add_button, self.delete_button, self.items_button):
             actions.addWidget(button)
         layout.addLayout(actions)
-        self.status = QLabel("选中标定项后框选；每项保存后立即生效，Esc 取消本次框选。", self)
+        self.status = QLabel("", self)
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, self)
@@ -144,6 +144,21 @@ class CalibrationDialog(QDialog):
         layout.addWidget(buttons)
         self.thumbnails_ready.connect(self._apply_thumbnails, Qt.ConnectionType.QueuedConnection)
         self.refresh()
+        T.events().changed.connect(self._refresh_colors)
+
+    def _refresh_colors(self):
+        active = calib.active_id(self.cfg)
+        tc = cfg_mod.task_config(self.cfg, self.task_name)
+        for row, (group, key, _full) in enumerate(self.rows):
+            if group == "watchlist":
+                items = tc.get("watchlist") or []
+                name = items[key].get("name") if key < len(items) else None
+                pid = calib.template_profile(self.cfg, self.task_name, name)
+            else:
+                pid = (calib.task_profile(self.cfg, self.task_name) if group == "regions"
+                       else calib.template_profile(self.cfg, self.task_name, key))
+            self.model.item(row, 2).setForeground(QColor(T.SUCCESS if pid == active and calib.get(self.cfg, pid)
+                                                       else T.TEXT_DIM))
 
     def _select_task(self):
         self.task_name = self.tasks.currentData()
@@ -159,8 +174,7 @@ class CalibrationDialog(QDialog):
         self.model.removeRows(0, self.model.rowCount())
         tc = cfg_mod.task_config(self.cfg, self.task_name)
         active = calib.active_id(self.cfg)
-        self.profile_note.setText("当前尺寸组：" + calib.size_text(calib.active(self.cfg))
-                                 + "。绿色为当前组，灰色为其他组或未记录。模板文件全局共用。")
+        self.profile_note.setText("当前尺寸组：" + calib.size_text(calib.active(self.cfg)))
         self.rows, requests = [], {}
         self._requests = requests
         for group in ("regions", "templates"):
@@ -208,9 +222,12 @@ class CalibrationDialog(QDialog):
         prof = calib.get(self.cfg, pid)
         badge = QStandardItem(("当前 · " if pid == active and prof else "")
                               + (f"{prof['label']} {calib.size_text(prof)}" if prof else "未记录"))
-        badge.setForeground(QColor("#45d6a2" if pid == active and prof else "#8a93a3"))
+        badge.setForeground(QColor(T.SUCCESS if pid == active and prof else T.TEXT_DIM))
         self.model.appendRow([QStandardItem(name), QStandardItem(status), badge,
                               QStandardItem(hint + ("\n" + str(value) if value else ""))])
+        for col in range(4):
+            item = self.model.item(row, col)
+            item.setToolTip(item.text())
         if group != "regions":
             sig = _template_signature(value)
             if sig and sig[1] is not None:
