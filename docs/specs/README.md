@@ -44,3 +44,4 @@ python -m unittest discover -t . -v
 | 阶段 | 完成内容 | 验收结果 | 提交 |
 | --- | --- | --- | --- |
 | spec8：`08-dungeon-page.md` | 完成 Qt 刷副本页迁移，接入副本注册表、队长选择、已组队、跑完解散和队长 ID 历史库；复用原有副本任务与组队流程 | `python -m unittest discover -t . -v`：507 项通过 | `0f3400a`：完成 Qt 刷副本页迁移 |
+| spec9：`09-calibration.md` | 完成 Qt 标定中心、尺寸组、异步缩略图和冻结屏幕 ROI 框选；任务页、装备与物品入口接通；复用现有保存与回滚，修订必要配套修改的范围规则 | `python -m unittest discover -t . -v`：529 项通过（新增 22 项 Qt 标定测试） | `00a027d`：完成 Qt 标定中心与框选浮层迁移并修订阶段范围规则 |
