@@ -113,7 +113,7 @@ class TaohaiquTask(Task):
             for tk in DISBAND_REQUIRED_TEMPLATES:
                 p = team_tc.get("templates", {}).get(tk)
                 if not p or vision.load_template(p) is None:
-                    problems.append(f"勾了「跑完解散队伍」但退队模板『{tk}』缺失 —— 请在「通用」页点「标定（组队）」框选「退出队伍」")
+                    problems.append(f"勾了「跑完解散队伍」但退队模板『{tk}』缺失 —— 请在「通用」页点「标定（组队）」补齐退出/创建队伍按钮")
 
         # 副本自身模板/区域
         regions = tc.get("regions", {})

@@ -39,7 +39,7 @@ class DisbandTask(Task):
         for tk in DISBAND_REQUIRED_TEMPLATES:
             p = team_tc.get("templates", {}).get(tk)
             if not p or vision.load_template(p) is None:
-                problems.append(f"退队模板『{tk}』缺失 —— 请点「标定（组队）」框选「退出队伍」按钮")
+                problems.append(f"退队模板『{tk}』缺失 —— 请点「标定（组队）」补齐「退出队伍」和「创建队伍」按钮")
 
         if not ctx.hotkeys.get("open_team"):
             problems.append("缺快捷键 open_team（如 alt+t）—— 请在设置里填")

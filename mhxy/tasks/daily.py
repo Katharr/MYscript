@@ -31,7 +31,7 @@
 
 import time
 
-from .base import Task, register, get_task, dungeon_tasks
+from .base import Task, register, get_task, dungeon_tasks, _input_policy
 
 # 可进一条龙的任务（这些都有明确「完成条件」、会自动结束）。秒装备 sniper 不在此列。
 # "dungeon" 是「刷副本」中枢步：跑时解析成 tasks.dungeon.selected 选中的那个副本（见 _resolve）。
@@ -112,6 +112,7 @@ class DailyTask(Task):
             if parked and len(parked) == len(alive):
                 outcome = self._run_collective_dungeon(ctx)
                 for c in parked:
+                    c["solo_ready"] = False  # 副本可能重新组队，放行前必须重新确认退队。
                     c["outcomes"].append(self._known_outcome(outcome))
                     self._advance(c, steps)
                 continue
@@ -177,7 +178,8 @@ class DailyTask(Task):
         """每窗口一条独立链记录。idx=当前在 steps 的位置；sub_rec/sub_step=当前子任务的状态机与单步函数。"""
         return {"wctx": wctx, "idx": 0, "sub_rec": None, "sub_step": None,
                 "cur_title": None, "done": False, "outcomes": [], "sub_name": None,
-                "gone_warned": False, "fg_warned": False, "park_logged": False}
+                "gone_warned": False, "fg_warned": False, "park_logged": False,
+                "solo_ready": False}
 
     @staticmethod
     def _at_dungeon(c, steps):
@@ -213,7 +215,12 @@ class DailyTask(Task):
                     return
                 if steps[c["idx"]] == "dungeon":
                     return                              # 停靠集体屏障，交回主循环
-                if self._begin_step(ctx, c, steps[c["idx"]]) != "ready":
+                prepared = self._begin_step(ctx, c, steps[c["idx"]])
+                if prepared == "blocked":
+                    c["outcomes"].append("failed")
+                    c["done"] = True
+                    return
+                if prepared != "ready":
                     c["outcomes"].append("failed")
                     c["idx"] += 1                       # 跳过该步（未就绪/演练/不支持），接着下一步
                     continue
@@ -241,7 +248,7 @@ class DailyTask(Task):
                 return                                  # 连续推进上限，强制让出（同 rotation）
 
     def _begin_step(self, ctx, c, name):
-        """为某独立步在该窗口上建驱动器。返回 "ready"(已建) 或 "skip"(已跳过并记日志)。
+        """建独立步驱动器。返回 ready / skip / blocked（未确认退队，停止该号）。
         preflight 用主 ctx（检查全局：标定/快捷键/选中窗口）。"""
         wctx = c["wctx"]
         title = self._title_of(name, ctx)
@@ -263,10 +270,34 @@ class DailyTask(Task):
         if not ok:
             wctx.log(f"跳过「{title}」（未就绪）：" + "；".join(probs), level="warn")
             return "skip"
+        if not c["solo_ready"]:
+            if not self._ensure_solo(wctx):
+                wctx.log(f"未确认退队，停止该号后续单人任务（当前「{title}」），避免跟队空跑。", level="error")
+                return "blocked"
+            c["solo_ready"] = True
+        if ctx.should_stop():
+            return "blocked"
         rec, step_fn = task.make_chain_driver(wctx)
         c["sub_rec"], c["sub_step"] = rec, step_fn
         wctx.log(f"───── 开始「{title}」 ─────", level="hit")
         return "ready"
+
+    @staticmethod
+    def _ensure_solo(wctx):
+        """单人任务入口复用退队流程，仅操作当前号，不依赖副本的可选自动解散。"""
+        from ..core.teaming import TeamFormation, DISBAND_REQUIRED_TEMPLATES
+        team_cfg = wctx.task_cfg("teaming")
+        if team_cfg.get("dry_run", True):
+            wctx.log("退队处于演练模式，无法确认单人任务前置条件。", level="error")
+            return False
+        with _input_policy(wctx, "teaming"):
+            team = TeamFormation(wctx, [(wctx, TeamFormation.ROLE_MEMBER)], team_cfg)
+            if any(team.tpl.get(key) is None for key in DISBAND_REQUIRED_TEMPLATES):
+                wctx.log("退队需要「退出队伍」和「创建队伍」模板，请在组队标定中补齐。", level="error")
+                return False
+            wctx.log("进入单人任务前，检查并退出当前队伍…")
+            ok, _ = team.run_disband()
+            return ok and not wctx.should_stop()
 
     def _run_collective_dungeon(self, ctx):
         """集体跑一次「刷副本」步：组队 → 队长线性跑完（→可选解散）。用主 ctx（副本任务自带 select+组队）。

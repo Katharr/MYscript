@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""解散结果保留旧退队/收尾判据；全部使用假窗口、时钟和输入。"""
+"""解散必须有不在队的画面证据；全部使用假窗口、时钟和输入。"""
 import copy
 import unittest
 from contextlib import ExitStack
@@ -82,32 +82,72 @@ class DisbandEvidenceTests(unittest.TestCase):
         team._close_panel.assert_not_called()
         self.assertEqual(ctx.windows[1].calls, 0)
 
-    def test_legacy_click_and_cleanup_rejection_still_mark_ok(self):
+    def test_missing_button_or_rejected_click_never_marks_success(self):
         for hit in [(10, 20, .99), None]:
             with self.subTest(hit=hit):
                 ctx, team = self.make_team()
                 rec = team._new_disband_record(team.records[0]["ctx"])
-                rec["state"] = teaming.D_QUIT
-                team._find_in_region = mock.Mock(return_value=hit)
-                team._close_panel = mock.Mock(return_value=False)
+                rec.update(state=teaming.D_QUIT, t_state=self.clock.time(), attempts=1)
+                team._find_full = mock.Mock(side_effect=lambda ctx, key: hit if key == "team_quit" else None)
                 rec["ctx"].mouse.click.return_value = False
                 team._db_quit(rec)
-                self.assertTrue(rec["ok"])
-                self.assertTrue(rec["done"])
-                team._close_panel.assert_called_once()
-                if hit:
-                    rec["ctx"].mouse.click.assert_called_once_with(10, 20)
-                else:
-                    rec["ctx"].mouse.click.assert_not_called()
+                self.assertFalse(rec["ok"])
+                self.assertFalse(rec["done"])
+                self.assertFalse(rec["quit_clicked"])
 
-    def test_open_rejection_remains_failed_not_retried(self):
+    def test_click_requires_later_create_button_before_success(self):
+        ctx, team = self.make_team()
+        rec = team._new_disband_record(team.records[0]["ctx"])
+        rec.update(state=teaming.D_QUIT, t_state=self.clock.time(), attempts=1)
+        team._find_full = mock.Mock(return_value=(10, 20, .99))
+        rec["ctx"].mouse.click.return_value = None
+        team._db_quit(rec)
+        self.assertTrue(rec["quit_clicked"])
+        self.assertFalse(rec["ok"])
+        self.assertFalse(rec["done"])
+        team._find_full.side_effect = lambda ctx, key: (10, 20, .99) if key == "team_create" else None
+        team._db_quit(rec)
+        self.assertTrue(rec["ok"])
+        self.assertTrue(rec["done"])
+        rec["ctx"].send_hotkey.assert_called_once_with("close_panel")
+
+    def test_unknown_state_reopens_then_fails_instead_of_success(self):
+        ctx, team = self.make_team(count=1)
+        team._find_full = mock.Mock(return_value=None)
+        team._diag_dump = mock.Mock()
+        ctx.cfg["tasks"]["teaming"]["loop"]["disband_timeout_sec"] = 60
+        self.assertEqual(team.run_disband(), (False, "partial"))
+        self.assertEqual(team.disband_outcome, "failed")
+        calls = team.records[0]["ctx"].send_hotkey.call_args_list
+        self.assertEqual(calls.count(mock.call("open_team")), 3)
+        team._diag_dump.assert_called_once()
+
+    def test_full_window_finds_quit_outside_old_panel_region(self):
+        import numpy as np
+        ctx, team = self.make_team(count=1)
+        rng = np.random.default_rng(12)
+        tpl = rng.integers(0, 256, (15, 50, 3), dtype=np.uint8)
+        scene = np.zeros((600, 800, 3), dtype=np.uint8)
+        scene[520:535, 30:80] = tpl
+        team.tpl = {"team_quit": tpl}
+        team.regions = {"team_panel": [100, 100, 300, 200]}
+        rec = team._new_disband_record(team.records[0]["ctx"])
+        rec.update(state=teaming.D_QUIT, t_state=self.clock.time())
+        with mock.patch.object(teaming.win_mod, "grab", return_value=scene) as grab:
+            team._db_quit(rec)
+        grab.assert_called_once_with((0, 0, 800, 600))
+        rec["ctx"].mouse.click.assert_called_once_with(55, 527)
+        self.assertFalse(rec["ok"])
+
+    def test_open_rejection_remains_failed(self):
         ctx, team = self.make_team()
         for rec in team.records:
-            rec["ctx"].send_hotkey.return_value = False
+            rec["ctx"].send_hotkey.side_effect = lambda key: key == "close_panel"
         self.assertEqual(team.run_disband(), (False, "partial"))
         self.assertEqual(team.disband_outcome, "failed")
         for rec in team.records:
-            rec["ctx"].send_hotkey.assert_called_once_with("open_team")
+            self.assertEqual(rec["ctx"].send_hotkey.call_args_list,
+                             [mock.call("close_panel"), mock.call("open_team")])
             self.assertEqual(rec["ctx"].mouse.mock_calls, [])
 
     def test_dry_run_finishes_or_stops_without_input_and_resets_evidence(self):
