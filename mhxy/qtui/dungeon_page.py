@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 from .widgets import ComboBox as QComboBox
 
 from ..core import config as cfg_mod
+from ..core import calibration
 from ..core import leader_history as lh
 from ..core import vision
 from ..core.teaming import (
@@ -287,7 +288,7 @@ class DungeonPage(TaskPage):
 
     def _required_calibration(self):
         task = self.selected_task
-        tc = cfg_mod.task_config(self.cfg, self._selected) if self._selected else {}
+        tc = calibration.effective_task_config(self.cfg, self._selected) if self._selected else {}
         spec = getattr(task, "CALIBRATION", {}) or {}
         regions = tc.get("regions", {})
         templates = tc.get("templates", {})

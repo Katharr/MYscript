@@ -1,4 +1,4 @@
-"""标定中心：只展示当前尺寸组及任务标定入口。"""
+"""标定中心：通用标定及活动逐项覆盖的统一入口。"""
 
 import copy
 
@@ -32,6 +32,10 @@ class CalibrationPage(QWidget):
         self.profile_note.setWordWrap(True)
         layout.addWidget(self.profile_note)
         tools = FlowLayout()
+        self.common_button = QPushButton("通用标定", self)
+        T.set_role(self.common_button, "primary")
+        self.common_button.clicked.connect(self.open_common)
+        tools.addWidget(self.common_button)
         self.manage_sizes_button = QPushButton("管理窗口尺寸", self)
         self.manage_sizes_button.clicked.connect(self.manage_sizes_requested.emit)
         tools.addWidget(self.manage_sizes_button)
@@ -75,9 +79,15 @@ class CalibrationPage(QWidget):
         self.config_changed.emit(cfg)
 
     def open_task(self):
+        self._open_task(self.tasks.currentData())
+
+    def open_common(self):
+        self._open_task("common")
+
+    def _open_task(self, task_name):
         if self._busy():
             return
-        dialog = CalibrationDialog(self, self.tasks.currentData(), self.cfg if self._cfg_supplied else None)
+        dialog = CalibrationDialog(self, task_name, self.cfg if self._cfg_supplied else None)
         self._editor = dialog
         dialog.config_changed.connect(self._publish)
         try:

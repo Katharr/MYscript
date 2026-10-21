@@ -201,6 +201,23 @@
     }
   },
   "tasks": {
+    "common": {
+      "regions": {
+        "scene": null,
+        "activity_list": null
+      },
+      "templates": {
+        "battle_indicator": null,
+        "activity_join": null,
+        "daily_activity": null,
+        "dialog_confirm": null,
+        "dialog_ok": null,
+        "dialog_cancel": null
+      },
+      "regions_calib": {},
+      "templates_calib": {},
+      "calibration_modes": {}
+    },
     "activity": {
       "loop": {
         "match_threshold": 0.85,

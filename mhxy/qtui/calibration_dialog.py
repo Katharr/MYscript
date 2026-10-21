@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
 )
 from .widgets import ComboBox as QComboBox, TableView as QTableView
 
-from ..core import calib_profiles as calib, calibration_assets, config as cfg_mod, vision
+from ..core import calib_profiles as calib, calibration, calibration_assets, config as cfg_mod, vision
 from ..core.activity import ACTIVITY_CALIBRATION
 from ..core.teaming import TEAM_CALIBRATION
 from ..tasks import all_tasks, get_task
@@ -24,6 +24,7 @@ from .widgets import FlowLayout
 
 
 VIRTUAL_SPECS = {
+    "common": ("通用标定", calibration.COMMON_CALIBRATION),
     "teaming": ("组队（全局共享）", TEAM_CALIBRATION),
     "activity": ("活动页（全局共享）", ACTIVITY_CALIBRATION),
 }
@@ -43,12 +44,23 @@ def task_spec(name):
     if name in VIRTUAL_SPECS:
         return VIRTUAL_SPECS[name]
     task = get_task(name)
-    return (getattr(task, "title", name), getattr(task, "CALIBRATION", {}))
+    spec = copy.deepcopy(getattr(task, "CALIBRATION", {}))
+    # 活动声明可覆盖的公共项即进入清单，避免要求每个任务重复维护同一条定义。
+    for group, bindings in calibration.BINDINGS.get(name, {}).items():
+        rows = spec.setdefault(group, [])
+        existing = {row[0] for row in rows}
+        common_rows = {row[0]: row for row in calibration.COMMON_CALIBRATION[group]}
+        for key, canonical in bindings.items():
+            if key not in existing:
+                definition = common_rows[canonical]
+                rows.append((key, *definition[1:]))
+    return getattr(task, "title", name), spec
 
 
 def calibration_tasks():
-    return [(task.name, task.title) for task in all_tasks()] + [
-        (name, title) for name, (title, spec) in VIRTUAL_SPECS.items()]
+    return [("common", VIRTUAL_SPECS["common"][0])] + [
+        (task.name, task.title) for task in all_tasks()] + [
+        (name, title) for name, (title, spec) in VIRTUAL_SPECS.items() if name not in ("common", "activity")]
 
 
 def resolve_profile(cfg, size, parent=None):
@@ -107,8 +119,8 @@ class CalibrationDialog(QDialog):
         self.profile_note.setWordWrap(True)
         layout.addWidget(self.profile_note)
         self.view = QTableView(self)
-        self.model = QStandardItemModel(0, 4, self)
-        self.model.setHorizontalHeaderLabels(["标定项", "状态 / 缩略图", "尺寸组", "说明 / 路径"])
+        self.model = QStandardItemModel(0, 5, self)
+        self.model.setHorizontalHeaderLabels(["标定项", "状态 / 缩略图", "尺寸组", "说明 / 路径", "来源"])
         self.view.setModel(self.model)
         self.view.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.view.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -116,8 +128,9 @@ class CalibrationDialog(QDialog):
         self.view.setIconSize(QSize(144, 64))
         self.view.verticalHeader().hide()
         self.view.verticalHeader().setDefaultSectionSize(72)
-        self.view.set_column_widths((180, 144, 200))
+        self.view.set_column_widths((144, 150, 250, 96))
         self.view.doubleClicked.connect(self.calibrate_selected)
+        self.view.selectionModel().selectionChanged.connect(self._update_actions)
         layout.addWidget(self.view, 1)
         actions = FlowLayout()
         self.capture_button = QPushButton("框选 / 重新标定", self)
@@ -125,6 +138,8 @@ class CalibrationDialog(QDialog):
         self.capture_button.clicked.connect(self.calibrate_selected)
         self.clear_button = QPushButton("设为整窗检测", self)
         self.clear_button.clicked.connect(self.use_full_window)
+        self.restore_button = QPushButton("恢复通用", self)
+        self.restore_button.clicked.connect(self.restore_selected)
         self.add_button = QPushButton("添加装备", self)
         self.add_button.clicked.connect(self.add_item)
         self.delete_button = QPushButton("删除装备", self)
@@ -132,7 +147,8 @@ class CalibrationDialog(QDialog):
         self.delete_button.clicked.connect(self.delete_item)
         self.items_button = QPushButton("管理物品", self)
         self.items_button.clicked.connect(self.open_items)
-        for button in (self.capture_button, self.clear_button, self.add_button, self.delete_button, self.items_button):
+        for button in (self.capture_button, self.restore_button, self.clear_button,
+                       self.add_button, self.delete_button, self.items_button):
             actions.addWidget(button)
         layout.addLayout(actions)
         self.status = QLabel("", self)
@@ -155,13 +171,15 @@ class CalibrationDialog(QDialog):
                 name = items[key].get("name") if key < len(items) else None
                 pid = calib.template_profile(self.cfg, self.task_name, name)
             else:
-                pid = (calib.task_profile(self.cfg, self.task_name) if group == "regions"
-                       else calib.template_profile(self.cfg, self.task_name, key))
+                pid = calibration.resolve_item(self.cfg, self.task_name, group, key)["profile"]
             self.model.item(row, 2).setForeground(QColor(T.SUCCESS if pid == active and calib.get(self.cfg, pid)
                                                        else T.TEXT_DIM))
 
     def _select_task(self):
-        self.task_name = self.tasks.currentData()
+        name = self.tasks.currentData()
+        if name is None:
+            return
+        self.task_name = name
         self.refresh()
 
     def _draft(self):
@@ -169,6 +187,7 @@ class CalibrationDialog(QDialog):
 
     def refresh(self):
         self._generation += 1
+        selected = self._selected() if hasattr(self, "rows") else None
         title, spec = task_spec(self.task_name)
         self.setWindowTitle("标定 · " + title)
         self.model.removeRows(0, self.model.rowCount())
@@ -183,10 +202,9 @@ class CalibrationDialog(QDialog):
                 if (self.only is not None and key not in self.only) or key in self.exclude:
                     continue
                 full = group == "regions" and len(item) > 3 and bool(item[3])
-                value = tc.get(group, {}).get(key)
-                pid = (calib.task_profile(self.cfg, self.task_name) if group == "regions"
-                       else calib.template_profile(self.cfg, self.task_name, key))
-                self._append_row(group, key, name, hint, value, pid, active, full, requests)
+                resolved = calibration.resolve_item(self.cfg, self.task_name, group, key)
+                self._append_row(group, key, name, hint, resolved["value"], resolved["profile"],
+                                 active, full, requests, resolved["source"])
         equipment = self.task_name == "sniper" or spec.get("watchlist", False)
         if equipment and self.only is None:
             for index, item in enumerate(tc.get("watchlist") or []):
@@ -197,7 +215,8 @@ class CalibrationDialog(QDialog):
         self.delete_button.setVisible(equipment and self.only is None)
         self.items_button.setVisible(self.task_name == "organize_bag")
         if self.model.rowCount():
-            self.view.selectRow(0)
+            self.view.selectRow(self.rows.index(selected) if selected in self.rows else 0)
+        self._update_actions()
         self._thumb_cache = {sig: image for sig, image in self._thumb_cache.items() if sig in requests}
         pending = [sig for sig in requests if sig not in self._thumb_cache]
         for sig, rows in requests.items():
@@ -215,7 +234,7 @@ class CalibrationDialog(QDialog):
 
             threading.Thread(target=work, name="mhxy-calibration-thumbnails", daemon=True).start()
 
-    def _append_row(self, group, key, name, hint, value, pid, active, full, requests):
+    def _append_row(self, group, key, name, hint, value, pid, active, full, requests, source=None):
         row = len(self.rows)
         self.rows.append((group, key, full))
         status = (str(value) if value else "整窗检测" if full else "未标定") if group == "regions" else "未标定"
@@ -223,9 +242,16 @@ class CalibrationDialog(QDialog):
         badge = QStandardItem(("当前 · " if pid == active and prof else "")
                               + (f"{prof['label']} {calib.size_text(prof)}" if prof else "未记录"))
         badge.setForeground(QColor(T.SUCCESS if pid == active and prof else T.TEXT_DIM))
+        source = source or ("local" if value else "missing")
+        source_text = {"common": "通用", "local": "本活动", "missing": "未标定"}[source]
+        if self.task_name == "common" and source != "missing":
+            source_text = "通用"
+        elif self.task_name in ("teaming", "activity") and source == "local":
+            source_text = "共享专属"
         self.model.appendRow([QStandardItem(name), QStandardItem(status), badge,
-                              QStandardItem(hint + ("\n" + str(value) if value else ""))])
-        for col in range(4):
+                              QStandardItem(hint + ("\n" + str(value) if value else "")),
+                              QStandardItem(source_text)])
+        for col in range(5):
             item = self.model.item(row, col)
             item.setToolTip(item.text())
         if group != "regions":
@@ -251,6 +277,37 @@ class CalibrationDialog(QDialog):
     def _selected(self):
         row = self.view.currentIndex().row()
         return self.rows[row] if 0 <= row < len(self.rows) else None
+
+    def _update_actions(self, *args):
+        # 模型清空会同步触发 selectionChanged；构建期间按钮尚未创建时忽略。
+        if not hasattr(self, "restore_button"):
+            return
+        selected = self._selected() if hasattr(self, "rows") else None
+        common = False
+        source = "missing"
+        if selected is not None and selected[0] != "watchlist":
+            group, key, _ = selected
+            common = calibration.supports_common(self.task_name, group, key)
+            source = calibration.resolve_item(self.cfg, self.task_name, group, key)["source"]
+        self.restore_button.setVisible(common and self.task_name != "common")
+        self.restore_button.setEnabled(common and source == "local" and not self._busy)
+        self.clear_button.setEnabled(bool(selected and selected[2]) and not self._busy)
+        self.capture_button.setText("单独标定" if common and source != "local"
+                                    and self.task_name != "common" else "框选 / 重新标定")
+
+    def restore_selected(self):
+        selected = self._selected()
+        if self._busy or selected is None or selected[0] == "watchlist":
+            return
+        group, key, _ = selected
+        if not calibration.supports_common(self.task_name, group, key) or self.task_name == "common":
+            return
+        try:
+            draft = self._draft()
+            calibration.restore_common(draft, self.task_name, group, key)
+            self._commit(draft)
+        except Exception as exc:
+            self.status.setText(f"恢复通用失败：{exc}")
 
     def _grab_roi(self, draft, prompt):
         result = capture_roi(self, draft, prompt, allow_desktop_windows=self.task_name == "launch_login")
@@ -304,7 +361,7 @@ class CalibrationDialog(QDialog):
             if group == "regions":
                 tc.setdefault(group, {})[key] = roi
             elif group == "templates":
-                path = tc.get(group, {}).get(key) or f"templates/tm_{key}.png"
+                path = calibration.template_path(draft, self.task_name, key)
                 if self.task_name == "teaming" and key == "leader_id":
                     from ..core.leader_history import ACTIVE_REL
 
@@ -316,8 +373,13 @@ class CalibrationDialog(QDialog):
                 path = item.get("template") or f"templates/{key}.png"
                 item["template"] = path
             cfg_mod.set_task_config(draft, self.task_name, tc)
+            if group in ("regions", "templates"):
+                calibration.set_item(draft, self.task_name, group, key,
+                                     path if group == "templates" else roi, pid)
             if pid is not None:
-                calib.set_task_profile(draft, self.task_name, pid)
+                # 通用/活动的区域、模板各自记尺寸；重标一张图不能改变旧区域的归属。
+                if self.task_name not in calibration.BINDINGS and self.task_name != "common":
+                    calib.set_task_profile(draft, self.task_name, pid)
                 if path:
                     calib.set_template_profile(draft, self.task_name, key, pid)
             self._commit(draft, path, crop, self.task_name == "teaming" and key == "leader_id")
@@ -325,6 +387,7 @@ class CalibrationDialog(QDialog):
             self.status.setText(f"标定失败：{exc}")
         finally:
             self._busy = False
+            self._update_actions()
 
     def use_full_window(self):
         selected = self._selected()
@@ -333,9 +396,12 @@ class CalibrationDialog(QDialog):
             return
         try:
             draft = self._draft()
-            tc = cfg_mod.task_config(draft, self.task_name)
-            tc.setdefault("regions", {})[selected[1]] = None
-            cfg_mod.set_task_config(draft, self.task_name, tc)
+            if calibration.supports_common(self.task_name, "regions", selected[1]) or self.task_name == "common":
+                calibration.set_item(draft, self.task_name, "regions", selected[1], None, None)
+            else:
+                tc = cfg_mod.task_config(draft, self.task_name)
+                tc.setdefault("regions", {})[selected[1]] = None
+                cfg_mod.set_task_config(draft, self.task_name, tc)
             self._commit(draft)
         except Exception as exc:
             self.status.setText(f"保存失败：{exc}")

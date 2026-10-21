@@ -34,6 +34,7 @@ from ..core import window as win_mod
 from ..core import rotation
 from ..core import scan
 from ..core import list_row
+from ..core import calibration_runtime as calibrated
 from .base import Task, register
 
 # 每个号的状态机状态（非阻塞：每访问一次只推进一步）
@@ -250,7 +251,7 @@ class SecretRealmTask(Task):
             return
         ctx.log("已打开活动，翻找秘境降妖卡片…")
         self._interruptible_sleep(ctx, self._jitter(0.6, ctx))
-        activity.select_daily(ctx, lambda s: self._interruptible_sleep(ctx, self._jitter(s, ctx)))
+        activity.select_daily(ctx, lambda s: self._interruptible_sleep(ctx, self._jitter(s, ctx)), self.name)
         rec["scrolls"] = 0
         self._goto(rec, S_FIND_CARD)
 
@@ -261,16 +262,16 @@ class SecretRealmTask(Task):
         list_region = regions.get("activity_list")
 
         def grab_rect():
-            return (ctx.window.region_to_screen_rect(list_region)
-                    if list_region else ctx.window.rect())
+            return calibrated.region_rect(ctx, self.name, "activity_list", list_region)
 
         def probe(scene, rect):
             if scene is None:
                 return scan.SCROLL, None
             got = list_row.locate_card(scene, rect, self.flags.get("sr_entry"),
                                        self.flags.get("sr_join"), threshold,
-                                       self._calib_size(ctx), loop, log=ctx.log,
-                                       window_rect=ctx.window.rect())
+                                       self._calib_size(ctx, "sr_entry"), loop, log=ctx.log,
+                                       window_rect=ctx.window.rect(),
+                                       join_calib_size=self._calib_size(ctx, "sr_join"))
             if got is None:
                 return scan.SCROLL, None
             if got.join_x is None:
@@ -485,12 +486,14 @@ class SecretRealmTask(Task):
             return True
         return False
 
-    def _calib_size(self, ctx):
-        """当前【激活尺寸组】的窗口尺寸 [w,h]，用于估窗口缩放、把画面预缩放回标定尺度（方案二）。
-        真源是 config 顶层 calib_profiles；老配置没有组时 core/calib_profiles.active_size 内部
-        自动退回 targets.base_size 镜像，故行为与旧版一致。没标过/取不到返回 None
-        （则只按 1.0 尺度匹配，与旧行为一致）。"""
+    def _calib_size(self, ctx, key=None):
+        """有 key 时取最终模板自己的标定尺寸，包含通用继承及旧配置归属兜底。
+        未传 key 时保留激活尺寸组/targets.base_size 的旧接口；均无记录则返回 None，
+        匹配保持原始像素尺度。只缩放内存画面，不调整游戏窗口。
+        """
         try:
+            if key is not None:
+                return calibrated.item_size(ctx, self.name, "templates", key)
             return calib.active_size(ctx.cfg)
         except Exception:
             return None
@@ -501,8 +504,9 @@ class SecretRealmTask(Task):
                 for k in _FLAG_KEYS}
 
     def _scene_rect(self, ctx, regions):
+        self._calibration_ctx = ctx
         region = regions.get("scene")
-        return ctx.window.region_to_screen_rect(region) if region else ctx.window.rect()
+        return calibrated.region_rect(ctx, self.name, "scene", region)
 
     def _grab_scene(self, ctx, regions):
         rect = self._scene_rect(ctx, regions)
@@ -512,14 +516,14 @@ class SecretRealmTask(Task):
         tpl = self.flags.get(flag_key)
         if scene is None or tpl is None:
             return False
-        return vision.match(scene, tpl, threshold) is not None
+        return calibrated.match_flag(self, scene, tpl, flag_key, threshold) is not None
 
     def _match_scene(self, cur, scene_rect, flag_key, threshold):
         """在整张 scene 里匹配 flag_key，命中返回屏幕绝对 (x,y,score)，否则 None。"""
         tpl = self.flags.get(flag_key)
         if cur is None or tpl is None or scene_rect is None:
             return None
-        m = vision.match(cur, tpl, threshold)
+        m = calibrated.match_flag(self, cur, tpl, flag_key, threshold)
         if m is None:
             return None
         return (scene_rect[0] + m[0], scene_rect[1] + m[1], m[2])
@@ -541,7 +545,8 @@ class SecretRealmTask(Task):
         if x1 - x0 < 1 or y1 - y0 < 1:
             return None
         crop = scene[y0:y1, x0:x1]
-        m = vision.match(crop, tpl, threshold)
+        key = next((key for key, flag in self.flags.items() if flag is tpl), None)
+        m = calibrated.match_flag(self, crop, tpl, key, threshold, ctx)
         if m is None:
             return None
         cx, cy, score = m
@@ -572,7 +577,7 @@ class SecretRealmTask(Task):
                     tpl = self.flags.get(key)
                     if tpl is None:
                         continue
-                    hit = vision.match(scene, tpl, threshold) if scene is not None else None
+                    hit = calibrated.match_flag(self, scene, tpl, key, threshold, wctx)
                     if hit is not None:
                         found.append(f"{label}({hit[2]:.2f})")
                 if found:

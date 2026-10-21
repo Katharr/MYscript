@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..core import config as cfg_mod
+from ..core import calibration
 from ..core import vision
 from ..core.context import TaskContext
 from ..core.input_session import InputSession
@@ -152,7 +153,7 @@ class _ActivityPage(TaskPage):
         self._calibration_generation += 1
         generation = self._calibration_generation
         cfg, signal, task_cls = copy.deepcopy(self.cfg), self.calibration_ready, self.TASK_CLASS
-        tc = cfg_mod.task_config(cfg, self.TASK_NAME)
+        tc = calibration.effective_task_config(cfg, self.TASK_NAME)
         need_regions, need_templates = self._required_assets(tc)
         self.calibration_status.setText("正在后台检查标定与运行条件…")
 
@@ -180,6 +181,9 @@ class _ActivityPage(TaskPage):
                                 "缺少标定" if necessary else "整窗检测" if key == "scene" else "可选 / 未使用")
                             if reused_bag:
                                 state = "已复用整理背包标定"
+                            elif present:
+                                source = calibration.resolve_item(cfg, self.TASK_NAME, kind, key)["source"]
+                                state += " · 通用" if source == "common" else " · 本活动"
                             lines.append(f"{'必需' if necessary else '可选'} · {label}：{state}"
                                          + (f"\n  {value}" if value else ""))
                     lines.extend(["", "启动检查：" + ("通过" if ok else "未通过"), *problems])

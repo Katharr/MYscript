@@ -35,6 +35,7 @@ from ..core import window as win_mod
 from ..core import rotation
 from ..core import scan
 from ..core import list_row
+from ..core import calibration_runtime as calibrated
 from .base import Task, register
 
 # 每个号的状态机状态（非阻塞：每访问一次只推进一步）
@@ -148,7 +149,7 @@ class TreasureMapTask(Task):
         self._start_state = S_DIG_OPEN_BAG if self._skip_collect else S_OPEN_ACTIVITY
         threshold = loop["match_threshold"]
         self.flags = self._load_flags(tc)
-        self.flags["flag_bag_open"] = self._bag_template(ctx)
+        self.flags["flag_bag_open"] = self._load_bag_template(ctx)
 
         multi = ctx.cfg.get("targets", {}).get("multi", False)
         switch_delay = ctx.cfg.get("targets", {}).get("switch_delay_sec", 0.15)
@@ -211,7 +212,7 @@ class TreasureMapTask(Task):
         regions = tc["regions"]
         threshold = loop["match_threshold"]
         self.flags = self._load_flags(tc)
-        self.flags["flag_bag_open"] = self._bag_template(wctx)
+        self.flags["flag_bag_open"] = self._load_bag_template(wctx)
         self._skip_collect = tc.get("skip_collect", False)
         self._start_state = S_DIG_OPEN_BAG if self._skip_collect else S_OPEN_ACTIVITY
         rec = self._new_record(wctx)
@@ -290,7 +291,7 @@ class TreasureMapTask(Task):
             return
         ctx.log("已打开活动，滚轮翻找「宝图任务」…")
         self._interruptible_sleep(ctx, self._jitter(0.6, ctx))
-        activity.select_daily(ctx, lambda s: self._interruptible_sleep(ctx, self._jitter(s, ctx)))
+        activity.select_daily(ctx, lambda s: self._interruptible_sleep(ctx, self._jitter(s, ctx)), self.name)
         rec["scrolls"] = 0
         self._goto(rec, S_FIND_CARD)
 
@@ -301,16 +302,16 @@ class TreasureMapTask(Task):
         list_region = regions.get("activity_list")
 
         def grab_rect():
-            return (ctx.window.region_to_screen_rect(list_region)
-                    if list_region else ctx.window.rect())
+            return calibrated.region_rect(ctx, self.name, "activity_list", list_region)
 
         def probe(scene, rect):
             if scene is None:
                 return (scan.SCROLL, None)
             got = list_row.locate_card(scene, rect, self.flags.get("flag_treasure_entry"),
                                        self.flags.get("flag_join"), threshold,
-                                       self._calib_size(ctx), loop, log=ctx.log,
-                                       window_rect=ctx.window.rect())
+                                       self._calib_size(ctx, "flag_treasure_entry"), loop, log=ctx.log,
+                                       window_rect=ctx.window.rect(),
+                                       join_calib_size=self._calib_size(ctx, "flag_join"))
             if got is None:
                 return (scan.SCROLL, None)
             if got.join_x is None:
@@ -498,8 +499,7 @@ class TreasureMapTask(Task):
             if self._bag_visible(ctx, threshold) is not True:
                 observation_failed = True
                 return None
-            rect = (ctx.window.region_to_screen_rect(list_region)
-                    if list_region else ctx.window.rect())
+            rect = calibrated.region_rect(ctx, self.name, "bag_list", list_region)
             window_rect = ctx.window.rect()
             if not rect or not window_rect or not list_region:
                 observation_failed = True
@@ -516,7 +516,7 @@ class TreasureMapTask(Task):
             if scene is None or scene.shape[0] < template.shape[0] or scene.shape[1] < template.shape[1]:
                 observation_failed = True
                 return (scan.STAY, None)
-            hit = vision.match(scene, template, threshold)
+            hit = calibrated.match_flag(self, scene, template, "treasure_item", threshold, ctx)
             if hit is not None:
                 if ctx.mouse.double_click(rect[0] + hit[0], rect[1] + hit[1]) is False:
                     action_failed = True
@@ -643,19 +643,30 @@ class TreasureMapTask(Task):
     # 工具
     # ------------------------------------------------------------------
     @staticmethod
-    def _bag_template(ctx):
-        """优先使用宝图专属背包标志，未标定时复用整理背包的整理按钮。"""
+    def _bag_asset(ctx):
+        """模板和标定来源一起选择；保留专属图优先、无法加载时复用整理背包的规则。"""
         tc = ctx.task_cfg("treasure_map")
         path = tc.get("templates", {}).get("flag_bag_open")
         if path:
             template = vision.load_template(path)
             if template is not None:
-                return template
+                return template, ("treasure_map", "flag_bag_open")
         shared = ctx.cfg.get("tasks", {}).get("organize_bag", {}).get("templates", {})
-        return vision.load_template(shared.get("sort_button")) if shared.get("sort_button") else None
+        template = vision.load_template(shared.get("sort_button")) if shared.get("sort_button") else None
+        return template, ("organize_bag", "sort_button")
+
+    @staticmethod
+    def _bag_template(ctx):
+        return TreasureMapTask._bag_asset(ctx)[0]
+
+    def _load_bag_template(self, ctx):
+        template, source = self._bag_asset(ctx)
+        self._template_sources = {"flag_bag_open": source}
+        return template
 
     def _bag_visible(self, ctx, threshold):
         """True=固定背包标志可见，False=有效画面未命中，None=不可观察。"""
+        self._calibration_ctx = ctx
         if self.flags.get("flag_bag_open") is None:
             return None
         rect = ctx.window.rect()
@@ -710,12 +721,14 @@ class TreasureMapTask(Task):
         ctx.log(f"{label}…帧差 {d}（静止阈值 {still_diff}，已静止 {held:.1f}/{idle_need}s）{extra}")
         rec["t_diag"] = now
 
-    def _calib_size(self, ctx):
-        """当前【激活尺寸组】的窗口尺寸 [w,h]，用于估窗口缩放、把画面预缩放回标定尺度（方案二）。
-        真源是 config 顶层 calib_profiles；老配置没有组时 core/calib_profiles.active_size 内部
-        自动退回 targets.base_size 镜像，故行为与旧版一致。没标过/取不到返回 None
-        （则只按 1.0 尺度匹配，与旧行为一致）。"""
+    def _calib_size(self, ctx, key=None):
+        """有 key 时取最终模板自己的标定尺寸，包含通用继承及旧配置归属兜底。
+        未传 key 时保留激活尺寸组/targets.base_size 的旧接口；均无记录则返回 None，
+        匹配保持原始像素尺度。只缩放内存画面，不调整游戏窗口。
+        """
         try:
+            if key is not None:
+                return calibrated.item_size(ctx, self.name, "templates", key)
             return calib.active_size(ctx.cfg)
         except Exception:
             return None
@@ -726,8 +739,9 @@ class TreasureMapTask(Task):
                 for k in _FLAG_KEYS}
 
     def _scene_rect(self, ctx, regions):
+        self._calibration_ctx = ctx
         region = regions.get("scene")
-        return ctx.window.region_to_screen_rect(region) if region else ctx.window.rect()
+        return calibrated.region_rect(ctx, self.name, "scene", region)
 
     def _grab_scene(self, ctx, regions):
         rect = self._scene_rect(ctx, regions)
@@ -737,14 +751,14 @@ class TreasureMapTask(Task):
         tpl = self.flags.get(flag_key)
         if scene is None or tpl is None:
             return False
-        return vision.match(scene, tpl, threshold) is not None
+        return calibrated.match_flag(self, scene, tpl, flag_key, threshold) is not None
 
     def _match_scene(self, cur, scene_rect, flag_key, threshold):
         """在整张 scene 里匹配 flag_key，命中返回屏幕绝对 (x,y,score)，否则 None。"""
         tpl = self.flags.get(flag_key)
         if cur is None or tpl is None or scene_rect is None:
             return None
-        m = vision.match(cur, tpl, threshold)
+        m = calibrated.match_flag(self, cur, tpl, flag_key, threshold)
         if m is None:
             return None
         return (scene_rect[0] + m[0], scene_rect[1] + m[1], m[2])
@@ -755,7 +769,7 @@ class TreasureMapTask(Task):
         tpl = self.flags.get(flag_key)
         if cur is None or tpl is None:
             return None
-        m = vision.match(cur, tpl, 0.0)
+        m = calibrated.match_flag(self, cur, tpl, flag_key, 0.0)
         return m[2] if m is not None else None
 
     def _close_bag(self, ctx):
@@ -801,7 +815,7 @@ class TreasureMapTask(Task):
                     if tpl is None:
                         continue
                     flag_threshold = min(threshold, loop.get("battle_threshold", 0.80)) if key == "flag_battle" else threshold
-                    hit = vision.match(scene, tpl, flag_threshold) if scene is not None else None
+                    hit = calibrated.match_flag(self, scene, tpl, key, flag_threshold, wctx)
                     if hit is not None:
                         found.append(f"{label}({hit[2]:.2f})")
                 if found:

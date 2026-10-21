@@ -6,7 +6,7 @@
 
 import threading
 
-from . import config as cfg_mod
+from . import calibration
 from . import window as win_mod
 from . import accounts
 from .window import GameWindow
@@ -95,4 +95,4 @@ class TaskContext:
 
     # ---- 便捷：取本任务的配置块 ----
     def task_cfg(self, task_name):
-        return cfg_mod.task_config(self.cfg, task_name)
+        return calibration.effective_task_config(self.cfg, task_name)

@@ -166,6 +166,21 @@ DEFAULT_CONFIG = {
 
     # ---- 各任务独立配置 ----
     "tasks": {
+        # 通用标定只保存共享资产；各活动通过 calibration 逐项解析，禁止把继承结果写回活动。
+        "common": {
+            "regions": {"scene": None, "activity_list": None},
+            "templates": {
+                "battle_indicator": None,
+                "activity_join": None,
+                "daily_activity": None,
+                "dialog_confirm": None,
+                "dialog_ok": None,
+                "dialog_cancel": None,
+            },
+            "regions_calib": {},
+            "templates_calib": {},
+            "calibration_modes": {},
+        },
         # ---- 活动页导航（所有活动入口共用，可选标定）----
         "activity": {
             "loop": {"match_threshold": 0.85, "after_click_wait_sec": 0.35},

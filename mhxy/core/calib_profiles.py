@@ -233,11 +233,12 @@ def delete(cfg, pid):
         cal = tc.get(TASK_CALIB_KEY)
         if isinstance(cal, dict) and _as_id(cal.get("profile")) == prof["id"]:
             cal["profile"] = None
-        tpls = tc.get(TASK_TPL_KEY)
-        if isinstance(tpls, dict):
-            for k, v in list(tpls.items()):
-                if _as_id(v) == prof["id"]:
-                    tpls[k] = None
+        for field in (TASK_TPL_KEY, "regions_calib"):
+            pointers = tc.get(field)
+            if isinstance(pointers, dict):
+                for k, v in list(pointers.items()):
+                    if _as_id(v) == prof["id"]:
+                        pointers[k] = None
     if not its:
         blk[ACTIVE_KEY] = None
         cfg.setdefault("targets", {})["base_size"] = None

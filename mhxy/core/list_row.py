@@ -209,7 +209,7 @@ def _tpl_shape(tpl):
 # ----------------------------------------------------------------------
 def locate_card(scene, area_rect, anchor_tpl, join_tpl,
                 match_threshold=0.85, calib_size=None, cfg=None, log=None,
-                window_rect=None):
+                window_rect=None, join_calib_size=None):
     """在活动列表截图 scene 里定位「卡片 + 它右侧的参加按钮」。
 
     参数：
@@ -222,6 +222,7 @@ def locate_card(scene, area_rect, anchor_tpl, join_tpl,
       cfg             任务 loop 配置（join_reach_ratio / join_band_ratio / join_min_score）
       log             可选日志回调 log(msg, level=...)
       window_rect     当前窗口矩形（估缩放用；缺省退回 area_rect，只在列表区≈整窗时才准）
+      join_calib_size 参加模板自己的标定尺寸；省略时保持与条目共用 calib_size 的旧行为
 
     返回 CardHit；返回 None = 根本没认出条目（该继续滚动找）。
     认出了条目但按钮没匹配上：返回 CardHit 且 join_x is None——调用方据此打「认出了但找不到参加」
@@ -230,7 +231,12 @@ def locate_card(scene, area_rect, anchor_tpl, join_tpl,
     cfg = cfg or {}
     if scene is None or area_rect is None or anchor_tpl is None or join_tpl is None:
         return None
-    est = estimate_scale(window_rect or area_rect, calib_size)   # 当前窗口 ÷ 标定基准
+    est = estimate_scale(window_rect or area_rect, calib_size)   # 当前窗口 ÷ 条目标定基准
+    # 通用参加模板可能与活动卡片在不同尺寸标定。先把参加模板换到
+    # 条目的基准尺度，再进入同帧、同卡几何绑定逻辑。
+    join_est = estimate_scale(window_rect or area_rect, join_calib_size)
+    if join_calib_size is not None and join_est is not None:
+        join_tpl = _scaled(join_tpl, join_est / (est or 1.0))
     # ① 方案二：把画面预缩放回标定基准尺度（只在内存里缩，绝不动游戏窗口），再照原样匹配模板。
     #    缩放比取 est 的【倒数】（est=画面相对基准的尺度；要缩回基准就得乘 1/est）。
     #    命中坐标属于缩放后的画面，末尾统一用 1/norm 换回屏幕绝对坐标。
