@@ -448,7 +448,7 @@ DEFAULT_CONFIG = {
                 "arrow_card_ratio": 2.0,     # 好友【卡片】高 ≈ 队长ID模板高的几倍（撑开找箭头的竖直带、覆盖整张卡片）
                 "arrow_leader_pos": 0.4,     # 队长ID 在卡片内的纵向位置(从顶算占比，0.4=中上)；兜底点落到卡片纵向中心而非队长ID 的 Y
                 "disband_timeout_sec": 60,   # 解散队伍整体超时（安全网）：到点仍没让所有号退完就结束
-                "disband_quit_wait_sec": 1.0,# 开队伍面板后等「退出队伍」出现的短等待：超这么久没找到就认为本就不在队、直接关面板
+                "disband_quit_wait_sec": 3.0,# 退队状态确认等待（最少 3 秒）；未确认则重开面板，最多三次
                 "max_stuck_recover": 3       # 连续卡死多少次就放弃该号
             },
             "regions": {                 # 相对游戏窗口 [x,y,w,h]，标定向导写入

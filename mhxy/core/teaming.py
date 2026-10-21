@@ -57,8 +57,8 @@ _TPL_KEYS = ["team_create", "team_apply", "team_accept", "team_apply_join", "tea
 # preflight 用：必备区域 / 必备模板（team_arrow 可选，缺失走固定偏移兜底）
 TEAM_REQUIRED_REGIONS = ["team_panel", "friend_list"]
 TEAM_REQUIRED_TEMPLATES = ["team_create", "team_apply", "team_accept", "team_apply_join", "leader_id"]
-# 解散队伍必备模板（team_button 可选——缺则跳过那一步直接找「退出队伍」）
-DISBAND_REQUIRED_TEMPLATES = ["team_quit"]
+# 解散需识别退出按钮，以及证明当前不在队的创建按钮。
+DISBAND_REQUIRED_TEMPLATES = ["team_quit", "team_create"]
 
 # 队长状态链
 C_OPEN_TEAM = "C_OPEN_TEAM"   # 发 open_team 开队伍面板
@@ -74,7 +74,7 @@ M_APPLY_JOIN = "M_APPLY_JOIN"     # 点「申请入队」
 M_CLOSE = "M_CLOSE"               # 右键关好友弹窗
 # 解散队伍状态链（每号同一套流程，不分队长队员）
 D_OPEN = "D_OPEN"                 # 发 open_team 开队伍面板
-D_QUIT = "D_QUIT"                 # 找「退出队伍」→ 点击 → 右键关面板；约1s 内找不到则直接关面板
+D_QUIT = "D_QUIT"                 # 整窗找退出按钮；看到「创建队伍」才确认退队
 
 
 class TeamFormation:
@@ -100,7 +100,7 @@ class TeamFormation:
         self.joined = 0             # 队长已点过的「接受」次数（≈已入队人数）
         self.records = [self._new_record(wctx, role) for wctx, role in assignments]
         self.formation_outcome = None  # run_until_formed 的补充证据，不用于改变握手控制流
-        self.disband_outcome = None    # run_disband 的旧退队/收尾证据，非客户端核验
+        self.disband_outcome = None    # run_disband 的退队核验结果
 
     # ------------------------------------------------------------------
     # 初始化辅助
@@ -403,10 +403,9 @@ class TeamFormation:
     # 解散队伍（每号同一套流程，不分队长队员；用通用轮转逐号推进）
     # ------------------------------------------------------------------
     def run_disband(self):
-        """解散队伍：每个窗口（无论队长队员）跑同一套流程——
-        开队伍面板 → 找「退出队伍」点击 → 右键关面板；约 1s 内找不到「退出队伍」则认为本就不在队、
-        直接关面板收尾。各号独立、无号间握手，故复用通用轮转推进器（每号一份 record、走
-        同一条 D_OPEN→D_QUIT 状态链）。返回 (ok, reason)：ok=所有在场号都已退队/收尾。"""
+        """逐窗退队，只有看到「创建队伍」才确认已不在队。
+        未识别、截图失败和点击被拒绝均不能作为成功证据；重开面板有限重试。
+        """
         self.disband_outcome = None
         multi = self.cfg.get("targets", {}).get("multi", False)
         switch_delay = self.cfg.get("targets", {}).get("switch_delay_sec", 0.15)
@@ -450,17 +449,17 @@ class TeamFormation:
             return False, "stopped"
         done_n = sum(1 for r in records if r["ok"])
         ok = done_n >= len(records) and len(records) > 0
-        # ok 是旧「退队/收尾」判据：未命中与输入拒绝也可能置位，非客户端退队核验。
         self.disband_outcome = ("completed" if ok else "partial" if done_n else
                                 "timeout" if rc.termination_reason == "timeout" else "failed")
-        self.lead.log(f"★ 解散队伍：{done_n}/{len(records)} 个号已退队/收尾。",
+        self.lead.log(f"★ 解散队伍：{done_n}/{len(records)} 个号已确认不在队伍中。",
                       level="hit" if ok else "warn")
         return ok, "disbanded" if ok else "partial"
 
     @staticmethod
     def _new_disband_record(wctx):
         return {"ctx": wctx, "role": None, "state": D_OPEN, "t_state": 0.0,
-                "done": False, "ok": False, "dead_logged": False, "fg_warned": False}
+                "done": False, "ok": False, "dead_logged": False, "fg_warned": False,
+                "attempts": 0, "quit_clicked": False}
 
     def _disband_step(self, rec):
         """按该号当前 state 推进【一小步】后立刻返回（好轮转到下一个号）。"""
@@ -470,31 +469,49 @@ class TeamFormation:
 
     def _db_open(self, rec):
         ctx = rec["ctx"]
+        # 活动页等残留弹窗可能挡住队伍面板；先关闭，再打开，避免 Alt+T 把已开面板切掉。
+        if ctx.send_hotkey("close_panel") is False:
+            rec["done"] = True
+            return
+        self._sleep(self._jitter(0.3))
+        if self.lead.should_stop():
+            return
         if not ctx.send_hotkey("open_team"):
             ctx.log("解散：打不开队伍界面（open_team 未配置），跳过该号。", level="error")
             rec["done"] = True
             return
         ctx.log("解散：已开队伍界面，找「退出队伍」…")
+        rec["attempts"] += 1
+        rec["quit_clicked"] = False
         self._sleep(self._jitter(0.6))
         self._goto(rec, D_QUIT)
 
     def _db_quit(self, rec):
         ctx = rec["ctx"]
-        hit = self._find_in_region(ctx, "team_panel", "team_quit")
+        # 退出按钮可能落在旧的 team_panel 标定框之外；退队始终查整窗。
+        hit = self._find_full(ctx, "team_quit")
         if hit is not None:
-            ctx.mouse.click(hit[0], hit[1])
-            ctx.log(f"解散：点「退出队伍」（{hit[2]:.2f}），关面板收尾。", level="hit")
-            self._sleep(self._jitter(0.5))
-            self._close_panel(ctx, "team_panel")
+            if not rec["quit_clicked"]:
+                if ctx.mouse.click(hit[0], hit[1]) is not False:
+                    ctx.log(f"解散：点「退出队伍」（{hit[2]:.2f}），等待确认退队。")
+                    rec["quit_clicked"] = True
+                    rec["t_state"] = time.time()
+                    return
+        elif self._find_full(ctx, "team_create") is not None:
+            ctx.log("解散：识别到「创建队伍」，确认当前不在队。", level="hit")
             rec["ok"] = True
             rec["done"] = True
+            if not self.lead.should_stop():
+                ctx.send_hotkey("close_panel")
             return
-        # 约 1s 内没找到「退出队伍」→ 认为本就不在队，直接关面板收尾（也算成功，结果都是「不在队」）。
-        if self._elapsed(rec) > self.loop.get("disband_quit_wait_sec", 1.0):
-            ctx.log("解散：没找到「退出队伍」（可能本就不在队），直接关面板收尾。", level="warn")
-            self._close_panel(ctx, "team_panel")
-            rec["ok"] = True
-            rec["done"] = True
+        if self._elapsed(rec) > max(3.0, self.loop.get("disband_quit_wait_sec", 3.0)):
+            if rec["attempts"] < 3:
+                ctx.log("解散：尚未确认退队，重新打开队伍面板重试。", level="warn")
+                self._goto(rec, D_OPEN)
+            else:
+                self._diag_dump(ctx, "full_window", "team_quit", "disband_quit")
+                ctx.log("解散失败：未识别到「创建队伍」，不能确认退队；请检查退队模板或确认弹窗。", level="error")
+                rec["done"] = True
 
     def _dry_run_disband(self, multi, switch_delay):
         keys = [("team_quit", "退出队伍")]
