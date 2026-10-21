@@ -14,6 +14,7 @@ class WindowState:
     label: str
     status: str = "pending"
     minimized: bool = False
+    size: tuple[int, int] | None = None
 
 
 STATUS_NAMES = {"ready": "可用", "pending": "身份未确认", "failed": "检测失败"}

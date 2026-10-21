@@ -80,17 +80,17 @@ class QtStartupIdentityTests(unittest.TestCase):
         self.assertEqual(set(self.window.role_strip.items), {101, 103})
         self.assertIs(self.window.role_strip.items[101], items[101])
 
-    def test_lights_and_selection_are_independent_and_captain_comes_from_config(self):
+    def test_lights_and_selection_are_independent_and_captain_comes_from_top_selection(self):
         self.window._apply_windows(self.states(), "")
         items = self.window.role_strip.items
         self.assertTrue(items[101].property("selected"))
         self.assertFalse(items[102].property("selected"))
         self.assertEqual(items[101].light.styleSheet(), items[102].light.styleSheet())
-        self.assertFalse(items[101]._value[2])
-        self.assertTrue(items[103]._value[2])
-        self.window._select_captain(101)
         self.assertTrue(items[101]._value[2])
         self.assertFalse(items[103]._value[2])
+        self.window._select_captain(103)
+        self.assertFalse(items[101]._value[2])
+        self.assertTrue(items[103]._value[2])
         self.window._apply_windows([], "probe unavailable")
         self.assertEqual(len(items), 3)
         self.assertTrue(all(item._value[0].status == "failed" for item in items.values()))
@@ -105,11 +105,11 @@ class QtStartupIdentityTests(unittest.TestCase):
         self.assertFalse(self.cfg["targets"]["multi"])
         self.assertEqual(self.cfg["targets"]["single_index"], 2)
         self.assertEqual(self.cfg["targets"]["selected_hwnds"], [103])
-        self.assertEqual(self.cfg["tasks"]["teaming"]["captain_index"], 0)
+        self.assertEqual(self.cfg["tasks"]["teaming"]["captain_index"], -1)
         self.window._change_selection("all")
         self.assertEqual(self.cfg["targets"]["multi_indices"], [0, 1, 2])
-        self.assertEqual(self.cfg["tasks"]["teaming"]["captain_index"], 2)
-        self.assertEqual(self.cfg["tasks"]["taohaiqu"]["captain_index"], 2)
+        self.assertEqual(self.cfg["tasks"]["teaming"]["captain_index"], 0)
+        self.assertEqual(self.cfg["tasks"]["taohaiqu"]["captain_index"], 0)
         self.assertEqual(self.cfg["targets"]["switch_delay_sec"], 0.15)
         self.assertTrue(self.cfg["tasks"]["launch_login"]["dry_run"])
         self.window._change_selection("clear")
@@ -171,6 +171,7 @@ class QtStartupIdentityTests(unittest.TestCase):
 
     def test_launch_preflight_runs_in_background_and_reports_failure_on_ui(self):
         runtime = Mock()
+        runtime.any_running.return_value = False
         runtime.drain_logs.return_value = []
         runtime.is_running.return_value = False
         runner = SimpleNamespace(log_queue=queue.Queue(), stop_event=threading.Event(), outcome="idle")
@@ -199,6 +200,7 @@ class QtStartupIdentityTests(unittest.TestCase):
 
     def test_stop_before_launch_thread_starts_cancels_preflight(self):
         runtime = Mock()
+        runtime.any_running.return_value = False
         runtime.drain_logs.return_value = []
         runtime.is_running.return_value = False
         runner = SimpleNamespace(log_queue=queue.Queue(), stop_event=threading.Event(), outcome="idle")

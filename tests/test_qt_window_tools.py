@@ -96,6 +96,10 @@ class QtWindowToolsTests(unittest.TestCase):
             self.app.processEvents()
             tools = self.window.pages[key].window_tools
             self.assertTrue(tools.wake_button.isVisible())
+            if key == "role_window":
+                self.assertFalse(tools.close_button.isVisible())
+                self.window.role_page.danger_section.toggle.click()
+                self.app.processEvents()
             self.assertTrue(tools.close_button.isVisible())
             with patch.object(self.window, "_start_window_action") as start:
                 tools.wake_button.click()

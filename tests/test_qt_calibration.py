@@ -19,6 +19,7 @@ from mhxy.core import calib_profiles as cp, config as cfg_mod, vision
 from mhxy.qtui.main import get_application
 from mhxy.qtui import calibration_dialog as cd, roi_overlay as ro
 from mhxy.qtui.calibration_page import CalibrationPage
+from mhxy.qtui.window_size_panel import WindowSizePanel
 
 
 class QtCalibrationTests(unittest.TestCase):
@@ -226,17 +227,18 @@ class QtCalibrationTests(unittest.TestCase):
 
     def test_profile_switch_delete_failure_and_last_delete_mirror(self):
         cp.get_or_create(self.cfg, [1600, 1200])
-        page = CalibrationPage(cfg=self.cfg)
+        cfg_mod.save_config(self.cfg)
+        page = WindowSizePanel(cfg=self.cfg)
         self.dialogs.append(page)
         with mock.patch.object(cfg_mod, "save_config", side_effect=OSError("save")):
             page.activate_profile(0)
         self.assertEqual(page.cfg, self.cfg)
         page.activate_profile(0)
         self.assertEqual(page.cfg["targets"]["base_size"], [1200, 900])
-        page.delete_active()
+        page.delete_profile(cp.active_id(page.cfg))
         self.assertIsNone(cp.template_profile(page.cfg, "sniper", "sniper_product"))
         self.assertEqual(page.cfg["targets"]["base_size"], [1600, 1200])
-        page.delete_active()
+        page.delete_profile(cp.active_id(page.cfg))
         self.assertIsNone(page.cfg["targets"]["base_size"])
 
     def test_launcher_uses_desktop_without_tracking_size(self):

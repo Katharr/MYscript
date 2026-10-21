@@ -103,6 +103,34 @@ class FlowLayout(QLayout):
         return y + height - rect.y() + margins.bottom()
 
 
+class CollapsibleSection(QWidget):
+    """内容随展开状态参与外层页面布局，不建立嵌套滚动区。"""
+
+    def __init__(self, title, parent=None):
+        super().__init__(parent)
+        from PySide6.QtWidgets import QVBoxLayout
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+        self.toggle = QToolButton(self)
+        self.toggle.setText(title)
+        self.toggle.setCheckable(True)
+        self.toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.toggle.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        layout.addWidget(self.toggle)
+        self.content = QWidget(self)
+        layout.addWidget(self.content)
+        self.toggle.toggled.connect(self._apply_expanded)
+        self._apply_expanded(False)
+
+    def _apply_expanded(self, expanded):
+        self.toggle.setArrowType(Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow)
+        self.content.setVisible(expanded)
+
+    def set_expanded(self, expanded):
+        self.toggle.setChecked(expanded)
+
+
 def configure_form(form):
     form.setContentsMargins(0, 0, 0, 0)
     form.setHorizontalSpacing(16)

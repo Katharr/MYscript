@@ -11,8 +11,9 @@ from .widgets import FormLayout as QFormLayout
 
 from ..core import config as cfg_mod
 from . import theme as T
-from .widgets import FlowLayout, set_field_width
+from .widgets import CollapsibleSection, FlowLayout, set_field_width
 from .window_tools import WindowTools
+from .window_size_panel import WindowSizePanel
 
 
 def target_indices(targets, count, *, apply_limit=False, states=None):
@@ -44,6 +45,9 @@ class RoleWindowPage(QWidget):
         self.cfg = cfg
         self.states = []
         self._busy = False
+        self._stopping = False
+        self._interaction_locked = False
+        self._launch_expanded = None
         self.setObjectName("page_role_window")
         T.set_role(self, "page")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -62,19 +66,13 @@ class RoleWindowPage(QWidget):
         self.refresh_button.clicked.connect(self.refresh_requested.emit)
         header.addWidget(self.refresh_button)
         layout.addLayout(header)
-        self.window_tools = WindowTools(self)
-        layout.addWidget(self.window_tools)
-        self.status = QLabel("", self)
-        self.status.setTextFormat(Qt.TextFormat.PlainText)
-        self.status.setWordWrap(True)
-        layout.addWidget(self.status)
-
         self.body_scroll = QScrollArea(self)
         self.body_scroll.setWidgetResizable(True)
         self.body_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         body = QWidget(self.body_scroll)
         body.setObjectName("taskBody")
         content = QVBoxLayout(body)
+        self._body_layout = content
         content.setContentsMargins(0, 0, 4, 0)
         content.setSpacing(T.SPACE_MD)
         content.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
@@ -82,7 +80,20 @@ class RoleWindowPage(QWidget):
         layout.addWidget(self.body_scroll, 1)
         layout = content
 
-        self.launch_panel = QWidget(self)
+        operations_title = QLabel("窗口操作", body)
+        operations_title.setProperty("role", "section")
+        layout.addWidget(operations_title)
+        self.window_tools = WindowTools(body, separate_close=True)
+        layout.addWidget(self.window_tools)
+        self.size_panel = WindowSizePanel(body, cfg)
+        self.size_panel.config_changed.connect(self._sizes_changed)
+        layout.addWidget(self.size_panel)
+
+        self.launch_section = CollapsibleSection("启动与登录", body)
+        self.launch_section.toggle.clicked.connect(self._remember_launch_expanded)
+        layout.addWidget(self.launch_section)
+
+        self.launch_panel = self.launch_section.content
         launch_layout = QVBoxLayout(self.launch_panel)
         launch_layout.setContentsMargins(0, 0, 0, 0)
         form = QFormLayout()
@@ -105,12 +116,7 @@ class RoleWindowPage(QWidget):
         self.profile_body.setObjectName("profileBody")
         self.profile_rows = QVBoxLayout(self.profile_body)
         self.profile_rows.setContentsMargins(0, 0, 0, 0)
-        profiles = QScrollArea(self)
-        profiles.setWidgetResizable(True)
-        profiles.setMinimumHeight(120)
-        profiles.setWidget(self.profile_body)
-        launch_layout.addWidget(profiles)
-        launch_actions = QHBoxLayout()
+        launch_actions = FlowLayout()
         self.add_button = QPushButton("新增档案", self)
         self.add_button.clicked.connect(self.add_profile)
         launch_actions.addWidget(self.add_button)
@@ -118,18 +124,47 @@ class RoleWindowPage(QWidget):
         self.live.setChecked(not cfg_mod.task_config(cfg, "launch_login").get("dry_run", True))
         self.live.toggled.connect(self.save_mode)
         launch_actions.addWidget(self.live)
-        launch_actions.addStretch()
         self.run_button = QPushButton("开始启动登录", self)
         T.set_role(self.run_button, "primary")
         self.run_button.clicked.connect(self.launch_requested.emit)
         launch_actions.addWidget(self.run_button)
         launch_layout.addLayout(launch_actions)
-        layout.addWidget(self.launch_panel, 2)
+        self.status = QLabel("", self.launch_panel)
+        self.status.setTextFormat(Qt.TextFormat.PlainText)
+        self.status.setWordWrap(True)
+        launch_layout.addWidget(self.status)
+        launch_layout.addWidget(self.profile_body)
+        self.danger_section = CollapsibleSection("危险操作", body)
+        danger_layout = QVBoxLayout(self.danger_section.content)
+        danger_layout.setContentsMargins(0, 0, 0, 0)
+        danger_layout.addWidget(self.window_tools.close_button)
+        layout.addWidget(self.danger_section)
+        layout.addStretch()
         self.render_profiles()
+        self._update_launch_section()
+
+    def _sizes_changed(self, cfg):
+        self.cfg = cfg
+        self.config_changed.emit(cfg)
+
+    def _remember_launch_expanded(self, expanded):
+        self._launch_expanded = expanded
+
+    def _update_launch_section(self):
+        expanded = self._busy or (not self.states if self._launch_expanded is None else self._launch_expanded)
+        self.launch_section.set_expanded(expanded)
+        # 零窗口时先提供启动入口；登录运行时也让停止按钮在页面最上方。
+        first = not self.states or self._busy
+        current = self._body_layout.indexOf(self.launch_section)
+        expected = 0 if first else self._body_layout.indexOf(self.size_panel) + 1
+        if current != expected:
+            self._body_layout.removeWidget(self.launch_section)
+            self._body_layout.insertWidget(0 if first else self._body_layout.indexOf(self.size_panel) + 1,
+                                          self.launch_section)
 
     def update_windows(self, states, error=""):
         self.states = states
-        self.launch_panel.setVisible(not states or self._busy)
+        self._update_launch_section()
         if error:
             self.window_status.setText("检测失败：" + error)
         else:
@@ -219,9 +254,17 @@ class RoleWindowPage(QWidget):
 
     def set_running(self, busy, stopping=False):
         self._busy = busy
+        self._stopping = stopping
+        self.set_interaction_locked(self._interaction_locked)
+        self.run_button.setText("停止中…" if stopping else "停止" if busy else "开始启动登录")
+        self._update_launch_section()
+
+    def set_interaction_locked(self, locked):
+        self._interaction_locked = locked
         for widget in (self.path, self.browse_button, self.detect_button, self.profile_body,
                        self.add_button, self.live):
-            widget.setEnabled(not busy)
-        self.run_button.setText("停止中…" if stopping else "停止" if busy else "开始启动登录")
-        self.run_button.setEnabled(not stopping)
-        self.launch_panel.setVisible(not self.states or busy)
+            widget.setEnabled(not locked and not self._busy)
+        if getattr(self.window(), "_detecting_launcher", False):
+            self.detect_button.setEnabled(False)
+        self.run_button.setEnabled(not self._stopping if self._busy else not locked)
+        self.launch_section.toggle.setEnabled(not self._busy)

@@ -53,11 +53,18 @@ def scan_windows(cfg):
         hwnd = int(win._win._hWnd)
         try:
             minimized = bool(win._win.isMinimized)
-            valid = minimized or win.rect() is not None
+            rect = win.rect() if not minimized else None
+            valid = minimized or rect is not None
             status = ("ready" if label != fallback else "pending") if valid else "failed"
         except Exception:
             minimized, status = False, "failed"
-        states.append(WindowState(hwnd, label, status, minimized))
+        size = None
+        if status != "failed":
+            try:
+                size = win.normal_size() if minimized else tuple(rect[2:4]) if rect else None
+            except Exception:
+                pass  # 尺寸暂不可读不影响窗口存在或角色身份。
+        states.append(WindowState(hwnd, label, status, minimized, size))
     return states
 
 
@@ -69,6 +76,13 @@ def run_window_action(cfg, action):
     title, offset = cfg.get("window_title", "梦幻西游"), cfg.get("window_offset", [0, 0])
     if action == "close":
         return win_mod.close_all(title, offset)
+    if action == "restore_size":
+        from ..core import calib_profiles as calib
+        targets = cfg.get("targets") or {}
+        base = calib.active_size(cfg)
+        if not targets.get("window_handles") or not base:
+            raise ValueError("未选择目标窗口或未记录基准尺寸")
+        return win_mod.restore_targets_size(title, offset, targets, base)
     if action != "wake":
         raise ValueError("未知窗口操作")
     accounts.set_game_dir(cfg.get("game_dir"))
@@ -260,6 +274,7 @@ class MainWindow(QMainWindow):
 
             page = CalibrationPage(parent=self.stack)
             page.config_changed.connect(self._config_changed)
+            page.manage_sizes_requested.connect(self.show_window_sizes)
             return page
         if key == "role_window":
             page = RoleWindowPage(self.cfg, self.stack)
@@ -268,6 +283,8 @@ class MainWindow(QMainWindow):
             page.launch_requested.connect(self.toggle_launch)
             page.detect_launcher_requested.connect(self.detect_launcher)
             self._connect_window_tools(page.window_tools)
+            page.size_panel.restore_requested.connect(self.restore_selected_size)
+            page.size_panel.editing_changed.connect(self._update_strip)
             return page
         if key == "daily":
             from .daily_page import DailyPage
@@ -342,10 +359,19 @@ class MainWindow(QMainWindow):
     def role_page(self) -> RoleWindowPage:
         return self.pages["role_window"]
 
+    def show_window_sizes(self):
+        self.show_page("role_window")
+        self.role_page.body_scroll.ensureWidgetVisible(self.role_page.size_panel)
+        self.role_page.size_panel.restore_button.setFocus()
+
     def _config_changed(self, cfg):
         self.selection.write(cfg)
         self.cfg = cfg
         self.role_page.cfg = copy.deepcopy(cfg)
+        calibration = self.pages.get("calibration")
+        if calibration is not None:
+            calibration.cfg = copy.deepcopy(cfg)
+            calibration.refresh_config()
         app = QApplication.instance()
         if app.property("appearance") != cfg.get("appearance", "light"):
             T.apply_theme(app, cfg.get("appearance", "light"))
@@ -366,13 +392,43 @@ class MainWindow(QMainWindow):
         tools.close_requested.connect(self.close_game_windows)
         tools.update_state(self._window_action, self._window_action_message, self._window_action_level)
 
-    def _show_window_action(self, message, level="info"):
+    def _show_window_action(self, message, level="info", *, action=""):
         self._window_action_message, self._window_action_level = message, level
+        action = action or self._window_action
         for page in self.pages.values():
             tools = getattr(page, "window_tools", None)
             if tools is not None:
-                tools.update_state(self._window_action, message, level)
+                text = "" if page is self.role_page and action == "restore_size" else message
+                tools.update_state(self._window_action, text, level)
+        if action == "restore_size":
+            self.role_page.size_panel.set_status(message, level)
         self.statusBar().showMessage(message)
+
+    def _window_editor_open(self):
+        return (self.role_page.size_panel._editing
+                or any(getattr(page, "_capturing", False) or getattr(page, "_editor", None) is not None
+                       or getattr(page, "_calibration_dialog", None) is not None for page in self.pages.values()))
+
+    def restore_selected_size(self):
+        from ..core import calib_profiles as calib
+        if self._closed or self._window_action:
+            return
+        panel = self.role_page.size_panel
+        if self._selection_locked():
+            panel.set_status("请先停止任务或关闭编辑窗口，再恢复尺寸。", "warn")
+            return
+        if self._window_scan_error:
+            panel.set_status("窗口检测失败，请刷新后重试。", "warn")
+            return
+        if not calib.active_size(self.cfg):
+            panel.set_status("请先记录窗口尺寸或完成一次标定。", "warn")
+            return
+        try:
+            draft = self.selection.snapshot(copy.deepcopy(self.cfg))
+        except ValueError as exc:
+            panel.set_status(str(exc), "warn")
+            return
+        self._start_window_action("restore_size", draft)
 
     def wake_game_windows(self):
         from ..core.runtime import get_runtime
@@ -382,14 +438,16 @@ class MainWindow(QMainWindow):
         if self._calibration_running() or get_runtime().any_running():
             self._show_window_action("请先停止任务，再唤出并识别角色名。", "warn")
             return
-        if any(getattr(page, "_capturing", False) or getattr(page, "_editor", None) is not None
-               or getattr(page, "_calibration_dialog", None) is not None for page in self.pages.values()):
+        if self._window_editor_open():
             self._show_window_action("请先关闭编辑或标定窗口。", "warn")
             return
         self._start_window_action("wake")
 
     def close_game_windows(self):
         if self._closed or self._window_action:
+            return
+        if self._window_editor_open():
+            self._show_window_action("请先关闭编辑或标定窗口。", "warn")
             return
         dialog = QMessageBox(QMessageBox.Icon.Warning, "关闭所有游戏窗口",
                              "将强制结束全部游戏进程，未保存的进度会丢失；正在运行的任务会先停止。",
@@ -405,12 +463,18 @@ class MainWindow(QMainWindow):
         if accepted and not self._closed:
             self._start_window_action("close")
 
-    def _start_window_action(self, action):
+    def _start_window_action(self, action, cfg=None):
+        from ..core import calib_profiles as calib
+        cfg = copy.deepcopy(self.cfg if cfg is None else cfg)
+        self._window_action_size = calib.active_size(cfg)
+        self._window_action_handles = list(cfg.get("targets", {}).get("window_handles", []))
         self._window_action = action
-        self._show_window_action("正在唤出窗口并识别角色名…" if action == "wake" else "正在关闭游戏窗口…")
+        self._show_window_action({"wake": "正在唤出窗口并识别角色名…", "close": "正在关闭游戏窗口…",
+                                  "restore_size": "正在恢复选中窗口尺寸…"}[action])
+        self._update_strip()
         if action == "close":
             self.stop_all_tasks()
-        cfg, bridge = copy.deepcopy(self.cfg), self.bridge
+        bridge = self.bridge
 
         def work():
             try:
@@ -439,13 +503,33 @@ class MainWindow(QMainWindow):
                 level = "warn"
             if total and identified < total and ocr.startswith("unavailable:"):
                 message += "；角色名识别不可用：" + ocr.partition(":")[2].strip()
+        elif action == "restore_size":
+            ok, total, actual = result
+            size = self._window_action_size
+            target = f"{size[0]}×{size[1]}"
+            message = f"已恢复 {ok}/{total} 个窗口至 {target}"
+            actual_by_handle = dict(zip(self._window_action_handles, actual))
+            self.window_states = [replace(s, size=tuple(actual_by_handle[s.hwnd]) if actual_by_handle[s.hwnd] else None)
+                                  if s.hwnd in actual_by_handle else s for s in self.window_states]
+            if not total:
+                message, level = "目标窗口已变化，请刷新并重新选择。", "warn"
+            elif ok < total:
+                level = "warn"
+                valid = [s for s in actual if s]
+                if (len(valid) == total
+                        and any(abs(valid[0][i] - size[i]) > 4 for i in (0, 1))
+                        and all(abs(s[0] - valid[0][0]) <= 4 and abs(s[1] - valid[0][1]) <= 4 for s in valid)):
+                    message += f"；实际尺寸 {valid[0][0]}×{valid[0][1]}，目标尺寸可能受客户端比例限制，请检查后重新标定。"
+                else:
+                    message += "；部分窗口调整失败，请检查窗口状态或运行权限。"
         else:
             total, killed = result
             message = f"已关闭 {killed}/{total} 个游戏进程" if total else "未检测到游戏进程"
             if killed < total:
                 message += "；部分进程未退出，请检查运行权限后重试。"
                 level = "warn"
-        self._show_window_action(message, level)
+        self._update_strip()
+        self._show_window_action(message, level, action=action)
         self.log_panel.append(message, level, "窗口管理")
         if self._scanning:
             self._rescan_after_action = True
@@ -543,7 +627,7 @@ class MainWindow(QMainWindow):
 
     def _selection_locked(self):
         from ..core.runtime import get_runtime
-        return self._calibration_running() or get_runtime().any_running()
+        return self._calibration_running() or get_runtime().any_running() or self._window_editor_open()
 
     def prepare_task_config(self, cfg, task_name):
         if self._selection_locked():
@@ -644,6 +728,9 @@ class MainWindow(QMainWindow):
         self.selection_count.setText(f"已选 {len(selected)} / {len(self.window_states)}")
         self.select_all_button.setEnabled(not locked and bool(self.window_states))
         self.clear_selection_button.setEnabled(not locked and bool(selected))
+        self.role_page.size_panel.set_context(self.cfg, self.window_states, self.selection.selected,
+                                              locked=locked, error=error)
+        self.role_page.set_interaction_locked(locked)
         for page in self._task_pages():
             if not page._start_pending and not page._runtime_running():
                 page.start_button.setEnabled(not locked and bool(selected) and not error)
@@ -730,6 +817,9 @@ class MainWindow(QMainWindow):
             return
         if self._launching or self._runner_running():
             self.stop_all_tasks()
+            return
+        if self._selection_locked():
+            self.role_page.status.setText("请先停止任务或关闭编辑窗口。")
             return
         # 这里只构造已有 runner；耗时的 preflight/start 全部放在线程里。
         from ..core.runtime import get_runtime

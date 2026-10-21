@@ -1,19 +1,19 @@
-"""标定中心：三个尺寸组、任务与共享资产的 Qt 入口。"""
+"""标定中心：只展示当前尺寸组及任务标定入口。"""
 
 import copy
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QInputDialog, QLabel, QPushButton, QVBoxLayout, QWidget
-from .widgets import ComboBox as QComboBox
+from PySide6.QtWidgets import QLabel, QPushButton, QVBoxLayout, QWidget
 
-from ..core import calib_profiles as calib, config as cfg_mod, window as win_mod
-from .calibration_dialog import CalibrationDialog, calibration_tasks, resolve_profile
+from ..core import calib_profiles as calib, config as cfg_mod
+from .calibration_dialog import CalibrationDialog, calibration_tasks
 from . import theme as T
-from .widgets import FlowLayout
+from .widgets import ComboBox as QComboBox, FlowLayout
 
 
 class CalibrationPage(QWidget):
     config_changed = Signal(object)
+    manage_sizes_requested = Signal()
 
     def __init__(self, parent=None, cfg=None):
         super().__init__(parent)
@@ -28,27 +28,16 @@ class CalibrationPage(QWidget):
         title = QLabel("标定中心", self)
         title.setProperty("role", "heading")
         layout.addWidget(title)
-        profiles = FlowLayout()
-        self.profile_buttons = []
-        for index in range(calib.MAX_PROFILES):
-            button = QPushButton(self)
-            button.setCheckable(True)
-            button.setAutoExclusive(True)
-            T.set_role(button, "profile")
-            button.clicked.connect(lambda checked=False, i=index: self.activate_profile(i))
-            profiles.addWidget(button)
-            self.profile_buttons.append(button)
-        layout.addLayout(profiles)
+        self.profile_note = QLabel(self)
+        self.profile_note.setWordWrap(True)
+        layout.addWidget(self.profile_note)
         tools = FlowLayout()
-        self.record_button = QPushButton("记录当前窗口尺寸", self)
-        self.record_button.clicked.connect(self.record_size)
-        self.delete_button = QPushButton("删除当前组（保留模板）", self)
-        T.set_role(self.delete_button, "danger")
-        self.delete_button.clicked.connect(self.delete_active)
+        self.manage_sizes_button = QPushButton("管理窗口尺寸", self)
+        self.manage_sizes_button.clicked.connect(self.manage_sizes_requested.emit)
+        tools.addWidget(self.manage_sizes_button)
         self.refresh_button = QPushButton("刷新配置", self)
         self.refresh_button.clicked.connect(self.refresh_config)
-        for button in (self.record_button, self.delete_button, self.refresh_button):
-            tools.addWidget(button)
+        tools.addWidget(self.refresh_button)
         layout.addLayout(tools)
         self.tasks = QComboBox(self)
         for name, title in calibration_tasks():
@@ -65,87 +54,25 @@ class CalibrationPage(QWidget):
         self.refresh_config()
 
     def _busy(self):
-        running = getattr(self.window(), "_calibration_running", lambda: False)
+        running = getattr(self.window(), "_selection_locked", lambda: False)
         if self._editor is not None or running():
-            self.status.setText("请先停止运行中的任务或关闭标定窗口。")
+            self.status.setText("请先停止运行中的任务或关闭编辑窗口。")
             return True
         return False
-
-    def _draft(self):
-        return copy.deepcopy(self.cfg) if self._cfg_supplied else cfg_mod.load_config()
 
     def refresh_config(self):
         if not self._cfg_supplied:
             self.cfg = cfg_mod.load_config()
-        self.profiles = calib.items(self.cfg)
-        aid = calib.active_id(self.cfg)
-        for index, button in enumerate(self.profile_buttons):
-            prof = self.profiles[index] if index < len(self.profiles) else None
-            button.setEnabled(prof is not None)
-            button.setText(f"{prof['label']} · {calib.size_text(prof)}" if prof else "未记录")
-            button.setChecked(bool(prof and prof["id"] == aid))
-        self.delete_button.setEnabled(bool(self.profiles))
+        size = calib.active_size(self.cfg)
+        profile = calib.active(self.cfg)
+        text = f"{size[0]}×{size[1]}" if size else "未记录"
+        prefix = profile["label"] + " · " if profile else ""
+        self.profile_note.setText("当前尺寸组：" + prefix + text)
 
     def _publish(self, cfg):
         self.cfg = cfg
         self.refresh_config()
         self.config_changed.emit(cfg)
-
-    def _commit(self, draft):
-        try:
-            cfg_mod.save_config(draft)
-        except Exception as exc:
-            self.status.setText(f"保存失败，本次修改未保留：{exc}")
-            return False
-        self._publish(draft)
-        self.status.setText("已保存")
-        return True
-
-    def activate_profile(self, index):
-        if self._busy() or not 0 <= index < len(self.profiles):
-            return
-        try:
-            draft = self._draft()
-            if calib.set_active(draft, self.profiles[index]["id"]):
-                self._commit(draft)
-        except Exception as exc:
-            self.status.setText(f"切换尺寸组失败：{exc}")
-
-    def delete_active(self):
-        if self._busy():
-            return
-        try:
-            draft = self._draft()
-            if calib.active_id(draft) is None:
-                return
-            calib.delete(draft, calib.active_id(draft))
-            self._commit(draft)
-        except Exception as exc:
-            self.status.setText(f"删除尺寸组失败：{exc}")
-
-    def record_size(self):
-        if self._busy():
-            return
-        try:
-            draft = self._draft()
-            win_mod.set_game_process(draft.get("window_process") or win_mod.DEFAULT_GAME_PROCESS_SPEC)
-            wins = win_mod.locate_all(draft.get("window_title", "梦幻西游"), draft.get("window_offset", [0, 0]))
-            if not wins:
-                raise ValueError("没找到游戏窗口，请先打开游戏。")
-            index = 0
-            if len(wins) > 1:
-                labels = [f"窗口 {n + 1}" for n in range(len(wins))]
-                label, ok = QInputDialog.getItem(self, "窗口尺寸", "选择参照窗口：", labels, 0, False)
-                if not ok:
-                    return
-                index = labels.index(label)
-            rect = wins[index].rect()
-            if rect is None:
-                raise ValueError("窗口已失效，请重试。")
-            if resolve_profile(draft, rect[2:4], self) is not None:
-                self._commit(draft)
-        except Exception as exc:
-            self.status.setText(f"记录尺寸失败：{exc}")
 
     def open_task(self):
         if self._busy():

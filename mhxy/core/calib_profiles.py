@@ -203,7 +203,7 @@ def get_or_create(cfg, size):
     its = items(cfg)
     if len(its) >= MAX_PROFILES:
         raise ValueError(f"已有 {MAX_PROFILES} 个尺寸组（{MAX_PROFILES} 个上限）："
-                         f"请先在「窗口尺寸归一化」里删掉一个旧组，再标定 {size[0]}×{size[1]}")
+                         f"请先在「角色与窗口 → 管理尺寸组」里删掉一个旧组，再标定 {size[0]}×{size[1]}")
     blk = cfg.setdefault(PROFILES_KEY, {})
     nid = (max([it["id"] for it in its]) + 1) if its else 1
     its.append({"id": nid, "size": size, "label": label_for(nid), "at": _now_label()})

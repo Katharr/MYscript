@@ -11,7 +11,7 @@ class WindowTools(QWidget):
     wake_requested = Signal()
     close_requested = Signal()
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, separate_close=False):
         super().__init__(parent)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -24,7 +24,8 @@ class WindowTools(QWidget):
         self.close_button = QPushButton("关闭所有游戏窗口", self)
         T.set_role(self.close_button, "danger")
         self.close_button.clicked.connect(self.close_requested.emit)
-        actions.addWidget(self.close_button)
+        if not separate_close:
+            actions.addWidget(self.close_button)
         layout.addLayout(actions)
         self.status = QLabel(self)
         self.status.setWordWrap(True)

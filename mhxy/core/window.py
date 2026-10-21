@@ -467,6 +467,23 @@ class GameWindow:
             session.activated(self, ok)
         return ok
 
+    def normal_size(self):
+        """只读正常窗口尺寸；最小化时读取还原矩形，不唤窗。"""
+        try:
+            if self._win.isMinimized:
+                placement = _WINDOWPLACEMENT()
+                placement.length = ctypes.sizeof(placement)
+                if not _user32.GetWindowPlacement(int(self._win._hWnd), ctypes.byref(placement)):
+                    return None
+                rect = placement.rcNormalPosition
+                size = (rect.right - rect.left, rect.bottom - rect.top)
+            else:
+                rect = self.rect()
+                size = tuple(rect[2:4]) if rect else None
+            return size if size and min(size) > 0 else None
+        except Exception:
+            return None
+
     def _activate(self):
         """把本窗口切到前台并【校验确实成功】，成功返回 True、失败返回 False。
 
@@ -1024,9 +1041,11 @@ def restore_targets_size(title_substr, offset, targets, base_size):
     ok = 0
     actual = []
     for win in wins:
-        win.activate()
-        success = win.resize_to(w, h)
-        r = win.rect()
+        try:
+            success = bool(win.activate()) and win.resize_to(w, h)
+            r = win.rect()
+        except Exception:
+            success, r = False, None
         actual.append([r[2], r[3]] if r else None)
         if success:
             ok += 1
