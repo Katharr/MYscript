@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -27,6 +28,7 @@ from .role_strip import RoleStrip, WindowState
 from .role_window_page import RoleWindowPage
 from .window_selection import WindowSelection
 from .log_panel import LogPanel
+from .log_workspace import LogWorkspace
 
 
 class _Bridge(QObject):
@@ -116,7 +118,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self, settings: QSettings | None = None):
         super().__init__()
-        # 此存储仅包含窗口几何信息，任务配置仍由 core.config 管理。
+        # 此存储仅包含界面布局信息，任务配置仍由 core.config 管理。
         self._settings = settings if settings is not None else QSettings("MHXY", "QtUI")
         self.pages: dict[str, QWidget] = {}
         self.nav_buttons: dict[str, QPushButton] = {}
@@ -193,8 +195,10 @@ class MainWindow(QMainWindow):
         layout.addWidget(navigation)
 
         self.stack = QStackedWidget(shell)
-        stack_layout = QVBoxLayout()
-        stack_layout.setContentsMargins(0, T.SPACE_MD, 0, T.SPACE_MD)
+        self.stack.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding)
+        script = QWidget(shell)
+        stack_layout = QVBoxLayout(script)
+        stack_layout.setContentsMargins(0, 0, 0, 0)
         stack_layout.setSpacing(12)
         self.role_strip = RoleStrip(shell)
         self.role_strip.selection_toggled.connect(self._toggle_window)
@@ -212,10 +216,10 @@ class MainWindow(QMainWindow):
         stack_layout.addLayout(selection_actions)
         stack_layout.addWidget(self.role_strip)
         stack_layout.addWidget(self.stack, 1)
-        self.log_panel = LogPanel(shell)
+        self.log_panel = LogPanel(shell, collapsed=False, sidebar=True)
         self.log_panel.message_added.connect(self._float_message)
-        stack_layout.addWidget(self.log_panel)
-        layout.addLayout(stack_layout, 1)
+        self.log_workspace = LogWorkspace(script, self.log_panel, self._settings, shell)
+        layout.addWidget(self.log_workspace, 1)
 
         status = self.statusBar()
         status.setSizeGripEnabled(True)
@@ -354,6 +358,7 @@ class MainWindow(QMainWindow):
         self.nav_buttons[key].setChecked(True)
         self._page_status.setText(titles[key])
         self._update_strip()
+        self.log_workspace.set_page(self.pages[key])
 
     @property
     def role_page(self) -> RoleWindowPage:
@@ -930,4 +935,5 @@ class MainWindow(QMainWindow):
         for page in self.pages.values():
             page.close()
         self._settings.setValue("window/geometry", self.saveGeometry())
+        self.log_workspace.save_settings()
         super().closeEvent(event)

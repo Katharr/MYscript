@@ -12,8 +12,15 @@ SPACE_LG = 24
 BUTTON_HEIGHT = 36
 ROW_HEIGHT = 44
 NAV_WIDTH = 160
-WINDOW_SIZE = (1120, 720)
+WINDOW_SIZE = (1440, 720)
 MIN_WINDOW_SIZE = (800, 640)
+LOG_WIDTH = 280
+LOG_MIN_WIDTH = 240
+LOG_MAX_WIDTH = 320
+LOG_RAIL_WIDTH = 40
+LOG_HANDLE_WIDTH = 8
+LOG_PADDING = 12
+SCRIPT_COMFORT_WIDTH = 640
 
 PALETTES = {
     "light": dict(
@@ -228,6 +235,12 @@ def _style_sheet(font_height):
         alternate-background-color: {BG}; gridline-color: {DIVIDER};
     }}
     QTextBrowser, QPlainTextEdit {{ padding: 8px; border-radius: 5px; }}
+    QWidget#logSidebar {{ background: {SURFACE}; border-radius: 8px; }}
+    QWidget#logSidebar QPlainTextEdit {{ border: none; padding: 0; }}
+    QWidget#logSidebar QToolButton, QWidget#logSidebar QPushButton {{ padding: 5px 6px; }}
+    QSplitter#logSplitter::handle {{ background: {BG}; }}
+    QSplitter#logSplitter::handle:hover {{ background: {DIVIDER}; }}
+    QToolButton#logRailButton {{ padding: 6px 2px; }}
     QTableView::item {{ padding: 6px; }}
     QHeaderView::section {{
         background: {SIDEBAR}; color: {TEXT_DIM}; padding: 8px;

@@ -55,13 +55,13 @@ class QtShellTests(unittest.TestCase):
         self.assertEqual(self.window.current_page, "role_window")
         self.assertEqual(self.window.stack.count(), 1)
 
-    def test_only_window_geometry_is_saved_and_restored(self):
+    def test_only_ui_geometry_and_log_preferences_are_saved_and_restored(self):
         # offscreen 平台的屏幕宽度为 800；Qt 会把超出屏幕的几何自动调整。
         self.window.resize(800, 680)
         self.window.move(60, 70)
         self.window.close()
         self.settings.sync()
-        self.assertEqual(self.settings.allKeys(), ["window/geometry"])
+        self.assertEqual(self.settings.allKeys(), ["window/geometry", "window/logExpanded", "window/logWidth"])
         self.assertEqual(self.settings.value("window/geometry"), self.window.saveGeometry())
         restored = MainWindow(settings=self.settings)
         try:

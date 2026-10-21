@@ -151,6 +151,11 @@ class SharedSelectionTests(unittest.TestCase):
         strip.horizontalScrollBar().setValue(strip.horizontalScrollBar().maximum())
         self.assertLessEqual(strip.widget().mapTo(strip.viewport(), strip.items[105].geometry().bottomRight()).x(), strip.viewport().width())
         layout(1120, 5)
+        # 右侧日志常驻后，按脚本实际可用宽度滚动，不能压缩角色卡。
+        self.assertEqual(self.window.log_panel.width(), 280)
+        self.assertGreater(strip.horizontalScrollBar().maximum(), 0)
+        self.assertEqual([strip.items[h].width() for h in (101, 102)], widths)
+        layout(1440, 5)
         self.assertEqual(strip.horizontalScrollBar().maximum(), 0)
         self.assertEqual(strip.height(), compact_height)
         self.assertEqual([strip.items[h].width() for h in (101, 102)], widths)
