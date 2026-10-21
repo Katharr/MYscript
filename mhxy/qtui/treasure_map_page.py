@@ -170,10 +170,16 @@ class _ActivityPage(TaskPage):
                             value = tc.get(kind, {}).get(key)
                             present = bool(value) if kind == "regions" else (
                                 bool(value) and vision.load_template(value) is not None)
+                            reused_bag = (self.TASK_NAME == "treasure_map" and key == "flag_bag_open"
+                                          and not present and task_cls._bag_template(ctx) is not None)
+                            if reused_bag:
+                                present = True
                             necessary = key in required
                             missing += int(necessary and not present)
                             state = "已标定" if present else (
                                 "缺少标定" if necessary else "整窗检测" if key == "scene" else "可选 / 未使用")
+                            if reused_bag:
+                                state = "已复用整理背包标定"
                             lines.append(f"{'必需' if necessary else '可选'} · {label}：{state}"
                                          + (f"\n  {value}" if value else ""))
                     lines.extend(["", "启动检查：" + ("通过" if ok else "未通过"), *problems])
@@ -258,7 +264,7 @@ class TreasureMapPage(_ActivityPage):
 
     def _required_assets(self, tc):
         regions = {"bag_list"}
-        templates = {"flag_next_map", "treasure_item"}
+        templates = {"flag_next_map", "treasure_item", "flag_bag_open"}
         if not tc.get("skip_collect", False):
             regions.add("activity_list")
             templates.update(("flag_treasure_entry", "flag_join", "flag_tingting"))

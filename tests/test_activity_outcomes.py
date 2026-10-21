@@ -6,7 +6,10 @@ from contextlib import ExitStack
 from types import SimpleNamespace
 from unittest import mock
 
+import numpy as np
+
 from mhxy.core import rotation
+from mhxy.core import scan
 from mhxy.tasks import escort, treasure_map, secret_realm
 
 CASES = [(escort, escort.EscortTask, 'escorts'),
@@ -186,11 +189,32 @@ class ActivityOutcomeTests(unittest.TestCase):
         task._finish_escort(ctx, rec)
         self.assertEqual(task._activity_run_outcome(ctx, [rec], 'completed', 'escorts'), 'completed')
 
-    def test_treasure_no_map_legacy_scan_completes_and_closes_once(self):
+    def test_treasure_legacy_scan_without_coverage_evidence_does_not_complete(self):
         ctx, task = Context('treasure_map'), self.task(treasure_map.TreasureMapTask)
         rec, step = task.make_chain_driver(ctx)
+        task.flags['treasure_item'] = np.arange(12, dtype=np.uint8).reshape(2, 2, 3)
         task._close_bag = mock.Mock()
-        with mock.patch.object(treasure_map.scan, 'scroll_search', return_value=SimpleNamespace(found=False, stopped=False)):
+        task._bag_visible = mock.Mock(return_value=True)
+        task._recover_window = mock.Mock()
+        with mock.patch.object(treasure_map.scan, 'scroll_search', return_value=scan.ScanResult('exhausted')):
+            task._do_dig_find(ctx, rec, {}, {}, .85)
+        self.assertFalse(rec['done'])
+        self.assertEqual(rec['dug'], 0)
+        task._close_bag.assert_not_called()
+        task._recover_window.assert_called_once()
+
+    def test_treasure_two_confirmed_empty_passes_complete_and_close_once(self):
+        ctx, task = Context('treasure_map'), self.task(treasure_map.TreasureMapTask)
+        rec, step = task.make_chain_driver(ctx)
+        task.flags['treasure_item'] = np.arange(12, dtype=np.uint8).reshape(2, 2, 3)
+        rec['state'] = treasure_map.S_DIG_FIND
+        task._close_bag = mock.Mock()
+        task._bag_visible = mock.Mock(return_value=True)
+        result = scan.ScanResult('exhausted', reached_top=True, reached_end=True)
+        with mock.patch.object(treasure_map.scan, 'scroll_search', return_value=result):
+            task._do_dig_find(ctx, rec, {}, {}, .85)
+            self.assertFalse(rec['done'])
+            task._close_bag.assert_not_called()
             task._do_dig_find(ctx, rec, {}, {}, .85)
         self.assertTrue(rec['done'])
         self.assertEqual(rec['dug'], 0)
@@ -200,11 +224,46 @@ class ActivityOutcomeTests(unittest.TestCase):
     def test_treasure_stopped_scan_does_not_finish_or_close(self):
         ctx, task = Context('treasure_map'), self.task(treasure_map.TreasureMapTask)
         rec, step = task.make_chain_driver(ctx)
+        task.flags['treasure_item'] = np.arange(12, dtype=np.uint8).reshape(2, 2, 3)
         task._close_bag = mock.Mock()
+        task._bag_visible = mock.Mock(return_value=True)
+        task._recover_window = mock.Mock()
         with mock.patch.object(treasure_map.scan, 'scroll_search', return_value=SimpleNamespace(found=False, stopped=True)):
             task._do_dig_find(ctx, rec, {}, {}, .85)
         self.assertFalse(rec['done'])
         task._close_bag.assert_not_called()
+
+    def test_treasure_mixed_summary_reports_unconfirmed_windows(self):
+        ctx, task = Context('treasure_map'), self.task(treasure_map.TreasureMapTask)
+        task.make_chain_driver(ctx)
+        records = []
+        for label, outcome in [('已挖空号', 'completed'), ('异常号', 'failed'), ('超时号', None)]:
+            child = Context('treasure_map')
+            child.label = label
+            rec = task._new_record(child)
+            rec['state'] = treasure_map.S_DIG_FIND
+            if outcome:
+                rec.update(outcome=outcome, done=True)
+            records.append(rec)
+        task._log_summary(ctx, records, 'timeout', 2.8)
+        lines = [call.args[0] for call in ctx.log.call_args_list]
+        self.assertIn('已挖空号：确认挖空。', lines)
+        self.assertTrue(any('异常号：异常退出，未确认挖空' in line for line in lines))
+        self.assertTrue(any('超时号：超时，未确认挖空' in line for line in lines))
+        self.assertIn('确认挖空 1/3 个号，其余号未确认挖空。', lines)
+        self.assertNotIn('所有号均已确认挖空。', lines)
+
+    def test_treasure_stopped_summary_preserves_completed_window(self):
+        ctx, task = Context('treasure_map'), self.task(treasure_map.TreasureMapTask)
+        task.make_chain_driver(ctx)
+        completed, pending = task._new_record(ctx), task._new_record(ctx)
+        completed.update(done=True, outcome='completed')
+        ctx.stop.set()
+        task._log_summary(ctx, [completed, pending], 'stopped', 1.0)
+        lines = [call.args[0] for call in ctx.log.call_args_list]
+        self.assertTrue(any('确认挖空。' in line for line in lines))
+        self.assertTrue(any('手动停止，未确认挖空' in line for line in lines))
+        self.assertIn('确认挖空 1/2 个号，其余号未确认挖空。', lines)
 
     def test_secret_leave_timeout_keeps_runs_but_reports_partial(self):
         ctx, task = Context('secret_realm'), self.task(secret_realm.SecretRealmTask)

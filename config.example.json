@@ -300,6 +300,8 @@
       "loop": {
         "time_limit_min": 30,
         "match_threshold": 0.85,
+        "battle_threshold": 0.80,
+        "bag_open_timeout_sec": 5.0,
         "tick_interval_sec": 0.6,
         "still_min_sec": 0.3,
         "still_wait_sec": 2.0,
@@ -343,6 +345,7 @@
         "flag_join": "templates/tm_flag_join.png",
         "flag_tingting": "templates/tm_flag_tingting.png",
         "flag_battle": "templates/tm_flag_battle.png",
+        "flag_bag_open": null,
         "flag_next_map": "templates/tm_flag_next_map.png",
         "treasure_item": "templates/tm_treasure_item.png"
       }

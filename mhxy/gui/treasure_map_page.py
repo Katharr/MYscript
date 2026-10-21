@@ -147,8 +147,11 @@ class TreasureMapPage(ctk.CTkFrame):
         need_t = (["flag_next_map", "treasure_item"] if skip else
                   ["flag_treasure_entry", "flag_join", "flag_tingting",
                    "flag_next_map", "treasure_item"])
+        need_t.append("flag_bag_open")
+        bag_template = (templates.get("flag_bag_open") or self.app.cfg.get("tasks", {})
+                        .get("organize_bag", {}).get("templates", {}).get("sort_button"))
         rdone = sum(1 for k in need_r if regions.get(k))
-        tdone = sum(1 for k in need_t if templates.get(k))
+        tdone = sum(1 for k in need_t if (bag_template if k == "flag_bag_open" else templates.get(k)))
         self.lbl_calib.configure(
             text=f"标定：必要区域 {rdone}/{len(need_r)}，必要模板 {tdone}/{len(need_t)}"
                  + ("　✓ 可运行" if rdone == len(need_r) and tdone == len(need_t) else "　（还需标定）"))

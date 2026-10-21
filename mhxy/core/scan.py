@@ -44,14 +44,18 @@ class ScanResult:
     """滚动查找结果。
     outcome: 'accept'（找到）/ 'exhausted'（翻完整段都没有）/ 'stopped'（被停止或区域取不到）。
     payload: probe 在 ACCEPT 时返回的负载（如点中的坐标分数），透传给调用方。
-    reached_end: 仅 exhausted 时有意义——True=因「滚到底(帧差判定)」而结束（已确实翻完），
-                 False=因 max_tries 用尽（可能没翻完，列表比上限长或一直没滚动）。"""
+    reached_end: 仅 exhausted 时有意义——True=因「滚到底(帧差判定)」而结束；
+                 False=因 max_tries 用尽（可能没翻完，列表比上限长或一直没滚动）。
+    reached_top: 已经通过向上滚动确认顶部；默认 False，旧结果不能冒充完整覆盖。
+                 判定全段无目标时，必须同时检查 reached_top 和 reached_end。"""
 
-    def __init__(self, outcome, payload=None, scrolls=0, reached_end=False):
+    def __init__(self, outcome, payload=None, scrolls=0, reached_end=False,
+                 reached_top=False):
         self.outcome = outcome
         self.payload = payload
         self.scrolls = scrolls
         self.reached_end = reached_end
+        self.reached_top = reached_top
 
     @property
     def found(self):
@@ -70,75 +74,108 @@ def _center(rect):
     return rect[0] + rect[2] // 2, rect[1] + rect[3] // 2
 
 
+def _valid_scan_scene(scene):
+    """严格覆盖证据必须来自有效画面；空帧、黑屏、纯色占位不能证明滚到边界。"""
+    return (scene is not None and getattr(scene, "ndim", 0) >= 2
+            and scene.size > 0 and scene.shape[0] > 0 and scene.shape[1] > 0
+            and float(scene.var(axis=(0, 1)).max()) > 0.25)
+
+
 def _scroll_to_top(grab_rect, mouse, should_stop, sleep, scroll_step,
-                   settle_sec, end_diff, reset_max, log):
-    """开列表后先往上滚到顶：向上滚一屏、对比滚动前/后该区域，连续两帧几乎不变=已到顶。
-    reset_max 是防死循环上限（列表很长时也不至于无限上滚）。被停止/区域没了即返回。"""
+                   settle_sec, end_diff, reset_max, log,
+                   stable_scrolls=1, require_valid_scene=False):
+    """向上滚动并比较前后画面，连续 stable_scrolls 次不变才确认顶部。
+    返回 True=确认顶部，None=仅耗尽上限，False=被停止或截图/滚动失败。"""
     up = -int(scroll_step)          # scroll_step 负=向下；取反得「向上」格数
     prev = None
     ups = 0
-    while not should_stop() and ups < reset_max:
+    stable = 0
+    while not should_stop():
         rect = grab_rect()
         if rect is None:
             return False
         cur = win_mod.grab(rect)
-        if cur is None:
+        if cur is None or should_stop():
             return False
-        if cur is not None and prev is not None and vision.frame_diff(cur, prev) < end_diff:
-            return True             # 滚不动了=已到顶
+        if require_valid_scene and not _valid_scan_scene(cur):
+            return False
+        if prev is not None:
+            stable = stable + 1 if vision.frame_diff(cur, prev) < end_diff else 0
+            if stable >= stable_scrolls:
+                return True         # 足够次数有效上滚后，画面仍保持不变
+        if ups >= reset_max:
+            if log:
+                log(f"滚到顶达上限 {reset_max} 屏，未确认顶部。")
+            return None
         cx, cy = _center(rect)
         if mouse.scroll(up, cx, cy) is False:
             return False
         prev = cur
         ups += 1
         sleep(settle_sec)
-    if should_stop():
-        return False
-    if ups >= reset_max and log:
-        log(f"滚到顶达上限 {reset_max} 屏仍在变化（列表很长或 end_diff 偏小），按当前位置开始向下找。")
-
-    return True
+    return False
 
 def scroll_search(*, grab_rect, probe, mouse, should_stop, sleep,
                   scroll_step=-3, max_tries=8, settle_sec=0.35,
                   reset_to_top=True, end_diff=2.0, reset_max=20,
-                  log=None, label="列表"):
+                  log=None, label="列表", require_full_scan=False):
     """滚动查找主循环。先（可选）滚到顶，再从顶向下逐屏 probe，命中即停；
     每向下滚一屏用帧差判是否到底（到底=已翻完整段）。返回 ScanResult。
 
+    require_full_scan=True 会强制回顶，并要求上下边界均连续两次有效滚动后不变；
+    只有确认顶部、到底且 exhausted 的结果，才表示完成一轮全段无目标扫描。
+
     用户拍板：滚轮查找在【同一个号】上一气呵成跑完（找到/翻完才返回），不在滚动中途让出去轮转别号——
     故这是个自带内循环的阻塞函数，只在 ACCEPT/翻完/被停止时返回；全程勤查 should_stop。"""
-    if reset_to_top:
-        if _scroll_to_top(grab_rect, mouse, should_stop, sleep, scroll_step,
-                          settle_sec, end_diff, reset_max, log) is False:
+    # 本模块约定负数向下；零步长或反向配置不能形成从顶到底的覆盖证据。
+    if require_full_scan and int(scroll_step) >= 0:
+        if log:
+            log(f"{label}严格扫描要求 scroll_step < 0，当前为 {scroll_step}，停止本轮查找。")
+        return ScanResult("stopped")
+    # 严格扫描不能由调用方关闭回顶；否则当前位置以上没有经过检查。
+    reached_top = False
+    if reset_to_top or require_full_scan:
+        top = _scroll_to_top(grab_rect, mouse, should_stop, sleep, scroll_step,
+                             settle_sec, end_diff, reset_max, log,
+                             stable_scrolls=2 if require_full_scan else 1,
+                             require_valid_scene=require_full_scan)
+        if top is False or (require_full_scan and top is not True):
             return ScanResult("stopped")
+        reached_top = top is True
 
     tries = 0
     pre_scroll_scene = None         # 上一次「向下滚之前」看到的那片画面，用来判滚动后有没有动
+    stable = 0
     while not should_stop():
         rect = grab_rect()
         if rect is None:
-            return ScanResult("stopped", scrolls=tries)
+            return ScanResult("stopped", scrolls=tries, reached_top=reached_top)
         scene = win_mod.grab(rect)
         if scene is None or should_stop():
-            return ScanResult("stopped", scrolls=tries)
-
-        # 帧差判到底：刚滚过一屏，但画面和滚前几乎一样→滚动条到底了，整段已翻完
-        # （这片内容上一轮已 probe 过且没接受，不必再 probe，直接判 exhausted）。
-        if pre_scroll_scene is not None and scene is not None \
-                and vision.frame_diff(scene, pre_scroll_scene) < end_diff:
-            if log:
-                log(f"{label}已滚到底（翻完整段未再发现目标）。")
-            return ScanResult("exhausted", scrolls=tries, reached_end=True)
+            return ScanResult("stopped", scrolls=tries, reached_top=reached_top)
+        if require_full_scan and not _valid_scan_scene(scene):
+            return ScanResult("stopped", scrolls=tries, reached_top=reached_top)
 
         decision, payload = probe(scene, rect)
         if decision == ACCEPT:
-            return ScanResult(ACCEPT, payload=payload, scrolls=tries)
+            return ScanResult(ACCEPT, payload=payload, scrolls=tries,
+                              reached_top=reached_top)
+        if should_stop():
+            return ScanResult("stopped", scrolls=tries, reached_top=reached_top)
 
         if decision == SCROLL:
+            # 必须先 probe 当前帧：小目标出现时总帧差也可能很低。
+            if pre_scroll_scene is not None:
+                stable = (stable + 1 if vision.frame_diff(scene, pre_scroll_scene)
+                          < end_diff else 0)
+                if stable >= (2 if require_full_scan else 1):
+                    if log:
+                        log(f"{label}已滚到底（翻完整段未再发现目标）。")
+                    return ScanResult("exhausted", scrolls=tries,
+                                      reached_end=True, reached_top=reached_top)
             cx, cy = _center(rect)
             if mouse.scroll(scroll_step, cx, cy) is False:
-                return ScanResult("stopped", scrolls=tries)
+                return ScanResult("stopped", scrolls=tries, reached_top=reached_top)
             # SCROLL：probe 只看没动手 → 滚前画面干净，记下它，下一轮和滚后对比判到底。
             pre_scroll_scene = scene
         else:                               # HANDLED / STAY：都不滚，原地重 probe，清掉「刚滚过」标记
@@ -147,10 +184,12 @@ def scroll_search(*, grab_rect, probe, mouse, should_stop, sleep,
             #   注：被动作污染的画面不会被拿来判到底——因为没记进 pre_scroll_scene（保持 None）。
             # STAY：主目标在、次级目标缺，原地重试。两者都计入 max_tries 作安全网（见上方 tries += 1）。
             pre_scroll_scene = None
+            stable = 0
 
         tries += 1
         if tries > max_tries:
-            return ScanResult("exhausted", scrolls=tries, reached_end=False)
+            return ScanResult("exhausted", scrolls=tries, reached_end=False,
+                              reached_top=reached_top)
         sleep(settle_sec)
 
-    return ScanResult("stopped", scrolls=tries)
+    return ScanResult("stopped", scrolls=tries, reached_top=reached_top)

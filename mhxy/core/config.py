@@ -255,6 +255,8 @@ DEFAULT_CONFIG = {
             "loop": {
                 "time_limit_min": 30,        # 时间上限（分钟）安全网，0=不限；主终止是「背包挖空」
                 "match_threshold": 0.85,     # 标志模板匹配阈值
+                "battle_threshold": 0.80,    # 战斗小图标单独阈值，不降低道具识别要求
+                "bag_open_timeout_sec": 5.0, # 发快捷键后等待背包固定标志出现
                 "tick_interval_sec": 0.6,    # 每次「截图→判状态」的节拍（带抖动）
                 "still_min_sec": 0.3,        # 帧差判静止：最短先等
                 "still_wait_sec": 2.0,       # 帧差判静止：单次最长等/超时
@@ -296,6 +298,7 @@ DEFAULT_CONFIG = {
                 "flag_join": None,           # 「宝图任务」那一行右侧的「参加」按钮（按行匹配点它）
                 "flag_tingting": None,       # 对话框「听听无妨」选项
                 "flag_battle": None,         # 战斗界面独有标志（监控用，避免误判卡死）
+                "flag_bag_open": None,       # 背包固定标志；空时复用整理背包的 sort_button
                 "flag_next_map": None,       # 挖完弹出的「下一张使用」按钮
                 "treasure_item": None        # 背包里藏宝图道具图标（双击用图靠它定位）
             }
