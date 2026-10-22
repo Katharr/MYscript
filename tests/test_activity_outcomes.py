@@ -171,6 +171,10 @@ class ActivityOutcomeTests(unittest.TestCase):
                 rec, step = task.make_chain_driver(ctx)
                 rec[counter] = 1
                 task._recover_window(ctx, rec, {'max_stuck_recover': 1}, {})
+                if cls is treasure_map.TreasureMapTask:
+                    self.assertFalse(rec['done'])
+                    task._bag_visible = mock.Mock(return_value=False)
+                    task._do_bag_cleanup(ctx, rec, {}, .85)
                 self.assertTrue(rec['done'])
                 self.assertEqual(rec[counter], 1)
                 self.assertEqual(rec['outcome'], 'failed')
@@ -196,7 +200,8 @@ class ActivityOutcomeTests(unittest.TestCase):
         task._close_bag = mock.Mock()
         task._bag_visible = mock.Mock(return_value=True)
         task._recover_window = mock.Mock()
-        with mock.patch.object(treasure_map.scan, 'scroll_search', return_value=scan.ScanResult('exhausted')):
+        rec['scan_failures'] = 2
+        with mock.patch.object(treasure_map.scan.ScanProgress, 'advance', return_value=scan.ScanResult('exhausted')):
             task._do_dig_find(ctx, rec, {}, {}, .85)
         self.assertFalse(rec['done'])
         self.assertEqual(rec['dug'], 0)
@@ -211,11 +216,16 @@ class ActivityOutcomeTests(unittest.TestCase):
         task._close_bag = mock.Mock()
         task._bag_visible = mock.Mock(return_value=True)
         result = scan.ScanResult('exhausted', reached_top=True, reached_end=True)
-        with mock.patch.object(treasure_map.scan, 'scroll_search', return_value=result):
+        with mock.patch.object(treasure_map.scan.ScanProgress, 'advance', return_value=result):
             task._do_dig_find(ctx, rec, {}, {}, .85)
             self.assertFalse(rec['done'])
             task._close_bag.assert_not_called()
             task._do_dig_find(ctx, rec, {}, {}, .85)
+        self.assertFalse(rec['done'])
+        task._do_bag_cleanup(ctx, rec, {}, .85)
+        self.assertFalse(rec['done'])
+        task._bag_visible.return_value = False
+        task._do_bag_cleanup(ctx, rec, {}, .85)
         self.assertTrue(rec['done'])
         self.assertEqual(rec['dug'], 0)
         task._close_bag.assert_called_once_with(ctx)
@@ -228,7 +238,7 @@ class ActivityOutcomeTests(unittest.TestCase):
         task._close_bag = mock.Mock()
         task._bag_visible = mock.Mock(return_value=True)
         task._recover_window = mock.Mock()
-        with mock.patch.object(treasure_map.scan, 'scroll_search', return_value=SimpleNamespace(found=False, stopped=True)):
+        with mock.patch.object(treasure_map.scan.ScanProgress, 'advance', return_value=scan.ScanResult('stopped')):
             task._do_dig_find(ctx, rec, {}, {}, .85)
         self.assertFalse(rec['done'])
         task._close_bag.assert_not_called()

@@ -36,7 +36,7 @@ from ..core import rotation
 from ..core import scan
 from ..core import list_row
 from ..core import calibration_runtime as calibrated
-from .base import Task, register
+from .base import Task, register, _input_policy
 
 # 每个号的状态机状态（非阻塞：每访问一次只推进一步）
 S_OPEN_ACTIVITY = "OPEN_ACTIVITY"     # 阶段A：发活动快捷键
@@ -47,15 +47,19 @@ S_DIG_OPEN_BAG = "DIG_OPEN_BAG"       # 阶段B：发开背包快捷键
 S_DIG_WAIT_BAG = "DIG_WAIT_BAG"       # 阶段B：确认背包确实打开，不能把快捷键发出当成功
 S_DIG_FIND = "DIG_FIND"               # 阶段B：背包里滚轮找藏宝图 → 双击用；翻完无图=该号挖完
 S_DIGGING = "DIGGING"                 # 阶段B：挖宝中，盯「下一张使用」续挖 / 静止判这批挖完
+S_DIG_CLOSE_BAG = "DIG_CLOSE_BAG"
+S_DIG_WAIT_CLOSED = "DIG_WAIT_CLOSED"
 
 # 状态→中文（仅用于停止汇总「某号停在哪一步」的可读提示）
 _STATE_CN = {
     S_OPEN_ACTIVITY: "开活动", S_FIND_CARD: "找宝图卡片/点参加", S_DIALOG: "等NPC对话框/点听听无妨",
     S_COLLECTING: "收集寻宝中", S_DIG_OPEN_BAG: "开背包", S_DIG_WAIT_BAG: "确认背包打开",
     S_DIG_FIND: "翻背包找藏宝图", S_DIGGING: "挖宝中",
+    S_DIG_CLOSE_BAG: "关闭背包", S_DIG_WAIT_CLOSED: "确认背包关闭",
 }
 
 _STILL_DIFF = 8.0   # 帧差低于此视为画面静止（人物不动）的默认阈值——可被 loop.still_diff 覆盖。
+_UNSET_SCENE = object()
 #   太小→人物待机动画/周围NPC玩家走动/特效会让整屏帧差长期偏高，永远判不到「静止」→收集/挖宝误超时。
 #   运行时日志会实时打印真实帧差，照着把阈值设到「静止时帧差」之上、「走动时帧差」之下即可。
 
@@ -193,7 +197,12 @@ class TreasureMapTask(Task):
             ctx, records,
             lambda rec: self._step_once(rec["ctx"], rec, loop, regions, threshold),
             multi, switch_delay, tick, time_limit)
-        rotation.run_rotation(rc)
+        try:
+            rotation.run_rotation(rc)
+        finally:
+            if not ctx.should_stop():
+                for rec in records:
+                    self.finish_chain_driver(rec["ctx"], rec)
 
         self._log_summary(ctx, records, rc.termination_reason, (time.time() - start_ts) / 60)
 
@@ -240,7 +249,10 @@ class TreasureMapTask(Task):
         return {"ctx": wctx, "state": self._start_state, "t_state": time.time(),
                 "scrolls": 0, "dug": 0, "phase_b": self._skip_collect,
                 "last": None, "still_since": None, "t0": 0.0, "t_diag": 0.0,
-                "recover": 0, "done": False, "dead_logged": False, "empty_passes": 0}
+                "recover": 0, "done": False, "dead_logged": False, "empty_passes": 0,
+                "bag_scan": None, "inventory_revision": getattr(wctx, "inventory_revision", 0),
+                "close_attempts": 0, "cleanup_outcome": None, "unsafe_ui": False,
+                "scan_failures": 0}
 
     @staticmethod
     def _goto(rec, state):
@@ -280,6 +292,8 @@ class TreasureMapTask(Task):
             self._do_dig_find(ctx, rec, loop, regions, threshold)
         elif st == S_DIGGING:
             self._do_digging(ctx, rec, loop, regions, threshold)
+        elif st in (S_DIG_CLOSE_BAG, S_DIG_WAIT_CLOSED):
+            self._do_bag_cleanup(ctx, rec, loop, threshold)
 
     # ---- 阶段 A：开活动 ----
     def _do_open_activity(self, ctx, rec, loop, regions, threshold):
@@ -441,6 +455,7 @@ class TreasureMapTask(Task):
             return
         rec["phase_b"] = True
         rec["scrolls"] = 0
+        rec["bag_scan"] = None
         if visible:
             ctx.log("背包已打开，直接翻找藏宝图。")
             self._goto(rec, S_DIG_FIND)
@@ -474,8 +489,7 @@ class TreasureMapTask(Task):
             self._recover_window(ctx, rec, loop, regions)
 
     # ---- 阶段 B：找藏宝图 → 双击用；翻完整背包都没有=该号挖完（关背包结束）----
-    #   同 _do_find_card：背包翻找也在同一个号上一气呵成跑完（找到双击用/翻完判挖空才轮转下个号），
-    #   每滚一屏后自等 scroll_settle_sec 让画面落定。仍勤查 should_stop。
+    #   每窗口保留一轮完整扫描的进度；轮转预算耗尽只暂停，不回顶、不消耗恢复次数。
     def _do_dig_find(self, ctx, rec, loop, regions, threshold):
         list_region = regions.get("bag_list")
         if ctx.should_stop():
@@ -491,30 +505,19 @@ class TreasureMapTask(Task):
             ctx.log("背包界面不可确认，重新检查背包；未确认挖空。", level="warn")
             self._goto(rec, S_DIG_OPEN_BAG)
             return
-        observation_failed = False
         action_failed = False
-
-        def grab_rect():
-            nonlocal observation_failed
-            if self._bag_visible(ctx, threshold) is not True:
-                observation_failed = True
-                return None
-            rect = calibrated.region_rect(ctx, self.name, "bag_list", list_region)
-            window_rect = ctx.window.rect()
-            if not rect or not window_rect or not list_region:
-                observation_failed = True
-                return None
-            x, y, w, h = rect
-            wx, wy, ww, wh = window_rect
-            if w <= 0 or h <= 0 or x < wx or y < wy or x + w > wx + ww or y + h > wy + wh:
-                observation_failed = True
-                return None
-            return rect
+        revision = getattr(ctx, "inventory_revision", 0)
+        if rec["inventory_revision"] != revision:
+            rec["bag_scan"], rec["empty_passes"] = None, 0
+            rec["inventory_revision"] = revision
+        if rec["bag_scan"] is None:
+            rec["bag_scan"] = scan.ScanProgress()
+        progress = rec["bag_scan"]
 
         def probe(scene, rect):
-            nonlocal action_failed, observation_failed
+            nonlocal action_failed
             if scene is None or scene.shape[0] < template.shape[0] or scene.shape[1] < template.shape[1]:
-                observation_failed = True
+                action_failed = True
                 return (scan.STAY, None)
             hit = calibrated.match_flag(self, scene, template, "treasure_item", threshold, ctx)
             if hit is not None:
@@ -525,29 +528,57 @@ class TreasureMapTask(Task):
                 return (scan.ACCEPT, hit)
             return (scan.SCROLL, None)
 
-        res = scan.scroll_search(
-            grab_rect=grab_rect, probe=probe, mouse=ctx.mouse,
-            should_stop=lambda: ctx.should_stop() or observation_failed or action_failed,
-            sleep=lambda s: self._interruptible_sleep(ctx, self._jitter(s, ctx)),
-            scroll_step=loop.get("scroll_step", -3),
-            max_tries=max(1, loop.get("scroll_max_tries", 8)),
-            settle_sec=loop.get("scroll_settle_sec", 0.35),
-            reset_to_top=True,
-            end_diff=loop.get("scroll_end_diff", 2.0),
-            reset_max=loop.get("scroll_reset_max", 20),
-            log=ctx.log, label="背包", require_full_scan=True)
+        try:
+            res = progress.advance(
+                capture=lambda: self._capture_bag(ctx, list_region, threshold),
+                probe=probe, mouse=ctx.mouse,
+                should_stop=lambda: ctx.should_stop() or action_failed,
+                sleep=lambda s: self._interruptible_sleep(ctx, self._jitter(s, ctx)),
+                scroll_step=loop.get("scroll_step", -3),
+                max_scrolls=max(1, loop.get("bag_scan_batch_scrolls", 8)),
+                budget_sec=max(0.5, loop.get("bag_scan_batch_sec", 3.0)),
+                min_settle_sec=loop.get("bag_scroll_min_settle_sec", 0.16),
+                settle_sec=loop.get("bag_scroll_settle_sec", 0.35),
+                end_diff=loop.get("scroll_end_diff", 2.0),
+                total_scrolls=max(8, loop.get("bag_scan_max_scrolls", 256)),
+                timeout_sec=max(1.0, loop.get("bag_scan_timeout_sec", 120.0)))
+        except Exception as exc:
+            ctx.log(f"背包扫描异常：{exc}，关闭背包后结束该号。", level="error")
+            self._begin_bag_cleanup(rec, "failed")
+            return
         if ctx.should_stop():
             rec["empty_passes"] = 0
             return
+        if res.paused:
+            rec["scan_failures"] = 0
+            ctx.log(f"背包扫描进度已保留（累计滚动 {progress.scrolls} 次），下轮从当前位置继续。")
+            return
+        times = progress.timings
+        ctx.log(f"本轮背包扫描累计滚动 {progress.scrolls} 次：观察 {times['observe']:.2f}s / "
+                f"识别与使用 {times['probe']:.2f}s / 滚轮 {times['scroll']:.2f}s / "
+                f"等待 {times['wait']:.2f}s。")
         if res.found and not action_failed:
+            rec["scan_failures"] = 0
+            rec["bag_scan"] = None
             rec["empty_passes"] = 0
             rec["recover"] = 0
             self._enter_monitor(rec, S_DIGGING)
             return
-        if (res.stopped or observation_failed or action_failed
+        if (res.stopped or action_failed
                 or not res.exhausted or not res.reached_top or not res.reached_end):
             rec["empty_passes"] = 0
-            ctx.log("背包扫描未完成或识别异常，转入恢复；未确认挖空。", level="warn")
+            rec["bag_scan"] = None
+            if progress.last_reason in ("scan_limit", "invalid_step"):
+                cause = "滚轮方向配置无效" if progress.last_reason == "invalid_step" else "整轮扫描达到安全上限"
+                ctx.log(f"背包{cause}，关闭背包后异常结束；未确认挖空。", level="error")
+                self._begin_bag_cleanup(rec, "failed")
+                return
+            rec["scan_failures"] += 1
+            if rec["scan_failures"] < 3:
+                ctx.log("背包观察或输入暂不可用，下轮重新核验；不计卡死。", level="warn")
+                return
+            rec["scan_failures"] = 0
+            ctx.log("背包观察或输入异常，重新核验；未确认挖空。", level="warn")
             self._recover_window(ctx, rec, loop, regions)
             return
         if self._bag_visible(ctx, threshold) is not True:
@@ -556,18 +587,86 @@ class TreasureMapTask(Task):
             self._goto(rec, S_DIG_OPEN_BAG)
             return
         rec["empty_passes"] += 1
+        rec["scan_failures"] = 0
+        rec["bag_scan"] = None
         if rec["empty_passes"] < 2:
             ctx.log("完整扫描未发现藏宝图（1/2），稍后从顶部再次确认。")
             return  # 保持状态，让出给其他号；下轮独立从顶部复查。
-        if self._close_bag(ctx) is False:
-            if not ctx.should_stop():
-                self._recover_window(ctx, rec, loop, regions)
+        ctx.log("背包连续两轮完整扫描均无藏宝图，准备关闭并确认。")
+        self._begin_bag_cleanup(rec, "completed")
+
+    def _capture_bag(self, ctx, list_region, threshold):
+        """同一帧确认背包并裁出物品区；每次观察都更新输入会话证据。"""
+        window_rect = ctx.window.rect()
+        rect = calibrated.region_rect(ctx, self.name, "bag_list", list_region)
+        if not list_region or not rect or not window_rect:
+            return None, None
+        x, y, w, h = rect
+        wx, wy, ww, wh = window_rect
+        if w <= 0 or h <= 0 or x < wx or y < wy or x + w > wx + ww or y + h > wy + wh:
+            return None, None
+        cur = win_mod.grab(window_rect)
+        if self._bag_visible(ctx, threshold, scene=cur) is not True:
+            return None, None
+        if cur is None or cur.shape[0] < y - wy + h or cur.shape[1] < x - wx + w:
+            return None, None
+        return cur[y - wy:y - wy + h, x - wx:x - wx + w], rect
+
+    def _begin_bag_cleanup(self, rec, outcome):
+        rec["bag_scan"] = None
+        rec["cleanup_outcome"] = outcome
+        rec["close_attempts"] = 0
+        self._goto(rec, S_DIG_CLOSE_BAG)
+
+    def finish_chain_driver(self, ctx, rec):
+        """总超时或外层异常时尽力收尾；主动停止后绝不补发输入。"""
+        if ctx.should_stop() or rec["done"] or not rec["phase_b"]:
             return
+        loop = ctx.task_cfg(self.name)["loop"]
+        with _input_policy(ctx, self.name):
+            try:
+                if not ctx.window.activate():
+                    raise RuntimeError("无法激活目标窗口")
+                if rec["state"] not in (S_DIG_CLOSE_BAG, S_DIG_WAIT_CLOSED):
+                    self._begin_bag_cleanup(rec, "failed")
+                # 关闭最多三次，每次等待最多 2 秒；另有固定迭代上限防配置过大。
+                for _ in range(32):
+                    if ctx.should_stop() or rec["done"]:
+                        return
+                    self._do_bag_cleanup(ctx, rec, loop, loop["match_threshold"])
+                    if rec["done"] or ctx.should_stop():
+                        return
+                    self._interruptible_sleep(ctx, 0.25)
+            except Exception as exc:
+                ctx.log(f"背包收尾异常：{exc}。", level="error")
+        if not ctx.should_stop():
+            rec["done"], rec["unsafe_ui"], rec["outcome"] = True, True, "failed"
+            ctx.log("背包收尾未确认，阻止该号继续执行。", level="error")
+
+    def _do_bag_cleanup(self, ctx, rec, loop, threshold):
         if ctx.should_stop():
             return
-        ctx.log("背包连续两轮完整扫描均无藏宝图 → 确认挖空，已关闭背包。", level="hit")
-        rec["outcome"] = "completed"
-        rec["done"] = True
+        visible = self._bag_visible(ctx, threshold)
+        if ctx.should_stop():
+            return
+        if visible is False:
+            rec["outcome"] = rec["cleanup_outcome"] or "failed"
+            rec["done"] = True
+            ctx.log("已确认背包关闭。", level="hit")
+            return
+        timeout = max(0.1, loop.get("bag_close_timeout_sec", 2.0))
+        if rec["state"] == S_DIG_WAIT_CLOSED and self._state_elapsed(rec) < timeout:
+            return
+        if rec["close_attempts"] >= 3:
+            rec["outcome"], rec["done"], rec["unsafe_ui"] = "failed", True, True
+            ctx.log("无法确认背包关闭，已阻止该号后续任务；其余号继续。", level="error")
+            return
+        rec["close_attempts"] += 1
+        # 不可观察时不盲按 Esc；等待下一次有效观察，仍受重试上限约束。
+        if visible is True:
+            self._close_bag(ctx)
+        if not ctx.should_stop():
+            self._goto(rec, S_DIG_WAIT_CLOSED)
 
     # ---- 阶段 B：挖宝监控（盯「下一张使用」续挖；长时间无弹窗且静止→这批挖完，回开背包确认）----
     def _do_digging(self, ctx, rec, loop, regions, threshold):
@@ -623,14 +722,14 @@ class TreasureMapTask(Task):
         if ctx.should_stop():
             return
         rec["empty_passes"] = 0
+        rec["bag_scan"] = None
         rec["recover"] += 1
         ctx.log(f"卡住（第 {rec['recover']}/{loop.get('max_stuck_recover', 3)} 次），尝试恢复…",
                 level="warn")
         self._save_capture(self._grab_scene(ctx, regions), f"stuck_{rec['state']}")
         if rec["recover"] >= loop.get("max_stuck_recover", 3):
-            ctx.log("多次恢复仍无进展，该号异常退出；未确认挖空。", level="error")
-            rec["outcome"] = "failed"
-            rec["done"] = True
+            ctx.log("多次恢复仍无进展，先关闭背包再异常退出；未确认挖空。", level="error")
+            self._begin_bag_cleanup(rec, "failed")
             return
         # 按一次 Esc 清掉异常弹窗，再回合适的阶段起点
         self._focus(ctx)
@@ -664,13 +763,13 @@ class TreasureMapTask(Task):
         self._template_sources = {"flag_bag_open": source}
         return template
 
-    def _bag_visible(self, ctx, threshold):
+    def _bag_visible(self, ctx, threshold, *, scene=_UNSET_SCENE):
         """True=固定背包标志可见，False=有效画面未命中，None=不可观察。"""
         self._calibration_ctx = ctx
         if self.flags.get("flag_bag_open") is None:
             return None
         rect = ctx.window.rect()
-        cur = win_mod.grab(rect) if rect else None
+        cur = (win_mod.grab(rect) if rect else None) if scene is _UNSET_SCENE else scene
         if cur is None or cur.size == 0 or cur.ndim != 3 or cur.std(axis=(0, 1)).max() < 1.0:
             return None
         return self._present(cur, "flag_bag_open", threshold)

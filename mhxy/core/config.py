@@ -272,6 +272,13 @@ DEFAULT_CONFIG = {
                 "match_threshold": 0.85,     # 标志模板匹配阈值
                 "battle_threshold": 0.80,    # 战斗小图标单独阈值，不降低道具识别要求
                 "bag_open_timeout_sec": 5.0, # 发快捷键后等待背包固定标志出现
+                "bag_close_timeout_sec": 2.0, # 关闭后确认界面消失，最多重试三次
+                "bag_scan_batch_scrolls": 8, # 每次轮转预算；暂停续扫，不是整轮翻页上限
+                "bag_scan_batch_sec": 3.0,
+                "bag_scan_max_scrolls": 256, # 单轮完整扫描的独立安全上限（含回顶）
+                "bag_scan_timeout_sec": 120.0,
+                "bag_scroll_min_settle_sec": 0.16, # 先短等，再检测滚动画面落定
+                "bag_scroll_settle_sec": 0.35, # 未变化时至少等够，避免旧帧误判到底
                 "tick_interval_sec": 0.6,    # 每次「截图→判状态」的节拍（带抖动）
                 "still_min_sec": 0.3,        # 帧差判静止：最短先等
                 "still_wait_sec": 2.0,       # 帧差判静止：单次最长等/超时

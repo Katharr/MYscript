@@ -274,13 +274,19 @@ class Mouse:
             if i == 0:
                 time.sleep(random.uniform(0.06, 0.13))   # 两次点击间隔（双击阈值内）
 
-    def scroll(self, notches, x=None, y=None, speed=None):
+    def scroll(self, notches, x=None, y=None, speed=None, region=None):
         """滚轮滚动 notches 格（正=向上，负=向下）。给 (x,y) 则先移到该点再滚
         （很多界面只对鼠标悬停的列表生效）。拆成单格多次滚动 + 抖动，更像人。"""
         if self.backend == "sendinput":
             if x is not None and y is not None:
-                self.human_move(x, y, speed=speed)
-                time.sleep(random.uniform(0.03, 0.10))
+                sx, sy = get_cursor()
+                # 连续翻包裹时保留当前悬停位置；首次进入/移出/切窗后才重新移动。
+                inside = (region is not None
+                          and region[0] + 6 <= sx < region[0] + region[2] - 6
+                          and region[1] + 6 <= sy < region[1] + region[3] - 6)
+                if not inside:
+                    self.human_move(x, y, speed=speed)
+                    time.sleep(random.uniform(0.03, 0.10))
             n = int(notches)
             step = 1 if n >= 0 else -1
             for _ in range(abs(n)):

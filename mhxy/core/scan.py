@@ -31,6 +31,8 @@
   sleep(sec)       -> 可被打断的睡眠（每滚一屏后等画面落定，调用方传自己的拟人化抖动睡眠）。
 """
 
+import time
+
 from . import vision
 from . import window as win_mod
 
@@ -43,6 +45,7 @@ STAY = "stay"       # 主目标在、次级目标缺：原地重试不滚（仍�
 class ScanResult:
     """滚动查找结果。
     outcome: 'accept'（找到）/ 'exhausted'（翻完整段都没有）/ 'stopped'（被停止或区域取不到）。
+             ScanProgress 另有 'paused'，表示本次预算用尽、可继续当前一轮。
     payload: probe 在 ACCEPT 时返回的负载（如点中的坐标分数），透传给调用方。
     reached_end: 仅 exhausted 时有意义——True=因「滚到底(帧差判定)」而结束；
                  False=因 max_tries 用尽（可能没翻完，列表比上限长或一直没滚动）。
@@ -68,6 +71,150 @@ class ScanResult:
     @property
     def stopped(self):
         return self.outcome == "stopped"
+
+    @property
+    def paused(self):
+        return self.outcome == "paused"
+
+
+class ScanProgress:
+    """可恢复的一轮严格扫描；只保存覆盖证据，不保存输入许可。
+
+    capture 每次提供新截图和坐标；让出后先核验当前位置。扫描预算只控制
+    本次占用鼠标的时间，整轮的次数/时间上限独立计算，绝不把预算耗尽当无目标。
+    """
+
+    def __init__(self):
+        self.phase = "top"
+        self.reached_top = False
+        self.stable = 0
+        self.previous = None
+        self.checkpoint = None
+        self.rect = None
+        self.pending = False
+        self.pending_since = 0.0
+        self.scrolls = 0
+        self.started = time.monotonic()
+        self.last_reason = ""
+        self.timings = {"observe": 0.0, "probe": 0.0, "scroll": 0.0, "wait": 0.0}
+
+    def advance(self, *, capture, probe, mouse, should_stop, sleep,
+                scroll_step=-3, max_scrolls=8, budget_sec=3.0,
+                min_settle_sec=0.16, settle_sec=0.35, end_diff=2.0,
+                total_scrolls=256, timeout_sec=120.0):
+        """推进一小段；paused 保留进度，exhausted 仅代表确认从顶扫到底。
+
+        未变化的早期截图必须等够 settle_sec 后再确认，防游戏尚未刷新被判到底。
+        动画未落定时只等待，不继续滚动；小目标由 probe 优先于边界判断检查。
+        """
+        call_start = time.monotonic()
+        actions = 0
+        unchanged_wait = max(0.05, settle_sec)
+
+        def measured(key, fn, *args, **kwargs):
+            start = time.monotonic()
+            try:
+                return fn(*args, **kwargs)
+            finally:
+                self.timings[key] += time.monotonic() - start
+
+        def result(outcome, payload=None, reason=""):
+            self.last_reason = reason
+            return ScanResult(outcome, payload, self.scrolls,
+                              outcome == "exhausted", self.reached_top)
+
+        def expired():
+            return (self.scrolls >= total_scrolls
+                    or time.monotonic() - self.started >= timeout_sec)
+
+        def observe():
+            if should_stop():
+                return None
+            frame, rect = measured("observe", capture)
+            if should_stop() or not rect or not _valid_scan_scene(frame):
+                return None
+            return frame, tuple(rect)
+
+        if int(scroll_step) >= 0:
+            return result("stopped", reason="invalid_step")
+        current = observe()
+        if current is None:
+            return result("stopped", reason="observation")
+        frame, rect = current
+        if self.pending and self.rect is not None and rect != self.rect:
+            return result("stopped", reason="geometry")
+        if self.checkpoint is not None and not self.pending:
+            if (rect != self.rect or self.checkpoint.shape != frame.shape
+                    or vision.frame_diff(frame, self.checkpoint) >= max(8.0, end_diff * 4)):
+                # 背包被整理/手动滚动/换尺寸，旧覆盖证据不再成立；总预算不重置。
+                self.phase, self.reached_top, self.stable = "top", False, 0
+                self.previous = None
+        self.checkpoint = None
+        self.rect = rect
+
+        while not should_stop():
+            if expired():
+                return result("stopped", reason="scan_limit")
+            if self.pending:
+                # 等待滚动后的连续画面稳定。上次因动画让出时仍在这里续等。
+                last = frame
+                measured("wait", sleep, 0.05)
+                current = observe()
+                if current is None:
+                    return result("stopped", reason="observation")
+                frame, new_rect = current
+                if new_rect != rect:
+                    return result("stopped", reason="geometry")
+                diff = vision.frame_diff(frame, last)
+                unchanged = (self.previous is not None
+                             and vision.frame_diff(frame, self.previous) < end_diff)
+                if diff >= end_diff or (unchanged and time.monotonic() - self.pending_since < unchanged_wait):
+                    if time.monotonic() - call_start >= budget_sec:
+                        return result("paused", reason="settling")
+                    continue
+                self.pending = False
+
+            if self.phase == "down":
+                decision, payload = measured("probe", probe, frame, rect)
+                if should_stop():
+                    return result("stopped", reason="action")
+                if decision == ACCEPT:
+                    return result(ACCEPT, payload)
+                if decision != SCROLL:
+                    return result("stopped", reason="probe")
+
+            if self.previous is not None:
+                self.stable = (self.stable + 1 if vision.frame_diff(frame, self.previous)
+                               < end_diff else 0)
+                if self.stable >= 2:
+                    if self.phase == "down":
+                        return result("exhausted")
+                    self.phase, self.reached_top = "down", True
+                    self.stable, self.previous = 0, None
+                    continue  # 顶部画面必须经过 probe，不能直接下滚。
+
+            if actions >= max(1, max_scrolls) or time.monotonic() - call_start >= budget_sec:
+                self.checkpoint, self.rect = frame.copy(), rect
+                # 边界计数已包含当前帧，下次不能重复累加同一次滚动。
+                self.previous = None
+                return result("paused", reason="budget")
+            direction = -int(scroll_step) if self.phase == "top" else int(scroll_step)
+            if measured("scroll", mouse.scroll, direction, *_center(rect), region=rect) is False:
+                return result("stopped", reason="input")
+            if should_stop():
+                return result("stopped", reason="stopped")
+            self.previous = frame
+            self.scrolls += 1
+            actions += 1
+            self.pending, self.pending_since = True, time.monotonic()
+            measured("wait", sleep, max(0.05, min_settle_sec))
+            current = observe()
+            if current is None:
+                return result("stopped", reason="observation")
+            frame, new_rect = current
+            if rect != new_rect:
+                return result("stopped", reason="geometry")
+        return result("stopped", reason="stopped")
 
 
 def _center(rect):

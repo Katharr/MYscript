@@ -134,6 +134,8 @@ class DailyOutcomeTests(unittest.TestCase):
                         waits -= 1
                         return
                     rec["done"] = True
+                    if plan.get("unsafe_ui"):
+                        rec["unsafe_ui"] = True
                     if plan.get("outcome") is not None:
                         rec["outcome"] = plan["outcome"]
                 return rec, step
@@ -214,6 +216,16 @@ class DailyOutcomeTests(unittest.TestCase):
                 self.assertEqual(self.run_daily(ctx), "timeout" if evidence == "timeout" else "failed")
                 self.assertNotIn("───── 「escort」完成 ─────", self.messages(ctx))
                 self.assertTrue(any("0/1 个号全部任务完成" in m for m in self.messages(ctx)))
+
+    def test_unclosed_bag_blocks_its_chain_and_collective_dungeon_but_not_other_accounts(self):
+        ctx = self.context(["treasure_map", "escort", "dungeon", "secret_realm"], ("blocked", "ready"))
+        self.plans[("blocked", "treasure_map")] = {"outcome": "failed", "unsafe_ui": True}
+        self.assertEqual(self.run_daily(ctx), "partial")
+        self.assertNotIn(("begin", "blocked", "escort"), self.events)
+        self.assertNotIn(("begin", "blocked", "secret_realm"), self.events)
+        self.assertIn(("begin", "ready", "escort"), self.events)
+        self.assertIn(("begin", "ready", "secret_realm"), self.events)
+        self.assertNotIn(("dungeon",), self.events)
 
     def test_activity_legacy_progress_and_mixed_windows_report_partial(self):
         for name in ("escort", "treasure_map", "secret_realm"):

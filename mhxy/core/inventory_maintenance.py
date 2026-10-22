@@ -55,6 +55,7 @@ class AutoInventoryMaintenance:
             ctx.stop()
             recovered = False
         finally:
+            ctx.inventory_revision = getattr(ctx, "inventory_revision", 0) + 1
             self._last_check[ctx] = time.time()
             if isinstance(session, InputSession):
                 session.invalidate()  # 整理画面不能作为原业务的观察证据

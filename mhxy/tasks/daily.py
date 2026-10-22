@@ -110,7 +110,11 @@ class DailyTask(Task):
             # —— 集体屏障：未完成的号是否都停靠在「刷副本」步？都到齐就集体跑一次、放行 ——
             parked = [c for c in alive if self._at_dungeon(c, steps)]
             if parked and len(parked) == len(alive):
-                outcome = self._run_collective_dungeon(ctx)
+                if any(c.get("unsafe_ui") for c in chains):
+                    ctx.log("有角色面板未安全关闭，本次集体副本跳过；其余独立任务继续。", level="error")
+                    outcome = "failed"
+                else:
+                    outcome = self._run_collective_dungeon(ctx)
                 for c in parked:
                     c["outcomes"].append(self._known_outcome(outcome))
                     self._advance(c, steps)
@@ -155,6 +159,10 @@ class DailyTask(Task):
             self._interruptible_sleep(ctx, self._jitter(tick, ctx))
 
         # —— 汇总 ——
+        if not ctx.should_stop():
+            for c in chains:
+                if not c["done"] and c.get("sub_cleanup"):
+                    c["sub_cleanup"](c["wctx"], c["sub_rec"])
         outcome = self._daily_outcome(ctx, chains, termination_reason)
         done_n = sum(1 for c in chains if c["done"] and c["outcomes"]
                      and all(o == "completed" for o in c["outcomes"]))
@@ -197,6 +205,7 @@ class DailyTask(Task):
     def _end_step(c):
         c["sub_rec"] = None
         c["sub_step"] = None
+        c["sub_cleanup"] = None
 
     def _drive_chain_until_yield(self, ctx, c, steps):
         """切前台后连续推进本窗口的独立链：当前子任务能往下走就接着走、跑完就接下一个子任务，
@@ -223,7 +232,12 @@ class DailyTask(Task):
                 c["sub_step"]()
             except Exception as e:                      # 单个子任务炸了不该带垮整条链
                 c["wctx"].log(f"「{c['cur_title']}」运行异常：{e}，跳过该任务。", level="error")
+                if c.get("sub_cleanup"):
+                    c["sub_cleanup"](c["wctx"], rec)
                 c["outcomes"].append(self._record_outcome(c, "failed"))
+                if rec.get("unsafe_ui"):
+                    c["unsafe_ui"], c["done"] = True, True
+                    return
                 self._end_step(c)
                 c["idx"] += 1
                 continue
@@ -231,6 +245,10 @@ class DailyTask(Task):
                 outcome = self._record_outcome(c, "finished")
                 c["outcomes"].append(outcome)
                 self._log_step_outcome(c["wctx"], c["cur_title"], outcome)
+                if rec.get("unsafe_ui"):
+                    c["unsafe_ui"], c["done"] = True, True
+                    c["wctx"].log("面板未安全关闭，该号后续任务已阻止。", level="error")
+                    return
                 self._end_step(c)
                 c["idx"] += 1
                 continue                                # 接着在本窗口推进下一步
@@ -265,6 +283,7 @@ class DailyTask(Task):
             return "skip"
         rec, step_fn = task.make_chain_driver(wctx)
         c["sub_rec"], c["sub_step"] = rec, step_fn
+        c["sub_cleanup"] = getattr(task, "finish_chain_driver", None)
         wctx.log(f"───── 开始「{title}」 ─────", level="hit")
         return "ready"
 

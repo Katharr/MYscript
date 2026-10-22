@@ -19,7 +19,11 @@ class TreasureMapFallbackTests(unittest.TestCase):
         self.task._focus = mock.Mock()
         self.task._calib_size = mock.Mock(return_value=None)
         self.task._jitter = lambda delay, ctx: delay
-        self.task._interruptible_sleep = mock.Mock()
+        self.now = 100.0
+        self.task._interruptible_sleep = mock.Mock(side_effect=self.sleep)
+        clock_patch = mock.patch.object(scan.time, 'monotonic', side_effect=lambda: self.now)
+        clock_patch.start()
+        self.addCleanup(clock_patch.stop)
         self.task._recover_window = mock.Mock()
         self.ctx = mock.Mock()
         self.ctx.should_stop.return_value = False
@@ -31,9 +35,12 @@ class TreasureMapFallbackTests(unittest.TestCase):
         self.rec = self.task._new_record(self.ctx)
         self.rec['state'] = tm.S_FIND_CARD
         self.loop = {'scroll_reset_top': False, 'scroll_max_tries': 2}
-        self.scene = np.arange(20 * 20 * 3, dtype=np.uint8).reshape(20, 20, 3)
+        self.scene = np.arange(600 * 800 * 3, dtype=np.uint8).reshape(600, 800, 3)
         self.task.flags['treasure_item'] = self.scene[:2, :2].copy()
         self.regions = {'bag_list': (0, 0, 200, 200)}
+
+    def sleep(self, ctx, seconds):
+        self.now += seconds
 
     def find_card(self, card):
         with mock.patch.object(tm.win_mod, 'grab', return_value=self.scene), \
@@ -86,6 +93,12 @@ class TreasureMapFallbackTests(unittest.TestCase):
             self.assertEqual(self.rec['state'], tm.S_DIG_FIND)
             self.ctx.send_hotkey.assert_called_once_with('close_panel')
             self.task._step_once(self.ctx, self.rec, self.loop, self.regions, 0.85)
+        self.assertFalse(self.rec['done'])
+        self.assertEqual(self.rec['state'], tm.S_DIG_CLOSE_BAG)
+        self.task._step_once(self.ctx, self.rec, self.loop, self.regions, .85)
+        self.assertFalse(self.rec['done'])
+        self.task._bag_visible.return_value = False
+        self.task._step_once(self.ctx, self.rec, self.loop, self.regions, .85)
         self.assertTrue(self.rec['done'])
         self.ctx.mouse.double_click.assert_not_called()
         self.assertEqual(self.ctx.send_hotkey.call_args_list,
@@ -196,22 +209,21 @@ class TreasureMapFallbackTests(unittest.TestCase):
                    scan.ScanResult('stopped')]
         for result in results:
             with self.subTest(result=vars(result)):
-                self.rec.update(state=tm.S_DIG_FIND, empty_passes=1)
+                self.rec.update(state=tm.S_DIG_FIND, empty_passes=1, scan_failures=2)
                 self.task._recover_window.reset_mock()
-                with mock.patch.object(tm.scan, 'scroll_search', return_value=result) as search:
+                with mock.patch.object(tm.scan.ScanProgress, 'advance', return_value=result) as search:
                     self.task._do_dig_find(self.ctx, self.rec, self.loop, self.regions, .85)
                 self.assertFalse(self.rec['done'])
                 self.assertEqual(self.rec['empty_passes'], 0)
                 self.task._recover_window.assert_called_once()
-                self.assertTrue(search.call_args.kwargs['require_full_scan'])
-                self.assertTrue(search.call_args.kwargs['reset_to_top'])
+                self.assertIn('capture', search.call_args.kwargs)
         self.ctx.send_hotkey.assert_not_called()
 
     def test_second_pass_finds_map_and_continues_digging(self):
         self.rec['state'] = tm.S_DIG_FIND
         results = [scan.ScanResult('exhausted', reached_top=True, reached_end=True),
                    scan.ScanResult(scan.ACCEPT, payload=(10, 15, .98), reached_top=True)]
-        with mock.patch.object(tm.scan, 'scroll_search', side_effect=results):
+        with mock.patch.object(tm.scan.ScanProgress, 'advance', side_effect=results):
             self.task._do_dig_find(self.ctx, self.rec, self.loop, self.regions, .85)
             self.assertEqual(self.rec['empty_passes'], 1)
             self.task._do_dig_find(self.ctx, self.rec, self.loop, self.regions, .85)
@@ -221,7 +233,7 @@ class TreasureMapFallbackTests(unittest.TestCase):
         self.ctx.send_hotkey.assert_not_called()
 
     def test_screenshot_failure_during_scan_never_completes(self):
-        self.rec.update(state=tm.S_DIG_FIND, empty_passes=1)
+        self.rec.update(state=tm.S_DIG_FIND, empty_passes=1, scan_failures=2)
         with mock.patch.object(tm.win_mod, 'grab', return_value=None):
             self.task._do_dig_find(self.ctx, self.rec, self.loop, self.regions, .85)
         self.assertFalse(self.rec['done'])
@@ -231,10 +243,10 @@ class TreasureMapFallbackTests(unittest.TestCase):
         self.ctx.send_hotkey.assert_not_called()
 
     def test_bag_disappears_after_scan_invalidates_empty_evidence(self):
-        self.rec.update(state=tm.S_DIG_FIND, empty_passes=1)
+        self.rec.update(state=tm.S_DIG_FIND, empty_passes=1, scan_failures=2)
         self.task._bag_visible.side_effect = [True, False]
         result = scan.ScanResult('exhausted', reached_top=True, reached_end=True)
-        with mock.patch.object(tm.scan, 'scroll_search', return_value=result):
+        with mock.patch.object(tm.scan.ScanProgress, 'advance', return_value=result):
             self.task._do_dig_find(self.ctx, self.rec, self.loop, self.regions, .85)
         self.assertFalse(self.rec['done'])
         self.assertEqual(self.rec['empty_passes'], 0)
@@ -244,9 +256,9 @@ class TreasureMapFallbackTests(unittest.TestCase):
     def test_hidden_bag_prevents_starting_scan(self):
         for visible in (False, None):
             with self.subTest(visible=visible):
-                self.rec.update(state=tm.S_DIG_FIND, empty_passes=1)
+                self.rec.update(state=tm.S_DIG_FIND, empty_passes=1, scan_failures=2)
                 self.task._bag_visible.return_value = visible
-                with mock.patch.object(tm.scan, 'scroll_search') as search:
+                with mock.patch.object(tm.scan.ScanProgress, 'advance') as search:
                     self.task._do_dig_find(self.ctx, self.rec, self.loop, self.regions, .85)
                 search.assert_not_called()
                 self.assertFalse(self.rec['done'])
@@ -255,7 +267,7 @@ class TreasureMapFallbackTests(unittest.TestCase):
 
     def test_double_click_rejected_does_not_count_as_using_map(self):
         self.ctx.mouse.double_click.return_value = False
-        self.rec.update(state=tm.S_DIG_FIND, empty_passes=1)
+        self.rec.update(state=tm.S_DIG_FIND, empty_passes=1, scan_failures=2)
         with mock.patch.object(tm.win_mod, 'grab', return_value=self.scene), \
              mock.patch.object(tm.vision, 'match', return_value=(10, 15, .98)):
             self.task._do_dig_find(self.ctx, self.rec, self.loop, self.regions, .85)
@@ -268,7 +280,7 @@ class TreasureMapFallbackTests(unittest.TestCase):
         for region, rect in [(None, (100, 200, 200, 200)),
                              ((0, 0, 200, 200), (0, 0, 200, 200))]:
             with self.subTest(region=region, rect=rect):
-                self.rec.update(state=tm.S_DIG_FIND, empty_passes=1)
+                self.rec.update(state=tm.S_DIG_FIND, empty_passes=1, scan_failures=2)
                 self.task._recover_window.reset_mock()
                 self.ctx.window.region_to_screen_rect.return_value = rect
                 regions = {'bag_list': region} if region else {}
@@ -305,8 +317,8 @@ class TreasureMapFallbackTests(unittest.TestCase):
 
     def test_missing_item_template_cannot_be_mistaken_for_empty_bag(self):
         self.task.flags['treasure_item'] = None
-        self.rec.update(state=tm.S_DIG_FIND, empty_passes=1)
-        with mock.patch.object(tm.scan, 'scroll_search') as search:
+        self.rec.update(state=tm.S_DIG_FIND, empty_passes=1, scan_failures=2)
+        with mock.patch.object(tm.scan.ScanProgress, 'advance') as search:
             self.task._do_dig_find(self.ctx, self.rec, self.loop, self.regions, .85)
         search.assert_not_called()
         self.task._recover_window.assert_called_once()
@@ -316,7 +328,7 @@ class TreasureMapFallbackTests(unittest.TestCase):
 
     def test_template_larger_than_bag_capture_is_not_a_valid_empty_scan(self):
         self.task.flags['treasure_item'] = np.tile(self.scene, (2, 2, 1))
-        self.rec.update(state=tm.S_DIG_FIND, empty_passes=1)
+        self.rec.update(state=tm.S_DIG_FIND, empty_passes=1, scan_failures=2)
         with mock.patch.object(tm.win_mod, 'grab', return_value=self.scene), \
              mock.patch.object(tm.vision, 'match', return_value=None) as match:
             self.task._do_dig_find(self.ctx, self.rec, self.loop, self.regions, .85)
@@ -326,21 +338,22 @@ class TreasureMapFallbackTests(unittest.TestCase):
         self.assertEqual(self.rec['empty_passes'], 0)
         self.ctx.send_hotkey.assert_not_called()
 
-    def test_close_bag_rejected_recovers_without_reporting_completed(self):
-        self.rec.update(state=tm.S_DIG_FIND, empty_passes=1)
+    def test_close_bag_rejected_waits_without_reporting_completed(self):
+        self.rec.update(state=tm.S_DIG_FIND, empty_passes=1, scan_failures=2)
         self.task._close_bag = mock.Mock(return_value=False)
         result = scan.ScanResult('exhausted', reached_top=True, reached_end=True)
-        with mock.patch.object(tm.scan, 'scroll_search', return_value=result):
+        with mock.patch.object(tm.scan.ScanProgress, 'advance', return_value=result):
             self.task._do_dig_find(self.ctx, self.rec, self.loop, self.regions, .85)
+        self.task._step_once(self.ctx, self.rec, self.loop, self.regions, .85)
         self.task._close_bag.assert_called_once_with(self.ctx)
-        self.task._recover_window.assert_called_once()
+        self.task._recover_window.assert_not_called()
         self.assertFalse(self.rec['done'])
         self.assertNotIn('outcome', self.rec)
 
     def test_stop_before_scan_does_not_recover_or_input(self):
         self.ctx.should_stop.return_value = True
         self.task.flags['treasure_item'] = None
-        with mock.patch.object(tm.scan, 'scroll_search') as search:
+        with mock.patch.object(tm.scan.ScanProgress, 'advance') as search:
             self.task._do_dig_find(self.ctx, self.rec, self.loop, self.regions, .85)
         search.assert_not_called()
         self.task._recover_window.assert_not_called()
@@ -348,14 +361,17 @@ class TreasureMapFallbackTests(unittest.TestCase):
         self.assertFalse(self.rec['done'])
 
     def test_stop_during_close_does_not_recover_or_report_completed(self):
-        self.rec.update(state=tm.S_DIG_FIND, empty_passes=1)
+        self.rec.update(state=tm.S_DIG_FIND, empty_passes=1, scan_failures=2)
         def stop_during_close(ctx):
             self.ctx.should_stop.return_value = True
             return False
         self.task._close_bag = mock.Mock(side_effect=stop_during_close)
         result = scan.ScanResult('exhausted', reached_top=True, reached_end=True)
-        with mock.patch.object(tm.scan, 'scroll_search', return_value=result):
+        with mock.patch.object(tm.scan.ScanProgress, 'advance', return_value=result):
             self.task._do_dig_find(self.ctx, self.rec, self.loop, self.regions, .85)
+        self.task._step_once(self.ctx, self.rec, self.loop, self.regions, .85)
+        self.task._close_bag.assert_called_once_with(self.ctx)
+        self.assertTrue(self.ctx.should_stop())
         self.task._recover_window.assert_not_called()
         self.assertFalse(self.rec['done'])
         self.assertNotIn('outcome', self.rec)
@@ -382,6 +398,108 @@ class TreasureMapFallbackTests(unittest.TestCase):
         self.assertEqual(self.rec['state'], tm.S_DIG_FIND)
         self.ctx.send_hotkey.assert_called_once_with('open_bag')
         self.assertFalse(self.rec['done'])
+
+    def test_paused_scan_keeps_same_progress_and_never_recovers_or_counts_empty(self):
+        self.rec.update(state=tm.S_DIG_FIND, recover=1)
+        with mock.patch.object(scan.ScanProgress, 'advance', return_value=scan.ScanResult('paused')):
+            self.task._do_dig_find(self.ctx, self.rec, self.loop, self.regions, .85)
+            progress = self.rec['bag_scan']
+            self.task._do_dig_find(self.ctx, self.rec, self.loop, self.regions, .85)
+        self.assertIs(self.rec['bag_scan'], progress)
+        self.assertEqual(self.rec['recover'], 1)
+        self.assertEqual(self.rec['empty_passes'], 0)
+        self.task._recover_window.assert_not_called()
+        self.ctx.send_hotkey.assert_not_called()
+
+    def test_maintenance_invalidates_progress_and_previous_empty_pass(self):
+        self.ctx.inventory_revision = 0
+        self.rec.update(state=tm.S_DIG_FIND, inventory_revision=0)
+        with mock.patch.object(scan.ScanProgress, 'advance', return_value=scan.ScanResult('paused')):
+            self.task._do_dig_find(self.ctx, self.rec, self.loop, self.regions, .85)
+            previous = self.rec['bag_scan']
+            self.rec['empty_passes'] = 1
+            self.ctx.inventory_revision = 1
+            self.task._do_dig_find(self.ctx, self.rec, self.loop, self.regions, .85)
+        self.assertIsNot(self.rec['bag_scan'], previous)
+        self.assertEqual(self.rec['empty_passes'], 0)
+
+    def test_one_transient_failure_is_rechecked_without_stuck_recovery(self):
+        self.rec['state'] = tm.S_DIG_FIND
+        with mock.patch.object(scan.ScanProgress, 'advance', return_value=scan.ScanResult('stopped')):
+            self.task._do_dig_find(self.ctx, self.rec, self.loop, self.regions, .85)
+            self.task._do_dig_find(self.ctx, self.rec, self.loop, self.regions, .85)
+            self.task._recover_window.assert_not_called()
+            self.task._do_dig_find(self.ctx, self.rec, self.loop, self.regions, .85)
+        self.task._recover_window.assert_called_once()
+
+    def test_total_scan_limit_enters_cleanup_without_restarting_scan(self):
+        self.rec['state'] = tm.S_DIG_FIND
+        progress = scan.ScanProgress()
+        progress.last_reason = 'scan_limit'
+        progress.advance = mock.Mock(return_value=scan.ScanResult('stopped'))
+        self.rec['bag_scan'] = progress
+        self.task._do_dig_find(self.ctx, self.rec, self.loop, self.regions, .85)
+        self.assertEqual(self.rec['state'], tm.S_DIG_CLOSE_BAG)
+        self.assertFalse(self.rec['done'])
+        self.task._recover_window.assert_not_called()
+
+    def test_recovery_exhaustion_closes_bag_before_reporting_failure(self):
+        self.rec.update(state=tm.S_DIG_FIND, phase_b=True, recover=2)
+        with mock.patch.object(self.task, '_save_capture'):
+            tm.TreasureMapTask._recover_window(self.task, self.ctx, self.rec, {}, self.regions)
+        self.assertFalse(self.rec['done'])
+        self.task._step_once(self.ctx, self.rec, self.loop, self.regions, .85)
+        self.ctx.send_hotkey.assert_called_once_with('close_panel')
+        self.assertFalse(self.rec['done'])
+        self.task._bag_visible.return_value = False
+        self.task._step_once(self.ctx, self.rec, self.loop, self.regions, .85)
+        self.assertTrue(self.rec['done'])
+        self.assertEqual(self.rec['outcome'], 'failed')
+        self.assertFalse(self.rec['unsafe_ui'])
+
+    def test_close_failure_is_bounded_and_blocks_following_tasks(self):
+        self.task._begin_bag_cleanup(self.rec, 'completed')
+        self.task._state_elapsed = mock.Mock(return_value=3)
+        for _ in range(4):
+            self.task._step_once(self.ctx, self.rec, self.loop, self.regions, .85)
+        self.assertTrue(self.rec['done'])
+        self.assertTrue(self.rec['unsafe_ui'])
+        self.assertEqual(self.rec['outcome'], 'failed')
+        self.assertEqual(self.ctx.send_hotkey.call_count, 3)
+
+    def test_unobservable_close_does_not_blindly_send_escape(self):
+        self.task._begin_bag_cleanup(self.rec, 'failed')
+        self.task._bag_visible.return_value = None
+        self.task._state_elapsed = mock.Mock(return_value=3)
+        for _ in range(4):
+            self.task._step_once(self.ctx, self.rec, self.loop, self.regions, .85)
+        self.assertTrue(self.rec['unsafe_ui'])
+        self.ctx.send_hotkey.assert_not_called()
+
+    def test_merged_observation_uses_one_screenshot_and_crops_in_screen_coordinates(self):
+        self.task._bag_visible = tm.TreasureMapTask._bag_visible.__get__(self.task)
+        self.task.flags['flag_bag_open'] = self.scene[:2, :2]
+        with mock.patch.object(tm.win_mod, 'grab', return_value=self.scene) as grab, \
+             mock.patch.object(self.task, '_present', return_value=True):
+            frame, rect = self.task._capture_bag(self.ctx, self.regions['bag_list'], .85)
+        grab.assert_called_once_with((100, 200, 800, 600))
+        self.assertEqual(tuple(rect), (100, 200, 200, 200))
+        np.testing.assert_array_equal(frame, self.scene[:200, :200])
+        with mock.patch.object(tm.win_mod, 'grab', return_value=None) as grab:
+            self.assertEqual(self.task._capture_bag(self.ctx, self.regions['bag_list'], .85), (None, None))
+        grab.assert_called_once()
+
+    def test_outer_timeout_cleanup_respects_stop_and_failed_activation(self):
+        self.rec.update(state=tm.S_DIG_FIND, phase_b=True)
+        self.ctx.task_cfg.return_value = {'loop': {'match_threshold': .85}}
+        self.ctx.should_stop.return_value = True
+        self.task.finish_chain_driver(self.ctx, self.rec)
+        self.ctx.window.activate.assert_not_called()
+        self.ctx.should_stop.return_value = False
+        self.ctx.window.activate.return_value = False
+        self.task.finish_chain_driver(self.ctx, self.rec)
+        self.assertTrue(self.rec['unsafe_ui'])
+        self.ctx.send_hotkey.assert_not_called()
 
     def test_rejected_next_map_click_does_not_increment_count(self):
         self.rec.update(state=tm.S_DIGGING, dug=2)

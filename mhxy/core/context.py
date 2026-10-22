@@ -37,6 +37,7 @@ class TaskContext:
         self.label = label                      # 多开时的号标识（「角色名（等级）」，认不出才是「号N」），单开为 None
         self._log_fn = log_fn or (lambda msg, level="info": None)
         self.stop_event = stop_event or threading.Event()
+        self.inventory_revision = 0  # 背包维护改变内容/位置后使扫描覆盖证据失效。
 
     # ---- 日志：任务调用 ctx.log(...)，GUI 通过 log_fn 收 ----
     def log(self, msg, level="info"):

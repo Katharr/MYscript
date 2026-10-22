@@ -68,6 +68,15 @@ class MaintenanceTests(unittest.TestCase):
     def test_context_has_no_inventory_policy_or_throttle(self):
         self.assertFalse(hasattr(TaskContext, "maybe_auto_organize"))
 
+    def test_completed_maintenance_invalidates_only_that_windows_scan_revision(self):
+        first, second = _Ctx(_ob()), _Ctx(_ob())
+        maintenance = AutoInventoryMaintenance()
+        self.assertTrue(maintenance.check(first))
+        self.assertEqual(first.inventory_revision, 1)
+        self.assertFalse(hasattr(second, 'inventory_revision'))
+        self.assertTrue(maintenance.check(first))  # 节流期间没有整理，不再使覆盖证据失效。
+        self.assertEqual(first.inventory_revision, 1)
+
     def test_per_window_throttle_and_end_timestamp_without_config_mutation(self):
         ctx1, ctx2 = _Ctx(_ob()), _Ctx(_ob())
         before = copy.deepcopy(ctx1.cfg)
