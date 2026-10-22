@@ -84,6 +84,7 @@ class DailyOutcomeTests(unittest.TestCase):
         self.load = self.stack.enter_context(mock.patch.object(vision, "load_template", side_effect=AssertionError("unexpected template")))
         self.save = self.stack.enter_context(mock.patch.object(vision, "save_image", side_effect=AssertionError("unexpected asset write")))
         self.maintenance = self.stack.enter_context(mock.patch("mhxy.core.inventory_maintenance.AutoInventoryMaintenance.check", return_value=True))
+        self.solo = self.stack.enter_context(mock.patch.object(daily.DailyTask, "_ensure_solo", return_value=True))
         self.clock = Clock()
         self.stack.enter_context(mock.patch.object(daily.time, "time", self.clock.time))
         self.events = []
@@ -207,6 +208,26 @@ class DailyOutcomeTests(unittest.TestCase):
         for label in ("fast", "slow"):
             self.assertGreater(self.events.index(("begin", label, "treasure_map")), barrier)
             self.assertEqual(self.events.count(("begin", label, "treasure_map")), 1)
+
+    def test_solo_check_precedes_first_activity_and_repeats_after_dungeon(self):
+        ctx = self.context(["secret_realm", "dungeon", "treasure_map", "escort"], ("a", "b"))
+        self.solo.side_effect = lambda wctx: self.events.append(("solo", wctx.label)) or True
+        self.assertEqual(self.run_daily(ctx), "completed")
+        barrier = self.events.index(("dungeon",))
+        for label in ("a", "b"):
+            checks = [i for i, event in enumerate(self.events) if event == ("solo", label)]
+            self.assertEqual(len(checks), 2)
+            self.assertLess(checks[0], self.events.index(("begin", label, "secret_realm")))
+            self.assertGreater(checks[1], barrier)
+            self.assertLess(checks[1], self.events.index(("begin", label, "treasure_map")))
+
+    def test_failed_quit_blocks_affected_window_but_other_window_continues(self):
+        ctx = self.context(["dungeon", "treasure_map", "escort"], ("a", "b"))
+        self.solo.side_effect = lambda wctx: wctx.label == "b"
+        self.assertEqual(self.run_daily(ctx), "partial")
+        for name in ("treasure_map", "escort"):
+            self.assertNotIn(("begin", "a", name), self.events)
+            self.assertIn(("begin", "b", name), self.events)
 
     def test_done_without_success_evidence_is_failed(self):
         for evidence in (None, "failed", "timeout"):
