@@ -35,6 +35,7 @@ class OrganizeBagTask(Task):
             ("sell_confirm_button", "出售窗「出售」按钮", "出售弹窗里最终确认"),
             ("stall_sell_button", "「摆摊出售」按钮", "详情/更多里的「摆摊出售」"),
             ("stall_shelf_button", "「本服上架」按钮", "摆摊出售弹窗里的「本服上架」"),
+            ("stall_full_notice", "「摊位已满」提示", "摊位满时出现的提示文字，避开物品名和数量"),
             ("stall_notice_checkbox", "摆摊「7天不再提示」", "紧贴未勾选方框及右侧文字框选，高度以方框为准，方框须在最左侧"),
             ("stall_notice_confirm", "摆摊提示框「确定」", "本服上架后提示框里的「确定」，没提示可不标"),
             ("confirm_button", "「确定」按钮", "丢弃弹出的确认"),
@@ -105,7 +106,7 @@ class OrganizeBagTask(Task):
                 evidence = organizer.evidence
                 progressed = progressed or handled > 0
                 if reason == "done" and not any(evidence[key] for key in (
-                        "action_failures", "scan_limited", "observation_failed")):
+                        "action_failures", "scan_limited", "observation_failed")) and not evidence.get("stall_full"):
                     completed += 1
             except Exception as e:
                 if organizer is not None:

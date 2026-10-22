@@ -89,7 +89,7 @@ ACTION_LABELS = {k: v["label"] for k, v in _ACTION_SPECS.items()}
 _ALL_BTN_KEYS = {s["tpl"] for spec in _ACTION_SPECS.values() for s in spec["steps"]}
 _ALL_BTN_KEYS.add("confirm_button")
 _ALL_BTN_KEYS.add("sort_button")   # 游戏自带「整理」按钮：实战整理跑完点它把背包重新排列收拢（非任何动作的步骤）
-_ALL_BTN_KEYS.update({"stall_notice_checkbox", "stall_notice_confirm"})
+_ALL_BTN_KEYS.update({"stall_notice_checkbox", "stall_notice_confirm", "stall_full_notice"})
 
 
 def action_label(action):
@@ -133,6 +133,8 @@ class InventoryOrganizer:
         self.evidence = self._new_evidence()
         self._btn = {k: (vision.load_template(tpls.get(k)) if tpls.get(k) else None)
                      for k in _ALL_BTN_KEYS}
+        self._stall_blocked = False
+        self._stall_monitoring = False
 
     def _jitter(self, base):
         r = self.cfg.get("humanize", {}).get("interval_jitter", 0.4)
@@ -154,10 +156,12 @@ class InventoryOrganizer:
         # 只供独立整理任务报告；旧 (handled, reason) 和维护行为保持不变。
         # handled 仍是旧动作序列完成/演练命中计数，不是服务端物品核验。
         return {"handled": 0, "action_failures": 0,
-                "scan_limited": False, "observation_failed": False}
+                "scan_limited": False, "observation_failed": False, "stall_full": False}
 
     def organize(self):
         self.evidence = self._new_evidence()
+        self._stall_blocked = False
+        self._stall_monitoring = False
         ctx = self.ctx
         if not self._item_tpls:
             ctx.log("整理背包：没有可整理的物品（请先在「管理物品」框选添加），跳过。", level="warn")
@@ -185,6 +189,11 @@ class InventoryOrganizer:
                     break
                 if self.dry_run:
                     break  # 演练只看当前已打开的一屏，不滚动也不重复识别
+            if self._stall_blocked and not self.dry_run and not ctx.should_stop():
+                ctx.log("其余背包整理已结束，最后再尝试一次摆摊出售。")
+                self._stall_blocked = False
+                # 物品处理后位置会变，重新扫描找物品；仅尝试一件，不再进入普通整理遍数。
+                handled += self._sweep_once(only_action="stall_sell", stop_after_action=True)
             if not self.dry_run and not ctx.should_stop():
                 self._click_sort_button()
         finally:
@@ -201,6 +210,8 @@ class InventoryOrganizer:
             return handled, "stopped"
         if self.dry_run:
             ctx.log(f"整理背包·演练完成：共识别到 {handled} 次可处理物品（未执行任何动作）。", level="hit")
+        elif self.evidence["stall_full"]:
+            ctx.log(f"整理背包结束：共处理 {handled} 件；摊位已满，未售物品保留在背包。", level="warn")
         else:
             ctx.log(f"整理背包完成：共处理 {handled} 件物品。", level="hit")
         return handled, "done"
@@ -219,7 +230,7 @@ class InventoryOrganizer:
         self.ctx.log(f"点游戏「整理」按钮收拢背包（{hit[2]:.2f}）。", level="hit")
         self._sleep(self._jitter(self.loop.get("step_wait_sec", 0.4)))
 
-    def _sweep_once(self):
+    def _sweep_once(self, *, only_action=None, stop_after_action=False):
         """一次完整 top→bottom 扫描；每屏【逐个】处理命中物品：每次取最靠上的一个处理，处理完不急着滚，
         原地重新识别接着找同屏剩下的，等同屏再没有可处理物品了才往下滚一屏（用户拍板「卖完一件别急着滚」）。
         实战：成功处理完一件物品返回 HANDLED（scroll_search 据此原地不滚、重 probe 续找同屏剩下的，且不拿被
@@ -234,6 +245,10 @@ class InventoryOrganizer:
                 return scan.SCROLL, None
             best = None   # (y_local, it, (sx, sy, score))
             for it, tpl in self._item_tpls:
+                action = it.get("action", "use")
+                if ((only_action is not None and action != only_action)
+                        or (action == "stall_sell" and self._stall_blocked)):
+                    continue
                 m = vision.match(scene, tpl, self.threshold)
                 if m is None:
                     continue
@@ -254,9 +269,12 @@ class InventoryOrganizer:
             if self._do_action(it, action, sx, sy, score):
                 count["n"] += 1
                 self.evidence["handled"] += 1
-                return scan.HANDLED, None
+                return (scan.ACCEPT if stop_after_action else scan.HANDLED), None
+            if action == "stall_sell" and self._stall_blocked:
+                # 已退出摆摊面板，原地重查同屏其他物品，不能直接滚走而漏掉它们。
+                return (scan.ACCEPT if stop_after_action else scan.HANDLED), None
             self.evidence["action_failures"] += 1
-            return scan.SCROLL, None
+            return (scan.ACCEPT if stop_after_action else scan.SCROLL), None
 
         if self.dry_run:
             rect = self._region_rect()
@@ -296,6 +314,8 @@ class InventoryOrganizer:
         返回 True=动作整套跑完（成功）；False=未知动作 / 必需按钮没找到放弃 / 中途收到停止信号。
         probe 据此决定 HANDLED(成功，画面已变) 还是 SCROLL(失败，画面未污染、继续翻并帧差判到底)。"""
         ctx = self.ctx
+        if action == "stall_sell" and self._stall_blocked:
+            return False
         name = it.get("name", "?")
         spec = _ACTION_SPECS.get(action)
         if spec is None:
@@ -307,10 +327,14 @@ class InventoryOrganizer:
         if not self._click(how, sx, sy):
             return False
         completed = False
+        self._stall_monitoring = action == "stall_sell"
         try:
             completed = self._run_action_steps(it, spec, label, score)
+            if completed and action == "stall_sell":
+                self.evidence["stall_full"] = False
             return completed
         finally:
+            self._stall_monitoring = False
             # 丢弃确认后面板自动关闭；再按 ESC 会把背包关掉。
             # 失败时仍收回残留详情/确认框，避免带着弹窗继续扫描。
             if not ctx.should_stop() and not (action == "discard" and completed):
@@ -337,6 +361,8 @@ class InventoryOrganizer:
             optional = step.get("optional")
             timeout = step.get("find_timeout", opt_timeout if optional else step_timeout)
             btn = self._find_full_wait(tpl_key, timeout)
+            if spec is _ACTION_SPECS["stall_sell"] and self._stall_blocked:
+                return False
             if btn is None:
                 if optional:
                     # 可选步骤没出现：跳过前补一段稳定等待，让详情面板/子菜单渲染到位再找下一步按钮，
@@ -356,14 +382,31 @@ class InventoryOrganizer:
                 return False
             ctx.log(f"  · 点「{step['label']}」（{btn[2]:.2f}）。")
             self._sleep(self._jitter(step.get("wait", self.loop.get("step_wait_sec", 0.4))))
+            if spec is _ACTION_SPECS["stall_sell"] and self._stall_is_full():
+                return False
         # 摆摊上架后的可选提示属于动作步骤，收尾统一由 _do_action 的 finally 执行。
         if spec is _ACTION_SPECS["stall_sell"] and not self._dismiss_stall_notice():
+            return False
+        if spec is _ACTION_SPECS["stall_sell"] and self._stall_is_full():
             return False
         if ctx.should_stop():
             return False
         if spec.get("confirm") and not self._confirm_if_present():
             return False
         return not ctx.should_stop()
+
+    def _mark_stall_full(self):
+        if not self._stall_blocked:
+            self.ctx.log("摊位已满，退出摆摊界面；本轮暂跳过摆摊物品。", level="warn")
+        self._stall_blocked = True
+        self.evidence["stall_full"] = True
+
+    def _stall_is_full(self):
+        if self.dry_run or self.ctx.should_stop() or self._btn.get("stall_full_notice") is None:
+            return False
+        if self._find_full_wait("stall_full_notice", 0.0) is not None and not self.ctx.should_stop():
+            self._mark_stall_full()
+        return self._stall_blocked
 
     def _dismiss_stall_notice(self):
         """仅在本服上架后探测提示；未勾选的方框模板要连同「7天不再提示」文字框选。
@@ -494,6 +537,11 @@ class InventoryOrganizer:
             if rect is not None:
                 scene = win_mod.grab(rect)
                 if scene is not None:
+                    full_tpl = self._btn.get("stall_full_notice")
+                    if (self._stall_monitoring and tpl_key != "stall_full_notice"
+                            and full_tpl is not None and vision.match(scene, full_tpl, self.threshold) is not None):
+                        self._mark_stall_full()
+                        return None
                     m = vision.match(scene, tpl, self.threshold)
                     if m is not None:
                         return (rect[0] + m[0], rect[1] + m[1], m[2])

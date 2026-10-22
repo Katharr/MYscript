@@ -506,6 +506,7 @@ DEFAULT_CONFIG = {
                 "sell_confirm_button": None,     # 商会出售弹窗里最终确认的「出售」按钮
                 "stall_sell_button": None,       # 「摆摊出售」按钮
                 "stall_shelf_button": None,      # 摆摊出售的「本服上架」按钮
+                "stall_full_notice": None,       # 摊位满后先处理其他物品，末尾仅再试一次摆摊
                 "stall_notice_checkbox": None,   # 上架后可选提示：未勾选方框 +「7天不再提示」文字
                 "stall_notice_confirm": None,    # 上架后提示框里的「确定」
                 "sell_button": None,             # 旧·笼统「出售」单按钮（兼容旧配置；新建议用商会/摆摊出售）

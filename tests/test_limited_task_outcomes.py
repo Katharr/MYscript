@@ -239,7 +239,7 @@ class OfflineResults(unittest.TestCase):
         task = OrganizeBagTask()
         task._is_admin = lambda: True
         task._interruptible_sleep = Mock()
-        for key in ("action_failures", "scan_limited", "observation_failed"):
+        for key in ("action_failures", "scan_limited", "observation_failed", "stall_full"):
             for handled, expected in ((0, "failed"), (1, "partial")):
                 with self.subTest(key=key, handled=handled):
                     evidence = {"handled": handled, "action_failures": 0,

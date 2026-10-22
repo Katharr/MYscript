@@ -13,6 +13,9 @@ class StallNoticeTests(unittest.TestCase):
         obj.loop = {}
         obj.cfg = {}
         obj.dry_run = False
+        obj._stall_blocked = False
+        obj._stall_monitoring = False
+        obj.evidence = obj._new_evidence()
         obj.ctx.mouse.click.return_value = True
         obj._btn = {
             "stall_notice_checkbox": SimpleNamespace(shape=(20, 140)) if notice else None,

@@ -87,6 +87,18 @@ class QtCalibrationTests(unittest.TestCase):
         self.assertEqual(reopened.cfg["targets"]["base_size"], [1600, 1200])
         self.assertEqual(cp.task_profile(reopened.cfg, "sniper"), cp.active_id(reopened.cfg))
 
+    def test_inventory_stall_full_notice_saves_and_reopens(self):
+        dialog = self.dialog(task="organize_bag")
+        self.select(dialog, "templates", "stall_full_notice")
+        with mock.patch.object(dialog, "_grab_roi", side_effect=self.capture):
+            dialog.calibrate_selected()
+        saved = self.disk()
+        path = saved["tasks"]["organize_bag"]["templates"]["stall_full_notice"]
+        self.assertTrue((self.root / path).is_file())
+        reopened = self.dialog(task="organize_bag", cfg=saved)
+        self.select(reopened, "templates", "stall_full_notice")
+        self.assertEqual(reopened.cfg["tasks"]["organize_bag"]["templates"]["stall_full_notice"], path)
+
     def test_cancel_discards_modified_size_draft_without_save(self):
         dialog = self.dialog()
         before = copy.deepcopy(dialog.cfg)
@@ -322,8 +334,14 @@ class QtCalibrationTests(unittest.TestCase):
             QTimer.singleShot(20, dialog.reject)
 
         QTimer.singleShot(0, capture)
-        QTimer.singleShot(1500, dialog.reject)
-        dialog.exec()
+        timeout = QTimer(dialog)
+        timeout.setSingleShot(True)
+        timeout.timeout.connect(dialog.reject)
+        timeout.start(1500)
+        try:
+            dialog.exec()
+        finally:
+            timeout.stop()  # 不把超时回调留给后续测试中已销毁的编辑器。
         self.assertEqual(remained_open, [True])
 
     def test_item_cancel_after_capture_does_not_publish_size_or_assets(self):
