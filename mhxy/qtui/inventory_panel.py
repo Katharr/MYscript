@@ -10,7 +10,6 @@ from ..tasks.organize_bag import OrganizeBagTask
 from .inventory_items_dialog import InventoryItemsDialog
 from .task_page import TaskPage
 from .widgets import FlowLayout, set_window_summary
-from .window_tools import WindowTools
 
 
 class _ConfigTaskPage(TaskPage):
@@ -130,8 +129,6 @@ class InventoryPanel(_ConfigTaskPage):
 
     def _build_ui(self):
         super()._build_ui()
-        self.window_tools = WindowTools(self)
-        self.body.layout().insertWidget(0, self.window_tools)
         self.auto_organize = QCheckBox("背包满时自动整理", self)
         self.auto_organize.setToolTip("所有任务共享此设置")
         self.auto_organize.toggled.connect(self._save_auto)

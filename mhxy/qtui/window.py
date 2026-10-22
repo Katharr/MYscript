@@ -29,6 +29,7 @@ from .role_window_page import RoleWindowPage
 from .window_selection import WindowSelection
 from .log_panel import LogPanel
 from .log_workspace import LogWorkspace
+from .window_tools import WindowTools
 
 
 class _Bridge(QObject):
@@ -203,6 +204,18 @@ class MainWindow(QMainWindow):
         self.role_strip = RoleStrip(shell)
         self.role_strip.selection_toggled.connect(self._toggle_window)
         self.role_strip.captain_requested.connect(self._select_captain)
+        window_management = QFrame(script)
+        window_management.setObjectName("windowManagement")
+        window_management_layout = QHBoxLayout(window_management)
+        window_management_layout.setContentsMargins(0, 0, 0, 0)
+        window_management_layout.setSpacing(T.SPACE_SM)
+        window_management_title = QLabel("窗口管理", window_management)
+        window_management_title.setProperty("role", "section")
+        window_management_layout.addWidget(window_management_title)
+        self.window_tools = WindowTools(window_management)
+        self._connect_window_tools(self.window_tools)
+        window_management_layout.addWidget(self.window_tools, 1)
+        stack_layout.addWidget(window_management)
         selection_actions = QHBoxLayout()
         self.selection_count = QLabel("已选 0 / 0", shell)
         selection_actions.addWidget(self.selection_count)
@@ -286,7 +299,6 @@ class MainWindow(QMainWindow):
             page.refresh_requested.connect(self.refresh_windows)
             page.launch_requested.connect(self.toggle_launch)
             page.detect_launcher_requested.connect(self.detect_launcher)
-            self._connect_window_tools(page.window_tools)
             page.size_panel.restore_requested.connect(self.restore_selected_size)
             page.size_panel.editing_changed.connect(self._update_strip)
             return page
@@ -305,8 +317,6 @@ class MainWindow(QMainWindow):
             self._manage_task_page(page)
             page.config_changed.connect(self._config_changed)
             page.update_windows(self.window_states)
-            if key == "general":
-                self._connect_window_tools(page.window_tools)
             return page
         if key == "dungeon":
             from .dungeon_page import DungeonPage
@@ -400,11 +410,8 @@ class MainWindow(QMainWindow):
     def _show_window_action(self, message, level="info", *, action=""):
         self._window_action_message, self._window_action_level = message, level
         action = action or self._window_action
-        for page in self.pages.values():
-            tools = getattr(page, "window_tools", None)
-            if tools is not None:
-                text = "" if page is self.role_page and action == "restore_size" else message
-                tools.update_state(self._window_action, text, level)
+        text = "" if action == "restore_size" else message
+        self.window_tools.update_state(self._window_action, text, level)
         if action == "restore_size":
             self.role_page.size_panel.set_status(message, level)
         self.statusBar().showMessage(message)

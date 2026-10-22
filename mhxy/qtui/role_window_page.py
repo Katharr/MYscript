@@ -12,7 +12,6 @@ from .widgets import FormLayout as QFormLayout
 from ..core import config as cfg_mod
 from . import theme as T
 from .widgets import CollapsibleSection, FlowLayout, set_field_width
-from .window_tools import WindowTools
 from .window_size_panel import WindowSizePanel
 
 
@@ -80,11 +79,6 @@ class RoleWindowPage(QWidget):
         layout.addWidget(self.body_scroll, 1)
         layout = content
 
-        operations_title = QLabel("窗口操作", body)
-        operations_title.setProperty("role", "section")
-        layout.addWidget(operations_title)
-        self.window_tools = WindowTools(body, separate_close=True)
-        layout.addWidget(self.window_tools)
         self.size_panel = WindowSizePanel(body, cfg)
         self.size_panel.config_changed.connect(self._sizes_changed)
         layout.addWidget(self.size_panel)
@@ -134,11 +128,6 @@ class RoleWindowPage(QWidget):
         self.status.setWordWrap(True)
         launch_layout.addWidget(self.status)
         launch_layout.addWidget(self.profile_body)
-        self.danger_section = CollapsibleSection("危险操作", body)
-        danger_layout = QVBoxLayout(self.danger_section.content)
-        danger_layout.setContentsMargins(0, 0, 0, 0)
-        danger_layout.addWidget(self.window_tools.close_button)
-        layout.addWidget(self.danger_section)
         layout.addStretch()
         self.render_profiles()
         self._update_launch_section()
