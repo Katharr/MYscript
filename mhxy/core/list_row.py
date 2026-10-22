@@ -17,22 +17,25 @@
      只看条目最高分就会认错卡片，于是去找的按钮压根不在那张卡上。
   ⑤ 【实测 bug】同一排有两张卡、每张右侧都有一颗几乎同分的「参加」，一行带里【取全局最高分】
      就会点到右边那个活动的「参加」（用户实测：认出了秘境降妖，却点到隔壁活动的参加）。
-     最右边的邻卡按钮离条目更远，唯一可靠的判别是【距离】——见下条。
+     原修复取最近的按钮，但本卡按钮缺失或低分时，最近的合格候选也可能属于邻卡；
+     必须同时限制相对搜索跨度，不能只依赖候选之间的距离排序。
 
 本模块怎么修（一条铁律：**位置靠几何绑定推，分数只用来在几何候选里排序，不用来一刀切**）：
   - 几何绑定：参加按钮与它那张卡的条目【同一行】、在条目中心的右侧。于是搜索带由【条目命中点】
     直接推出（不再猜卡片右缘）：纵向以条目中心为中线开一条带，横向从条目中心往右取
-    「条目模板宽 × join_reach_ratio」（默认 12，够到按钮、又在邻卡按钮之前收住），再收到识别区右缘。
+    「条目模板宽 × join_reach_ratio」（默认 12），再限制到一个卡片跨度及识别区右缘。
+    卡片跨度只限制相对距离，不拿列表等分线当卡片边界；本卡缺按钮时返回未找到。
   - 尺寸兼容（两级，互不冲突）：
     ① 【方案二·首选】识别前把【内存里的截图】预缩放回标定基准尺度（cv2.resize，绝不动游戏窗口），
        于是模板能照原样匹配；命中坐标再乘 1/scale 换回当前屏幕坐标。缩放的实现与坐标反算封装在
        core/window.ScaledScene（单一出口，别在任务里自己乘）；阈值按缩放比动态放宽
        （core/vision.scaled_threshold，实测依据见其 docstring）。本模块自己做这一层，
-       故【无论调用方传的是 grab() 的原始图还是 ScaledScene.img，都只需要传 calib_size】。
+       调用方必须传 grab() 的原始图，避免重复缩放。
     ② 多尺度兜底：拿不到标定尺寸、或预缩放后仍差一点时，围绕 1.0 上下试几个模板尺度。
-       尺寸没变时只试 1.0，零额外开销。
+       尺寸没变时只试 1.0，零额外开销。窗口尺寸有变化时也验证原始像素，
+       兼容窗口外壳/DPI 变化但内部控件未同比缩放的旧标定。
   - 【取哪一颗】几何带里可能有好几颗「参加」（同一排两张卡各一颗），故先把候选都取出来（带内非极大抑制），
-    再取【离条目命中点最近的那颗、且在其右侧】——邻卡那颗一定更远，距离才是可靠判别。
+    再取本卡跨度内【离条目命中点最近的那颗、且在其右侧】。只有邻卡按钮时不能借用。
     ⚠ 别改回 `cv2.minMaxLoc` 取全局最高分：同排两颗按钮分数只差千分之几（实测 0.8496 / 0.8491），
     谁高谁低随卡片底色/进度文字飘，正是「认出秘境却点到隔壁活动参加」的成因。
   - 下限只当门槛不当排序：接受下限 = join_min_score（默认 0.6；不配则取阈值的 85%）；
@@ -210,6 +213,43 @@ def _tpl_shape(tpl):
 def locate_card(scene, area_rect, anchor_tpl, join_tpl,
                 match_threshold=0.85, calib_size=None, cfg=None, log=None,
                 window_rect=None, join_calib_size=None):
+    """同帧定位卡片与参加；兼容旧尺寸记录下仍保持原像素大小的游戏控件。
+
+    尺寸组记录窗口大小，不保证游戏内部控件同比缩放。分别验证标定尺度和
+    原始像素尺度，优先保留有本卡按钮的结果，再按同一套配对得分选择。
+    不改模板、尺寸归属或用户配置；只输出最终选中路径的诊断。
+    """
+    attempts = []
+    sizes = [(calib_size, join_calib_size)]
+    for size in (calib_size, join_calib_size):
+        est = estimate_scale(window_rect or area_rect, size)
+        if est is not None and abs(est - 1.0) >= 0.02:
+            sizes.append((None, None))
+            break
+    for anchor_size, join_size in sizes:
+        messages = []
+        hit = _locate_card(scene, area_rect, anchor_tpl, join_tpl, match_threshold,
+                           anchor_size, cfg,
+                           (lambda msg, level="info": messages.append((msg, level))) if log else None,
+                           window_rect, join_size)
+        if hit is not None:
+            attempts.append((hit, messages, anchor_size, join_size))
+    if not attempts:
+        return None
+    hit, messages, anchor_size, join_size = max(
+        attempts, key=lambda result: (result[0].join_x is not None,
+                                     result[0].anchor_score + 0.5 * (result[0].join_score or 0.0)))
+    if log:
+        for msg, level in messages:
+            log(msg, level=level)
+        if len(sizes) > 1 and anchor_size is None and join_size is None:
+            log("活动卡片按原始像素尺度匹配成功（兼容旧标定尺寸记录），无需重新标定。", level="debug")
+    return hit
+
+
+def _locate_card(scene, area_rect, anchor_tpl, join_tpl,
+                 match_threshold=0.85, calib_size=None, cfg=None, log=None,
+                 window_rect=None, join_calib_size=None):
     """在活动列表截图 scene 里定位「卡片 + 它右侧的参加按钮」。
 
     参数：
@@ -313,9 +353,9 @@ def _locate_join(scene, anchor_tpl, join_tpl, anchor_local, cfg, scales, floor, 
     取哪一颗（用户实测 bug：认出了秘境降妖，却点到右边隔壁活动的「参加」）：
       同一排有两张卡、每张右侧各有一颗「参加」，两颗分数只差千分之几（实测 0.8496 / 0.8491），
       谁高谁低随卡片底色/进度文字飘。故【不取全局最高分】，而是把带内 ≥ 绝对地板的所有候选都列出来，
-      取【离条目命中点最近的那颗、且在其右侧】——邻卡那颗必然更远。
+      取本卡跨度内【离条目命中点最近的那颗、且在其右侧】。本卡没有按钮则不点击。
       floor（loop.join_min_score 折算的接受下限）只当门槛：一个候选都不到下限时，返回【最高分】那处，
-      交给上层打「最佳候选 x < 下限 y」的诊断日志（差一点点→调下限；差很多→重标模板）。
+      交给上层打「最佳候选 x < 下限 y」的诊断日志。
     """
     sh, sw = scene.shape[:2]
     ah, aw = anchor_tpl.shape[:2]
@@ -327,24 +367,34 @@ def _locate_join(scene, anchor_tpl, join_tpl, anchor_local, cfg, scales, floor, 
     y0 = max(0, ay - band // 2)
     y1 = min(sh, ay + band // 2)
     # 横向：从条目中心往右，最多到「条目宽 × join_reach_ratio」（默认 12：够到本卡的参加）；
-    # 仍受识别区右缘限制。搜索范围可以放宽——选谁由「离条目最近」定，不靠收窄范围。
+    # 仍受识别区右缘限制。最近按钮也可能属于邻卡，必须再限制最大跨度。
     reach = float(cfg.get("join_reach_ratio") or _DEF_REACH_RATIO)
     x0 = max(0, ax - aw // 4)          # 往左回退一点：容忍条目中心判偏右几个像素
     x1 = min(sw, max(ax + int(aw * reach), ax + aw))
+    # 列数只估一个卡片的最大跨度，不拿等分线猜卡片边界：搜索带始终
+    # 跟随实际条目中心，列表框偏移时也不会在等分线处切掉本卡按钮。
+    # 本卡按钮缺失/低分时不得继续向右借用下一张卡的按钮。
+    columns = max(1, int(cfg.get("activity_columns") or 2))
+    x1 = min(x1, int(ax + sw / columns))
     if y1 - y0 < jh or x1 - x0 < jw:
         return None
 
     cands = _join_candidates(scene[y0:y1, x0:x1], join_tpl, scales, (x0, y0))
     if not cands:
         return None
+    # 几何约束是硬条件，不能用 `or passing` 把重叠/左侧候选捞回来。
+    cands = [c for c in cands
+             if c[0] - jw * c[3] / 2.0 >= x0
+             and c[0] + jw * c[3] / 2.0 <= x1
+             and c[0] >= ax
+             and _outside_anchor(c, (ax, ay), (aw, ah), (jw * c[3], jh * c[3]))]
+    if not cands:
+        return None
     passing = [c for c in cands if c[2] >= floor]
     if not passing:
         return max(cands, key=lambda c: c[2])      # 只给上层打诊断日志用（分数必然 < floor）
-    # 先剔掉与条目模板框重叠的候选：按钮在条目【右侧】、不可能压在条目自己（图标+文字）的框里，
-    # 而卡片内部纹理/文字上冒出来的低分杂点会因「离条目最近」而胜出（实测过）。
-    pool = [c for c in passing if _outside_anchor(c, (ax, ay), (aw, ah), (jw, jh))] or passing
-    right = [c for c in pool if c[0] >= ax]        # 「右侧」的：按钮必在条目命中点右边
-    pool = right or pool
+    # 几何筛选已完成；在合格候选中取最近，分数只用于并列排序。
+    pool = passing
     best = min(pool, key=lambda c: (c[0] - ax, abs(c[1] - ay), -c[2]))
     if log and len(pool) > 1:
         log(f"「参加」候选 {len(pool)} 颗（最高分 {max(c[2] for c in pool):.3f}，"
@@ -355,15 +405,12 @@ def _locate_join(scene, anchor_tpl, join_tpl, anchor_local, cfg, scales, floor, 
 
 
 def _outside_anchor(cand, anchor_local, anchor_shape, join_shape):
-    """候选按钮是否【在条目模板框之外】（边贴边容忍 2px）。
+    """候选按钮是否在条目模板框右侧（边贴边容忍 2px）。
     条目模板 = 卡片的图标+文字，「参加」在它右侧，故与条目框重叠的命中一定是卡片内部的杂点。"""
     ax, ay = anchor_local
     aw, ah = anchor_shape
     jw, jh = join_shape
-    cx0, cx1 = cand[0] - jw / 2.0, cand[0] + jw / 2.0
-    cy0, cy1 = cand[1] - jh / 2.0, cand[1] + jh / 2.0
-    return (cx1 <= ax - aw / 2.0 + 2 or cx0 >= ax + aw / 2.0 - 2
-            or cy1 <= ay - ah / 2.0 + 2 or cy0 >= ay + ah / 2.0 - 2)
+    return cand[0] - jw / 2.0 >= ax + aw / 2.0 - 2
 
 
 def _join_candidates(sub, tpl, scales, offset):

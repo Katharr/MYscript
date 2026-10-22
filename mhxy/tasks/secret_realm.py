@@ -275,9 +275,7 @@ class SecretRealmTask(Task):
             if got is None:
                 return scan.SCROLL, None
             if got.join_x is None:
-                ctx.log("认出卡片但右侧没找到「参加」——按上面那行『最佳候选 xx < 下限 yy』判断："
-                        "差一点点就把 tasks.secret_realm.loop.join_min_score 调低些，差很多就重标 sr_join 模板。"
-                        "原地重试、不滚动。", level="warn")
+                ctx.log("认出卡片，但本卡右侧没有可用的「参加」按钮，原地重试。", level="warn")
                 return scan.STAY, None
             ctx.mouse.click(got.join_x, got.join_y)
             ctx.log(f"找到卡片（{got.anchor_score:.3f}）→ 点「参加」（{got.join_score:.3f}），等对话框。",

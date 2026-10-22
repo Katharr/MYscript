@@ -40,6 +40,12 @@ def match_flag(task, scene, template, key, threshold, ctx=None):
     # _rect 的宽高用于计算窗口尺度；img 可以是窗口内任意裁剪。
     # 零原点让 ScaledScene 负责将匹配点换回裁剪图局部坐标。
     normalized = win_mod.ScaledScene([0, 0, rect[2], rect[3]], size, img=scene)
+    # 旧尺寸组可能记录的是外壳/DPI 尺寸，游戏控件却仍保持原像素大小。
+    # 先保留原版严格阈值匹配，未命中再按记录的尺寸缩放；不重写旧归属。
+    if normalized.normalized:
+        native = vision.match(scene, template, threshold)
+        if native is not None:
+            return native
     hit = normalized.match(template, threshold)
     if hit is None:
         return None

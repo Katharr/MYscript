@@ -352,7 +352,8 @@ class CalibrationDialog(QDialog):
         try:
             group, key, full = selected
             draft = self._draft()
-            captured = self._grab_roi(draft, "框选标定项")
+            name = self.model.item(self.rows.index(selected), 0).text()
+            captured = self._grab_roi(draft, f"框选「{name}」")
             if captured is None:
                 return
             roi, crop, pid = captured
