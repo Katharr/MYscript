@@ -307,9 +307,8 @@ class QtWindowSizeTests(unittest.TestCase):
         self.assertTrue(page.launch_panel.isVisible())
         page.launch_section.toggle.click()
         self.assertFalse(page.launch_panel.isVisible())
-        self.assertFalse(page.window_tools.close_button.isVisible())
-        page.danger_section.toggle.click()
-        self.assertTrue(page.window_tools.close_button.isVisible())
+        self.assertFalse(hasattr(page, "window_tools"))
+        self.assertTrue(self.window.window_tools.close_button.isVisible())
 
     def test_no_window_prioritizes_launch_and_start_stays_before_long_profile_list(self):
         page = self.window.role_page

@@ -90,17 +90,17 @@ class QtWindowToolsTests(unittest.TestCase):
             QTest.qWait(10)
         self.assertTrue(predicate())
 
-    def test_both_pages_have_connected_visible_window_tool_entries(self):
+    def test_top_window_management_is_the_only_window_tool_entry(self):
+        tools = self.window.window_tools
+        self.assertTrue(tools.isVisible())
+        self.assertTrue(tools.wake_button.isVisible())
+        self.assertTrue(tools.close_button.isVisible())
         for key in ("role_window", "general"):
             self.window.show_page(key)
             self.app.processEvents()
-            tools = self.window.pages[key].window_tools
-            self.assertTrue(tools.wake_button.isVisible())
-            if key == "role_window":
-                self.assertFalse(tools.close_button.isVisible())
-                self.window.role_page.danger_section.toggle.click()
-                self.app.processEvents()
-            self.assertTrue(tools.close_button.isVisible())
+            self.assertFalse(hasattr(self.window.pages[key], "window_tools"))
+            self.assertTrue(self.window.window_tools.wake_button.isVisible())
+            self.assertTrue(self.window.window_tools.close_button.isVisible())
             with patch.object(self.window, "_start_window_action") as start:
                 tools.wake_button.click()
                 start.assert_called_once_with("wake")
@@ -117,7 +117,7 @@ class QtWindowToolsTests(unittest.TestCase):
                 with patch("mhxy.qtui.window.QMessageBox.exec", respond), \
                      patch.object(self.window, "_start_window_action") as start, \
                      patch.object(self.window, "stop_all_tasks") as stop:
-                    self.window.role_page.window_tools.close_button.click()
+                    self.window.window_tools.close_button.click()
                     if accepted:
                         start.assert_called_once_with("close")
                     else:
@@ -141,7 +141,7 @@ class QtWindowToolsTests(unittest.TestCase):
         self.wait_for(entered.is_set)
         self.window.wake_game_windows()
         self.window.show_page("general")
-        tools = self.window.pages["general"].window_tools
+        tools = self.window.window_tools
         self.assertFalse(tools.wake_button.isEnabled())
         self.assertFalse(tools.close_button.isEnabled())
         with patch.object(self.window.pages["general"], "_make_runner") as create:
@@ -154,7 +154,7 @@ class QtWindowToolsTests(unittest.TestCase):
         self.assertEqual(self.action.call_count, 1)
         self.assertTrue(tools.wake_button.isEnabled())
         self.assertIn("OCR missing", tools.status.text())
-        self.assertIn("角色名已确认 1 个", self.window.role_page.window_tools.status.text())
+        self.assertIn("角色名已确认 1 个", self.window.window_tools.status.text())
 
     def test_close_stops_tasks_before_worker_and_reports_partial_failure(self):
         stopped = threading.Event()
@@ -168,7 +168,7 @@ class QtWindowToolsTests(unittest.TestCase):
         with patch.object(self.window, "stop_all_tasks", side_effect=stopped.set):
             self.window._start_window_action("close")
             self.wait_for(lambda: not self.window._window_action)
-        text = self.window.role_page.window_tools.status.text()
+        text = self.window.window_tools.status.text()
         self.assertIn("2/3", text)
         self.assertIn("运行权限", text)
 
@@ -176,13 +176,13 @@ class QtWindowToolsTests(unittest.TestCase):
         with patch.object(self.window, "_calibration_running", return_value=True):
             self.window.wake_game_windows()
         self.action.assert_not_called()
-        self.assertIn("先停止任务", self.window.role_page.window_tools.status.text())
+        self.assertIn("先停止任务", self.window.window_tools.status.text())
 
     def test_worker_error_restores_buttons_and_displays_error(self):
         self.action.side_effect = RuntimeError("测试异常")
         self.window.wake_game_windows()
         self.wait_for(lambda: not self.window._window_action)
-        tools = self.window.role_page.window_tools
+        tools = self.window.window_tools
         self.assertTrue(tools.wake_button.isEnabled())
         self.assertIn("测试异常", tools.status.text())
 
