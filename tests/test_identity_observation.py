@@ -92,6 +92,78 @@ class IdentityObservationTests(unittest.TestCase):
         self.grab.assert_not_called()
         self.ocr.assert_not_called()
 
+    def test_waking_one_window_after_long_idle_preserves_other_bindings(self):
+        other = SimpleNamespace(_win=SimpleNamespace(_hWnd=702), rect=self.win.rect)
+        with mock.patch.object(accounts.time, "time", return_value=100):
+            self.confirm()
+            self.front.return_value = (702, self.evidence[1])
+            self.ocr.return_value = "b"
+            self.assertEqual(accounts.labels_for([other]), ["乙（50）"])
+            accounts.bind_launch_session(self.win, "a")
+            accounts.bind_launch_session(other, "b")
+        self.ocr.reset_mock()
+
+        with mock.patch.object(accounts.time, "time", return_value=2000):
+            self.assertEqual(accounts.labels_for([other]), ["乙（50）"])
+            self.assertEqual(accounts.cached_labels_for([self.win, other]),
+                             ["甲（40）", "乙（50）"])
+            self.assertEqual(accounts.launch_session(self.win)["role_id"], "a")
+            self.front.return_value = self.evidence
+            self.assertEqual(accounts.labels_for([self.win]), ["甲（40）"])
+            self.assertEqual(accounts.launch_session(other)["role_id"], "b")
+        self.ocr.assert_not_called()
+
+    def test_unavailable_window_after_long_idle_keeps_binding(self):
+        with mock.patch.object(accounts.time, "time", return_value=100):
+            self.confirm()
+        self.front.return_value = None
+        self.grab.reset_mock()
+        with mock.patch.object(accounts.time, "time", return_value=2000):
+            self.assertEqual(accounts.labels_for([self.win]), ["甲（40）"])
+        self.assertEqual(accounts.bound_role_id(self.win), "a")
+        self.grab.assert_not_called()
+        self.ocr.assert_not_called()
+
+    def test_full_sync_only_prunes_confirmed_closed_windows(self):
+        self.confirm()
+        accounts.bind_launch_session(self.win, "a")
+        # 702 仍存活但暂未枚举到；703 已关闭；704 只留下启动会话。
+        for hwnd in (702, 703, 704):
+            other = SimpleNamespace(_win=SimpleNamespace(_hWnd=hwnd))
+            accounts.bind_launch_session(other, "b")
+            if hwnd != 704:
+                accounts._identity[hwnd] = {"role_id": "b", "label": "乙（50）"}
+        self.grab.reset_mock()
+        with mock.patch.object(accounts.ctypes.windll.user32, "IsWindow",
+                               side_effect=lambda hwnd: hwnd == 702):
+            self.assertEqual(accounts.sync_window_labels(iter([self.win])), ["甲（40）"])
+        self.assertEqual(set(accounts._identity), {701, 702})
+        self.assertEqual(set(accounts._launch_sessions), {701, 702})
+        self.assertEqual(accounts.cached_labels(), ["甲（40）"])
+        self.grab.assert_not_called()
+        self.ocr.assert_not_called()
+
+    def test_empty_full_sync_clears_closed_windows_without_roster_or_ocr(self):
+        self.confirm()
+        accounts.bind_launch_session(self.win, "a")
+        self.grab.reset_mock()
+        with mock.patch.object(accounts.ctypes.windll.user32, "IsWindow", return_value=False):
+            self.assertEqual(accounts.sync_window_labels([]), [])
+        self.assertEqual(accounts._identity, {})
+        self.assertEqual(accounts._launch_sessions, {})
+        self.assertEqual(accounts.cached_labels(), [])
+        self.grab.assert_not_called()
+        self.ocr.assert_not_called()
+
+    def test_full_sync_keeps_bindings_when_window_existence_check_fails(self):
+        self.confirm()
+        accounts.bind_launch_session(self.win, "a")
+        with mock.patch.object(accounts.ctypes.windll.user32, "IsWindow",
+                               side_effect=OSError("window")):
+            self.assertEqual(accounts.sync_window_labels([]), [])
+        self.assertEqual(accounts.bound_role_id(self.win), "a")
+        self.assertEqual(accounts.launch_session(self.win)["role_id"], "a")
+
     def test_capture_loss_movement_or_handle_change_never_bind(self):
         for changed in (None, (701, (11, 20, 1000, 800)),
                         (702, (10, 20, 1000, 800))):

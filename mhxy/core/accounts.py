@@ -48,7 +48,6 @@ _OCR_MIN_CONFIDENCE = 0.55
 _OCR_MIN_MATCH = 0.84
 _OCR_MIN_MARGIN = 0.12
 _OCR_RETRY_SEC = 10.0
-_IDENTITY_MAX_AGE_SEC = 1800.0
 _DATA_DIR_TTL = 20.0
 
 _lock = threading.RLock()
@@ -688,15 +687,8 @@ def _compute(wins):
             label = display_name(names[rid])
             if label:
                 labels[hwnd] = label
-    active_hwnds = {_hwnd(w) for w in wins}
-    with _lock:
-        stale = [h for h, entry in _identity.items()
-                 if now - float(entry.get("seen_at", now)) > _IDENTITY_MAX_AGE_SEC]
-        for hwnd in stale:
-            _identity.pop(hwnd, None)
-        # 一键启动绑定只属于本次存活窗口会话；窗口关闭或 HWND 改变后绝不复用旧绑定。
-        for hwnd in [h for h in _launch_sessions if h not in active_hwnds]:
-            _launch_sessions.pop(hwnd, None)
+    # wins 可以只是唤窗流程中当前置前的单窗，不能用它清理其他窗口的身份或启动会话。
+    # 长时间未观察也不代表窗口关闭；关闭清理由完整枚举入口 sync_window_labels 处理。
     return labels
 
 
@@ -730,8 +722,20 @@ def cached_labels_for(wins):
 
 
 def sync_window_labels(wins):
-    """完整窗口枚举后同步界面顺序，只读身份缓存，不对后台窗口做 OCR。"""
+    """完整枚举后同步显示顺序并清理已关闭窗口；不截屏、不 OCR。"""
+    wins = list(wins)
+    active_hwnds = {_hwnd(w) for w in wins}
     with _lock:
+        for hwnd in (set(_identity) | set(_launch_sessions)) - active_hwnds:
+            try:
+                # 枚举可能暂时漏窗，或识别线程已绑定刚出现的新窗；只有原生句柄
+                # 确认失效才清理，最小化、遮挡、识别间隔均不使身份过期。
+                if ctypes.windll.user32.IsWindow(hwnd):
+                    continue
+            except Exception:
+                continue
+            _identity.pop(hwnd, None)
+            _launch_sessions.pop(hwnd, None)
         labels = cached_labels_for(wins)
         _cache["order"] = list(labels)
         return labels
