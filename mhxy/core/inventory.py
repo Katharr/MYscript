@@ -18,12 +18,12 @@
          · 摆摊出售：左键点物品弹详情 →（有「更多」就点）→「摆摊出售」→「本服上架」→
             （若出现提示，勾选「7天不再提示」再点「确定」）→ 右键关出售窗回包裹；
        加新出售/处理方式只需在 _ACTION_SPECS 加一项 + 注册对应按钮模板，core 其余与 GUI 都不用动。
-  ④ 一遍 = 一次完整 top→bottom 扫描；可配 passes 多遍兜底（丢/卖后列表会变短，位置变化保证覆盖）。
+  ④ 只扫一遍；当前屏处理完后上滚一格补查一次，减少物品收缩移出视野造成的遗漏。
 
 每屏【逐个】处理命中物品：每次取最靠上的一个，动作 _cleanup 收回干净列表（菜单已关、物品已消失）后**原地不滚、
 重新识别**接着处理同屏剩下的，直到同屏再没有可处理物品才往下滚一屏——用户拍板「卖完一件别急着滚，等同屏找不到
-能操作的物品时才滚一段」（早期每卖一件就滚一屏太着急，已改）；多遍 passes 兜底，滚动后位置变化保证覆盖。
-对「使用」这类不一定消失的物品，靠 passes 上限保证一定终止（不会死循环）。
+能操作的物品时才滚一段」。发生过成功处理的屏幕仅局部回看一次，补查期间不再触发上滚。
+处理动作不占翻页预算；连续处理同一物品却画面不变或总时长耗尽时，报告未整理完并收尾。
 dry_run：只识别并打日志（物品名+计划动作），不点任何动作、不丢不卖，作为安全自检。
 """
 
@@ -135,6 +135,7 @@ class InventoryOrganizer:
                      for k in _ALL_BTN_KEYS}
         self._stall_blocked = False
         self._stall_monitoring = False
+        self._deadline = None
 
     def _jitter(self, base):
         r = self.cfg.get("humanize", {}).get("interval_jitter", 0.4)
@@ -162,6 +163,7 @@ class InventoryOrganizer:
         self.evidence = self._new_evidence()
         self._stall_blocked = False
         self._stall_monitoring = False
+        self._deadline = time.monotonic() + max(1.0, float(self.loop.get("organize_timeout_sec", 180)))
         ctx = self.ctx
         if not self._item_tpls:
             ctx.log("整理背包：没有可整理的物品（请先在「管理物品」框选添加），跳过。", level="warn")
@@ -177,24 +179,16 @@ class InventoryOrganizer:
                     ctx.log("整理背包：打不开背包（open_bag 未配置或输入未获准），跳过。", level="error")
                     return 0, "no_hotkey"
                 self._sleep(self._jitter(0.6))
-            passes = max(1, int(self.loop.get("passes", 1)))
-            for p in range(passes):
-                if ctx.should_stop():
-                    break
-                ctx.log(f"整理背包：第 {p + 1}/{passes} 遍扫描…")
-                n = self._sweep_once()
-                handled += n
-                if n == 0:
-                    ctx.log("整理背包：本遍未发现可处理物品，提前结束。")
-                    break
-                if self.dry_run:
-                    break  # 演练只看当前已打开的一屏，不滚动也不重复识别
-            if self._stall_blocked and not self.dry_run and not ctx.should_stop():
+            ctx.log("整理背包：单遍扫描…")
+            handled += self._sweep_once()
+            if (self._stall_blocked and not self.dry_run and not ctx.should_stop()
+                    and not self.evidence["scan_limited"] and not self._time_limit_reached()):
                 ctx.log("其余背包整理已结束，最后再尝试一次摆摊出售。")
                 self._stall_blocked = False
                 # 物品处理后位置会变，重新扫描找物品；仅尝试一件，不再进入普通整理遍数。
                 handled += self._sweep_once(only_action="stall_sell", stop_after_action=True)
-            if not self.dry_run and not ctx.should_stop():
+            if (not self.dry_run and not ctx.should_stop()
+                    and not self.evidence["scan_limited"] and not self._time_limit_reached()):
                 self._click_sort_button()
         finally:
             # 仅关闭本次确实打开的背包；停止时不为收尾继续输入。
@@ -210,11 +204,25 @@ class InventoryOrganizer:
             return handled, "stopped"
         if self.dry_run:
             ctx.log(f"整理背包·演练完成：共识别到 {handled} 次可处理物品（未执行任何动作）。", level="hit")
+        elif self.evidence["scan_limited"]:
+            ctx.log(f"整理背包未完成：共处理 {handled} 件，已达到保护上限，剩余物品保留在背包。", level="warn")
         elif self.evidence["stall_full"]:
             ctx.log(f"整理背包结束：共处理 {handled} 件；摊位已满，未售物品保留在背包。", level="warn")
         else:
             ctx.log(f"整理背包完成：共处理 {handled} 件物品。", level="hit")
         return handled, "done"
+
+    def _limit_scan(self, reason):
+        if not self.evidence["scan_limited"]:
+            self.ctx.log(f"整理背包：{reason}，停止扫描并收尾。", level="warn")
+        self.evidence["scan_limited"] = True
+
+    def _time_limit_reached(self):
+        # 在动作边界检查，不截断正在进行的出售/丢弃和面板收尾。
+        if self._deadline is not None and time.monotonic() >= self._deadline:
+            self._limit_scan("达到整理时长上限")
+            return True
+        return False
 
     def _click_sort_button(self):
         """整理流程末尾点游戏自带的「整理」按钮，把背包重新排列收拢一下（用户要求）。
@@ -233,14 +241,28 @@ class InventoryOrganizer:
     def _sweep_once(self, *, only_action=None, stop_after_action=False):
         """一次完整 top→bottom 扫描；每屏【逐个】处理命中物品：每次取最靠上的一个处理，处理完不急着滚，
         原地重新识别接着找同屏剩下的，等同屏再没有可处理物品了才往下滚一屏（用户拍板「卖完一件别急着滚」）。
-        实战：成功处理完一件物品返回 HANDLED（scroll_search 据此原地不滚、重 probe 续找同屏剩下的，且不拿被
-        动作污染的画面判到底）；演练只识别当前一屏，不滚动、不宣称翻到底。
-        ⚠ 动作【失败】（按钮没找到、放弃该物品）返回 SCROLL：此时画面已被 _cleanup 收回干净列表、未被污染，
-          继续 SCROLL 让帧差能在到底时正常收工；若失败也返回 HANDLED，会在「包裹底部有个按钮永远匹配不到的
-          物品」上原地反复『点开→放弃』空转直到 scroll_max_tries 耗尽，正是用户撞到的卡死放大场景。"""
+        同屏处理完后仅上滚一格补查一次；补查期间不再触发上滚，之后恢复下扫，不额外重扫整包。
+        实战 HANDLED 不占翻页预算，由总时长和连续无进展保护兜底；演练只识别当前一屏，无输入。
+        动作失败仍返回 SCROLL：收回面板后继续下扫，避免在按钮始终匹配不到的物品上反复尝试。"""
         count = {"n": 0}
+        dirty = False
+        rechecked = False
+        last_action = None
+        unchanged_actions = 0
+        no_progress_limit = max(1, int(self.loop.get("no_progress_max_tries", 3)))
+        if not self.dry_run and self._deadline is None:
+            self._deadline = time.monotonic() + max(1.0, float(self.loop.get("organize_timeout_sec", 180)))
+
+        def continue_down():
+            nonlocal dirty, rechecked, last_action, unchanged_actions
+            dirty = rechecked = False
+            last_action, unchanged_actions = None, 0
+            return scan.SCROLL, None
 
         def probe(scene, rect):
+            nonlocal dirty, rechecked, last_action, unchanged_actions
+            if not self.dry_run and self._time_limit_reached():
+                return scan.ACCEPT, None
             if scene is None:
                 return scan.SCROLL, None
             best = None   # (y_local, it, (sx, sy, score))
@@ -255,7 +277,17 @@ class InventoryOrganizer:
                 if best is None or m[1] < best[0]:
                     best = (m[1], it, (rect[0] + m[0], rect[1] + m[1], m[2]))
             if best is None:
-                return scan.SCROLL, None
+                if dirty and not rechecked and not stop_after_action:
+                    if self.ctx.should_stop():
+                        return scan.ACCEPT, None
+                    cx, cy = rect[0] + rect[2] // 2, rect[1] + rect[3] // 2
+                    if self.ctx.mouse.scroll(1, cx, cy, region=rect) is False:
+                        raise InventoryRecoveryError("背包局部回看滚动未获准")
+                    dirty, rechecked = False, True
+                    last_action, unchanged_actions = None, 0
+                    # HANDLED 让扫描器丢弃滚前帧，等待落定后重新截图，不能拿回看帧差判到底。
+                    return scan.HANDLED, None
+                return continue_down()
             _, it, (sx, sy, score) = best
             action = it.get("action", "use")
             if self.dry_run:
@@ -264,17 +296,28 @@ class InventoryOrganizer:
                 self.ctx.log(f"识别到物品『{it.get('name', '?')}』（{score:.2f}）→ 计划动作："
                              f"{action_label(action)}（演练不执行）。", level="hit")
                 return scan.SCROLL, None
-            # 只有真正完成动作（卖/用/丢成功）才计数 + HANDLED：scroll_search 据此原地不滚、重新识别接着
-            # 找同屏剩下的可处理物品（卖完别急着滚）。失败时物品仍在、画面未污染，返回 SCROLL 让它往下翻并帧差判到底。
+            key = (it.get("template"), action, sx, sy)
+            # 堆叠数量变化可能只影响几个像素，不能用滚动帧差阈值把它当作无进展。
+            if (last_action is not None and last_action[0] == key
+                    and vision.frame_diff(last_action[1], scene) == 0.0):
+                unchanged_actions += 1
+                if unchanged_actions >= no_progress_limit:
+                    self._limit_scan("连续处理同一物品但背包画面未变化")
+                    return scan.ACCEPT, None
+            else:
+                unchanged_actions = 0
+            # 成功后原地重识别；等整屏清完才进行一次局部回看。
             if self._do_action(it, action, sx, sy, score):
                 count["n"] += 1
                 self.evidence["handled"] += 1
+                last_action = (key, scene)
+                dirty = True
                 return (scan.ACCEPT if stop_after_action else scan.HANDLED), None
             if action == "stall_sell" and self._stall_blocked:
                 # 已退出摆摊面板，原地重查同屏其他物品，不能直接滚走而漏掉它们。
                 return (scan.ACCEPT if stop_after_action else scan.HANDLED), None
             self.evidence["action_failures"] += 1
-            return (scan.ACCEPT if stop_after_action else scan.SCROLL), None
+            return (scan.ACCEPT, None) if stop_after_action else continue_down()
 
         if self.dry_run:
             rect = self._region_rect()
@@ -301,9 +344,10 @@ class InventoryOrganizer:
             reset_max=self.loop.get("scroll_reset_max", 20),
             log=self.ctx.log,
             label="背包",
+            count_handled=False,
         )
         if result.exhausted and not result.reached_end:
-            self.evidence["scan_limited"] = True
+            self._limit_scan("达到背包翻页上限")
         if result.stopped and not self.ctx.should_stop():
             self.evidence["observation_failed"] = True
             raise InventoryRecoveryError("背包扫描未完成（窗口消失、截图失败或滚动未获准）")

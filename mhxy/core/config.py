@@ -495,9 +495,10 @@ DEFAULT_CONFIG = {
                 "step_wait_sec": 0.4,            # 出售/处理多步序列里两步之间的默认等待（如点「商会出售」后等出售窗弹出）
                 "action_settle_sec": 0.4,        # 点物品后等操作菜单/面板出现
                 "confirm_timeout_sec": 6,        # 等丢弃/出售确认弹窗的超时
-                "passes": 1,                     # 整理几遍（丢/卖后列表会变，可多遍兜底）
+                "organize_timeout_sec": 180,     # 总时长保护，在动作边界检查，仍会完成面板收尾
+                "no_progress_max_tries": 3,      # 连续处理同一物品、画面却不变时停止
                 "scroll_step": -3,
-                "scroll_max_tries": 30,          # 背包可能很长：处理动作会改画面、削弱「帧差判到底」，故给足翻屏上限兜底
+                "scroll_max_tries": 30,          # 仅限制翻页；处理物品和每屏一次局部回看不占预算
                 "scroll_settle_sec": 0.35,
                 "scroll_reset_top": True,
                 "scroll_end_diff": 2.0,

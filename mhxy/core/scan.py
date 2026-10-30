@@ -265,12 +265,16 @@ def _scroll_to_top(grab_rect, mouse, should_stop, sleep, scroll_step,
 def scroll_search(*, grab_rect, probe, mouse, should_stop, sleep,
                   scroll_step=-3, max_tries=8, settle_sec=0.35,
                   reset_to_top=True, end_diff=2.0, reset_max=20,
-                  log=None, label="列表", require_full_scan=False):
+                  log=None, label="列表", require_full_scan=False,
+                  count_handled=True):
     """滚动查找主循环。先（可选）滚到顶，再从顶向下逐屏 probe，命中即停；
     每向下滚一屏用帧差判是否到底（到底=已翻完整段）。返回 ScanResult。
 
     require_full_scan=True 会强制回顶，并要求上下边界均连续两次有效滚动后不变；
     只有确认顶部、到底且 exhausted 的结果，才表示完成一轮全段无目标扫描。
+
+    count_handled=False 时，HANDLED 不消耗翻页预算；调用方必须自行限制处理时长和无进展动作。
+    默认保持原有计数方式，避免改变其他任务的安全上限。
 
     用户拍板：滚轮查找在【同一个号】上一气呵成跑完（找到/翻完才返回），不在滚动中途让出去轮转别号——
     故这是个自带内循环的阻塞函数，只在 ACCEPT/翻完/被停止时返回；全程勤查 should_stop。"""
@@ -329,11 +333,12 @@ def scroll_search(*, grab_rect, probe, mouse, should_stop, sleep,
             # HANDLED：probe 卖/丢/用了一件物品（改了画面）→ 不滚，原地再 probe 找同屏剩下的可处理物品，
             #   只有同屏确实没有可处理物品了（probe 返回 SCROLL）才往下滚一屏（「卖完一件别急着滚」）。
             #   注：被动作污染的画面不会被拿来判到底——因为没记进 pre_scroll_scene（保持 None）。
-            # STAY：主目标在、次级目标缺，原地重试。两者都计入 max_tries 作安全网（见上方 tries += 1）。
+            # STAY 始终计入预算；HANDLED 是否计入由 count_handled 决定。
             pre_scroll_scene = None
             stable = 0
 
-        tries += 1
+        if count_handled or decision != HANDLED:
+            tries += 1
         if tries > max_tries:
             return ScanResult("exhausted", scrolls=tries, reached_end=False,
                               reached_top=reached_top)
