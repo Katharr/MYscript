@@ -14,10 +14,8 @@ ROW_HEIGHT = 62
 NAV_WIDTH = 176
 WINDOW_SIZE = (1120, 720)
 MIN_WINDOW_SIZE = (800, 640)
-LOG_WIDTH = 236
-LOG_MIN_WIDTH = 236
-LOG_MAX_WIDTH = 320
-LOG_RAIL_WIDTH = 40
+LOG_MIN_WIDTH = 260
+LOG_MAX_WIDTH = 800
 LOG_HANDLE_WIDTH = 8
 LOG_PADDING = 12
 SCRIPT_COMFORT_WIDTH = 620
@@ -197,7 +195,7 @@ def _style_sheet(font_height):
     content_height = max(BUTTON_HEIGHT - 12, font_height)
     accent_hover = "#005AA8" if ACCENT == "#0067C0" else QColor(ACCENT).darker(110).name()
     return f"""
-    QWidget {{ color: {TEXT}; }}
+    QWidget {{ color: {TEXT}; font-family: "{FONT_FAMILY}"; font-size: {FONT_SIZE}px; }}
     QMainWindow, QWidget#shell {{ background: {BG}; }}
     QDialog, QWidget[role="page"] {{ background: {SURFACE}; }}
     QWidget[role="page"] {{ border-radius: 0; }}
@@ -283,8 +281,10 @@ def _style_sheet(font_height):
         color: {DISABLED}; background: {DISABLED_BG}; border-color: {DIVIDER};
     }}
     QCheckBox:disabled {{ color: {DISABLED}; }}
-    QPushButton[role="toolbar"], QPushButton[role="link"], QToolButton[role="link"] {{ border: 1px solid transparent; background: transparent; padding: 2px 8px; min-height: 24px; }}
-    QPushButton[role="toolbar"] {{ color: {TEXT_DIM}; }}
+    QPushButton[role="link"], QToolButton[role="link"] {{ border: 1px solid transparent; background: transparent; padding: 2px 8px; min-height: 24px; }}
+    QPushButton[role="toolbar"] {{ color: {TEXT}; padding: 2px 8px; min-height: 24px; }}
+    QPushButton[role="toolbar"]:checked {{ color: {ACCENT}; background: {SELECTION}; border-color: {ACCENT}; }}
+    QPushButton:pressed, QToolButton:pressed {{ background: {SELECTION}; }}
     QPushButton[role="link"] {{ color: {ACCENT}; }}
     QPushButton[role="toolbar"]:hover, QPushButton[role="link"]:hover {{ background: {BUTTON_HOVER}; }}
     QPushButton[role="toolbar"]:focus, QPushButton[role="link"]:focus {{ border-color: {ACCENT}; }}
@@ -292,8 +292,8 @@ def _style_sheet(font_height):
     QListWidget#dailySteps {{ border: 1px solid {DIVIDER}; border-radius: 7px; background: {SURFACE}; }}
     QListWidget#dailySteps::item {{ padding: 0; border-bottom: 1px solid {DIVIDER}; }}
     QTabBar#taskTabs {{ background: {SURFACE}; }}
-    QTabBar#taskTabs::tab {{ background: transparent; padding: 10px 14px; border-bottom: 2px solid transparent; }}
-    QTabBar#taskTabs::tab:selected {{ color: {ACCENT}; border-bottom-color: {ACCENT}; }}
+    QTabBar#taskTabs::tab {{ background: transparent; padding: 10px 14px; border: none; }}
+    QTabBar#taskTabs::tab:selected {{ color: {ACCENT};  }}
     QTabBar#taskTabs::tab:focus {{ background: {SELECTION}; }}
     QTabBar#taskTabs::tab:disabled {{ color: {DISABLED}; }}
     QStatusBar {{ background: {SIDEBAR}; color: {TEXT_DIM}; border-top: 1px solid {DIVIDER}; }}
@@ -310,6 +310,9 @@ def apply_theme(app: QApplication, appearance="light") -> None:
         app.setStyle(app._mhxy_readable_style)
     font = QFont(FONT_FAMILY)
     font.setPixelSize(FONT_SIZE)
+    # Small CJK glyphs must use outline antialiasing rather than hinted bitmap strikes.
+    font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
+    font.setHintingPreference(QFont.HintingPreference.PreferNoHinting)
     app.setFont(font)
     palette = QPalette()
     roles = {

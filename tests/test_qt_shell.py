@@ -77,6 +77,7 @@ class QtShellTests(unittest.TestCase):
         script = """
 import runpy
 import sys
+import time
 from PySide6.QtCore import QSettings, QTimer
 from PySide6.QtWidgets import QApplication, QMainWindow
 from mhxy.qtui import window as window_module
@@ -89,12 +90,16 @@ window_module.QSettings = lambda *args: settings
 count = int(sys.argv[2])
 window_module.scan_windows = lambda cfg: [WindowState(i + 1, f'号{i + 1}') for i in range(count)]
 app = QApplication([])
+deadline = time.monotonic() + 5
 def navigate_and_close():
     windows = [w for w in app.topLevelWidgets() if isinstance(w, QMainWindow)]
     assert len(windows) == 1
     window = windows[0]
     assert window.isVisible()
     assert window.current_page == 'role_window'
+    if len(window.role_strip.items) != count and time.monotonic() < deadline:
+        QTimer.singleShot(20, checked)
+        return
     assert len(window.role_strip.items) == count
     assert window.role_page.launch_panel.isVisible() == (count == 0)
     assert window.width() >= 800 and window.height() >= 640
@@ -109,7 +114,14 @@ def navigate_and_close():
     assert 'customtkinter' not in sys.modules
     assert 'mhxy.gui.app' not in sys.modules
     window.close()
-QTimer.singleShot(100, navigate_and_close)
+def checked():
+    try:
+        navigate_and_close()
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        app.exit(1)
+QTimer.singleShot(100, checked)
 runpy.run_module('mhxy.qtui.main', run_name='__main__')
 """
         env = dict(os.environ, QT_QPA_PLATFORM="offscreen")

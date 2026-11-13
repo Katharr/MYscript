@@ -108,7 +108,7 @@ class LogPanel(QWidget):
             header.insertWidget(0, self.title_label)
             self.title_label.setText("日志")
             self.title_label.setProperty("role", "section")
-            header.addWidget(self.toggle_button)
+            self.toggle_button.hide()
             self.toggle_button.setText("收起")
             self.toggle_button.setAccessibleName("收起右侧运行日志")
             self.source_filter.setMinimumWidth(100)

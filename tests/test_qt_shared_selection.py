@@ -151,13 +151,12 @@ class SharedSelectionTests(unittest.TestCase):
         strip.horizontalScrollBar().setValue(strip.horizontalScrollBar().maximum())
         self.assertLessEqual(strip.widget().mapTo(strip.viewport(), strip.items[105].geometry().bottomRight()).x(), strip.viewport().width())
         layout(1120, 5)
-        # 3.0 角色条横跨工作区；空间不足时滚动，不压缩角色卡。
-        self.assertEqual(self.window.log_panel.width(), 236)
+        # 角色条位于左侧工作区；空间不足时滚动，不压缩角色卡。
+        self.assertAlmostEqual(self.window.log_panel.width(), self.window.log_workspace.width()/3, delta=3)
         self.assertGreater(strip.horizontalScrollBar().maximum(), 0)
         self.assertEqual([strip.items[h].width() for h in (101, 102)], widths)
         layout(1440, 5)
-        self.assertEqual(strip.horizontalScrollBar().maximum(), 0)
-        self.assertEqual(strip.height(), compact_height)
+        self.assertGreater(strip.horizontalScrollBar().maximum(), 0)
         self.assertEqual([strip.items[h].width() for h in (101, 102)], widths)
         for item in strip.items.values():
             self.assertTrue(item.rect().contains(item.activity.geometry()))

@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from PySide6.QtCore import QSettings, Qt
+from PySide6.QtCore import QPoint, QSettings, Qt
 from PySide6.QtTest import QTest
 from mhxy.core import config as C
 from mhxy.qtui.main import get_application
@@ -75,10 +75,12 @@ class WorkspaceV3Tests(unittest.TestCase):
         for button in (self.window.window_tools.wake_button, self.window.window_tools.close_button,
                        self.window.log_button):
             self.assertTrue(button.isVisible())
-            self.assertLess(button.mapTo(self.window, button.rect().bottomRight()).y(),
-                            self.window.log_panel.mapTo(self.window, self.window.log_panel.rect().topLeft()).y())
-        self.assertGreater(self.window.role_strip.width(), self.window.log_workspace.script.width() - 48)
-        QTest.keyClick(self.window.log_panel.toggle_button, Qt.Key.Key_Escape)
+            point = button.mapTo(self.window, button.rect().center())
+            self.assertIs(self.window.childAt(point), button)
+        self.assertEqual(self.window.log_panel.mapTo(self.window, QPoint()).y(), 0)
+        self.assertFalse(self.window.log_panel.toggle_button.isVisible())
+        self.assertEqual(self.window.role_strip.width(), self.window.log_workspace.script.width() - 48)
+        QTest.keyClick(self.window.log_panel.text_edit, Qt.Key.Key_Escape)
         self.app.processEvents()
         self.assertFalse(self.window.log_workspace.overlay_open)
 
@@ -110,7 +112,13 @@ class WorkspaceV3Tests(unittest.TestCase):
             self.window.log_workspace.open_log()
             self.assertTrue(self.window.log_stop_button.isVisible())
             self.assertTrue(self.window.log_stop_button.isEnabled())
-            QTest.qWait(20)
+            point = self.window.log_stop_button.mapTo(self.window, self.window.log_stop_button.rect().center())
+            self.assertIs(self.window.childAt(point), self.window.log_stop_button)
+            for _ in range(100):
+                if not page._start_pending:
+                    break
+                QTest.qWait(10)
+            self.assertFalse(page._start_pending)
             running.return_value = False
             page.runner.outcome = 'failed'
             self.window._pump_task_logs()

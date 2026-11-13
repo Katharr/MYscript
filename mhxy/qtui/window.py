@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QVBoxLayout,
     QWidget,
+    QStatusBar,
 )
 
 from . import theme as T
@@ -224,10 +225,8 @@ class MainWindow(QMainWindow):
         self.window_tools = WindowTools(workspace, compact=True)
         self._connect_window_tools(self.window_tools)
         topbar.addWidget(self.window_tools)
-        divider = QFrame(workspace)
-        divider.setFrameShape(QFrame.Shape.VLine)
-        topbar.addWidget(divider)
         self.log_button = QPushButton("日志", workspace)
+        self.log_button.setCheckable(True)
         self.log_button.clicked.connect(self.toggle_log)
         topbar.addWidget(self.log_button)
         for button in (self.window_tools.wake_button, self.window_tools.close_button, self.log_button):
@@ -268,11 +267,14 @@ class MainWindow(QMainWindow):
         T.set_role(self.log_stop_button, "danger")
         self.log_stop_button.clicked.connect(self.stop_all_tasks)
         self.log_panel.layout().addWidget(self.log_stop_button)
-        self.log_workspace = LogWorkspace(script, self.log_panel, self._settings, shell)
-        workspace_layout.addWidget(self.log_workspace, 1)
-        layout.addWidget(workspace, 1)
+        workspace_layout.addWidget(script, 1)
+        self.log_workspace = LogWorkspace(workspace, self.log_panel, self._settings, shell)
+        self.log_workspace.bind_toolbar(topbar_widget, self.log_button)
+        layout.addWidget(self.log_workspace, 1)
 
-        status = self.statusBar()
+        status = QStatusBar(workspace)
+        self._left_status = status
+        workspace_layout.addWidget(status)
         status.setSizeGripEnabled(True)
         status.showMessage("就绪")
         self._page_status = QLabel(self)
@@ -293,6 +295,9 @@ class MainWindow(QMainWindow):
         self.runtime_timer.start()
         # 窗口先显示，再开始后台检测；零窗口和检测慢都不改变启动入口。
         QTimer.singleShot(0, self.refresh_windows)
+
+    def statusBar(self):
+        return self._left_status
 
     def _fit_work_area(self, screen=None):
         """高缩放或小屏幕下，最小尺寸也不能超过实际可用逻辑空间。"""
