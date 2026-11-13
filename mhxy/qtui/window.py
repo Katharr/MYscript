@@ -31,6 +31,7 @@ from .log_panel import LogPanel
 from .log_workspace import LogWorkspace
 from .window_tools import WindowTools
 from .task_tabs import TaskTabs
+from .icons import line_icon
 
 
 class _Bridge(QObject):
@@ -109,8 +110,8 @@ class MainWindow(QMainWindow):
     )
     NAV = (
         ("daily", "日常一条龙"), ("tasks", "单项任务"),
-        ("general", "通用工具"), ("freeclick", "自由点击"),
-        ("role_window", "角色与窗口"), ("calibration", "标定中心"),
+        ("freeclick", "自由点击"),
+        ("role_window", "角色与窗口"), ("calibration", "标定中心"), ("general", "通用工具"),
         ("settings", "设置"), ("about", "关于"),
     )
 
@@ -122,7 +123,7 @@ class MainWindow(QMainWindow):
         self.nav_buttons: dict[str, QPushButton] = {}
         self.current_page: str | None = None
         self.cfg = cfg_mod.load_config()
-        T.apply_theme(QApplication.instance(), self.cfg.get("appearance", "light"))
+        T.apply_theme(QApplication.instance(), self._settings.value("window/v3Appearance", "light"))
         self.window_states = []
         self.selection = WindowSelection()
         self._role_runs = []
@@ -153,8 +154,8 @@ class MainWindow(QMainWindow):
         shell = QWidget(self)
         shell.setObjectName("shell")
         layout = QHBoxLayout(shell)
-        layout.setContentsMargins(0, 0, T.SPACE_MD, 0)
-        layout.setSpacing(T.SPACE_MD)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
         self.setCentralWidget(shell)
 
         navigation = QFrame(shell)
@@ -190,6 +191,8 @@ class MainWindow(QMainWindow):
             self._nav_group.addButton(button)
             self.nav_buttons[key] = button
             (nav_layout if key in ("settings", "about") else buttons_layout).addWidget(button)
+        T.events().changed.connect(self._refresh_nav_icons)
+        self._refresh_nav_icons()
         buttons_layout.addStretch()
         self.float_button = QPushButton("悬浮信息条", navigation)
         self.float_button.clicked.connect(self.collapse_to_float)
@@ -201,17 +204,22 @@ class MainWindow(QMainWindow):
         script = QWidget(shell)
         stack_layout = QVBoxLayout(script)
         stack_layout.setContentsMargins(0, 0, 0, 0)
-        stack_layout.setSpacing(12)
+        stack_layout.setSpacing(0)
         self.role_strip = RoleStrip(shell)
         self.role_strip.selection_toggled.connect(self._toggle_window)
         self.role_strip.captain_requested.connect(self._select_captain)
         workspace = QWidget(shell)
         workspace_layout = QVBoxLayout(workspace)
-        workspace_layout.setContentsMargins(0, 12, 0, 0)
-        workspace_layout.setSpacing(8)
-        topbar = QHBoxLayout()
+        workspace.setObjectName("workspace")
+        workspace_layout.setContentsMargins(0, 0, 0, 0)
+        workspace_layout.setSpacing(0)
+        topbar_widget = QWidget(workspace)
+        topbar_widget.setObjectName("topbar")
+        topbar_widget.setMinimumHeight(47)
+        topbar = QHBoxLayout(topbar_widget)
+        topbar.setContentsMargins(24, 0, 24, 0)
         self.breadcrumb = QLabel("角色与窗口", workspace)
-        self.breadcrumb.setProperty("role", "section")
+        self.breadcrumb.setProperty("role", "muted")
         topbar.addWidget(self.breadcrumb, 1)
         self.window_tools = WindowTools(workspace, compact=True)
         self._connect_window_tools(self.window_tools)
@@ -222,19 +230,31 @@ class MainWindow(QMainWindow):
         self.log_button = QPushButton("日志", workspace)
         self.log_button.clicked.connect(self.toggle_log)
         topbar.addWidget(self.log_button)
-        workspace_layout.addLayout(topbar)
+        for button in (self.window_tools.wake_button, self.window_tools.close_button, self.log_button):
+            T.set_role(button, "toolbar")
+        workspace_layout.addWidget(topbar_widget)
+        role_panel = QWidget(workspace)
+        role_layout = QVBoxLayout(role_panel)
+        role_layout.setContentsMargins(24, 8, 24, 16)
+        role_layout.setSpacing(8)
         selection_actions = QHBoxLayout()
+        role_title = QLabel("执行角色", role_panel)
+        role_title.setProperty("role", "muted")
+        selection_actions.addWidget(role_title)
+        selection_actions.addStretch()
         self.selection_count = QLabel("已选 0 / 0", shell)
         selection_actions.addWidget(self.selection_count)
-        selection_actions.addStretch()
         self.select_all_button = QPushButton("全选", shell)
         self.clear_selection_button = QPushButton("清空", shell)
         self.select_all_button.clicked.connect(lambda: self._change_selection("all"))
         self.clear_selection_button.clicked.connect(lambda: self._change_selection("clear"))
+        T.set_role(self.select_all_button, "link")
+        T.set_role(self.clear_selection_button, "link")
         selection_actions.addWidget(self.select_all_button)
         selection_actions.addWidget(self.clear_selection_button)
-        workspace_layout.addLayout(selection_actions)
-        workspace_layout.addWidget(self.role_strip)
+        role_layout.addLayout(selection_actions)
+        role_layout.addWidget(self.role_strip)
+        workspace_layout.addWidget(role_panel)
         self.task_tabs = TaskTabs(script)
         for key, title in self.TASK_TABS:
             self.task_tabs.addTab(title)
@@ -298,7 +318,7 @@ class MainWindow(QMainWindow):
             from .settings_page import SettingsPage
 
             page = SettingsPage(self.stack)
-            page.config_changed.connect(self._config_changed)
+            page.config_changed.connect(self._settings_changed)
             return page
         if key == "about":
             from .about_page import AboutPage
@@ -395,9 +415,14 @@ class MainWindow(QMainWindow):
             self.task_tabs.blockSignals(False)
         self.nav_buttons["tasks" if is_task else key].setChecked(True)
         self.breadcrumb.setText("单项任务 / " + titles[key] if is_task else titles[key])
+        self._refresh_nav_icons()
         self._page_status.setText(titles[key])
         self._update_strip()
         self.log_workspace.set_page(self.pages[key])
+
+    def _refresh_nav_icons(self):
+        for key, button in self.nav_buttons.items():
+            button.setIcon(line_icon(key, T.ACCENT if button.isChecked() else T.TEXT_DIM))
 
     def _task_tabs_locked(self):
         return any(page._start_pending or page._runtime_running() for page in self._task_pages())
@@ -419,6 +444,10 @@ class MainWindow(QMainWindow):
         self.role_page.body_scroll.ensureWidgetVisible(self.role_page.size_panel)
         self.role_page.size_panel.restore_button.setFocus()
 
+    def _settings_changed(self, cfg):
+        self._settings.setValue("window/v3Appearance", cfg.get("appearance", "light"))
+        self._config_changed(cfg)
+
     def _config_changed(self, cfg):
         self.selection.write(cfg)
         self.cfg = cfg
@@ -428,8 +457,8 @@ class MainWindow(QMainWindow):
             calibration.cfg = copy.deepcopy(cfg)
             calibration.refresh_config()
         app = QApplication.instance()
-        if app.property("appearance") != cfg.get("appearance", "light"):
-            T.apply_theme(app, cfg.get("appearance", "light"))
+        if app.property("appearance") != self._settings.value("window/v3Appearance", "light"):
+            T.apply_theme(app, self._settings.value("window/v3Appearance", "light"))
         self._update_strip()
         for page in self._task_pages():
             if (not page._start_pending and not page._runtime_running()

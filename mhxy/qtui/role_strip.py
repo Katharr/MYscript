@@ -18,8 +18,8 @@ class WindowState:
 
 
 STATUS_NAMES = {"ready": "可用", "pending": "身份未确认", "failed": "检测失败"}
-CARD_WIDTH = 180
-CARD_HEIGHT = 68
+CARD_WIDTH = 204
+CARD_HEIGHT = 56
 CARD_GAP = 6
 
 
@@ -55,16 +55,24 @@ class RoleItem(QFrame):
         self.setFixedWidth(CARD_WIDTH)
         self._interactive = None
         self._value = None
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 5, 8, 5)
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(8, 5, 8, 5)
+        outer.setSpacing(8)
+        self.avatar = QLabel(self)
+        self.avatar.setProperty("role", "avatar")
+        self.avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.avatar.setFixedSize(32, 32)
+        outer.addWidget(self.avatar)
+        layout = QVBoxLayout()
         layout.setSpacing(0)
+        outer.addLayout(layout, 1)
         row = QHBoxLayout()
         row.setSpacing(6)
         self.selected_box = QCheckBox(self)
         self.selected_box.clicked.connect(self.selection_toggled.emit)
         self.name = _ElidedLabel(self)
-        row.addWidget(self.selected_box)
         row.addWidget(self.name, 1)
+        row.addWidget(self.selected_box)
         layout.addLayout(row)
         status_row = QHBoxLayout()
         status_row.setSpacing(4)
@@ -73,6 +81,7 @@ class RoleItem(QFrame):
         self.activity.set_full_text("空闲")
         self.activity.setMinimumHeight(self.fontMetrics().height() + 4)
         self.captain = QCheckBox("队长", self)
+        self.captain.setProperty("role", "captain")
         self.captain.clicked.connect(self.captain_requested.emit)
         status_row.addWidget(self.light)
         status_row.addWidget(self.activity, 1)
@@ -109,6 +118,7 @@ class RoleItem(QFrame):
             return
         self._value = value
         self.name.set_full_text(state.label)
+        self.avatar.setText(state.label[:1])
         self.selected_box.setAccessibleName("选择执行窗口：" + state.label)
         self.captain.setAccessibleName("设为队长：" + state.label)
         self.setAccessibleName(state.label)

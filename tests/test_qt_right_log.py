@@ -68,13 +68,13 @@ class QtRightLogTests(unittest.TestCase):
         window = self.window()
         work = window.log_workspace
         self.assertFalse(work.overlay_mode)
-        self.assertEqual(window.log_panel.width(), 260)
-        self.assertEqual(work.script.width(), 644)
+        self.assertEqual(window.log_panel.width(), 236)
+        self.assertEqual(work.script.width(), 700)
         self.assertGreater(window.log_panel.text_edit.height(), 320)
         window.resize(1440, 900)
         self.settle()
-        self.assertEqual(window.log_panel.width(), 260)
-        self.assertEqual(work.script.width(), 964)
+        self.assertEqual(window.log_panel.width(), 236)
+        self.assertEqual(work.script.width(), 1020)
         self.assertEqual(window.log_panel.y(), 0)  # splitter 内与脚本顶端对齐
 
     def test_narrow_drawer_preserves_script_geometry_and_escape_closes_it(self):
@@ -87,7 +87,7 @@ class QtRightLogTests(unittest.TestCase):
         self.settle()
         self.assertTrue(window.log_panel.isVisible())
         self.assertEqual(work.script.geometry(), before)
-        self.assertEqual(window.log_panel.width(), 260)
+        self.assertEqual(window.log_panel.width(), 236)
         self.assertTrue(work.rect().contains(window.log_panel.geometry()))
         self.assertTrue(window.log_panel.testAttribute(Qt.WidgetAttribute.WA_StyledBackground))
         QTest.keyClick(window.log_panel.toggle_button, Qt.Key.Key_Escape)

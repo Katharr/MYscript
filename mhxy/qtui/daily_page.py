@@ -4,11 +4,11 @@ import copy
 import threading
 from types import SimpleNamespace
 
-from PySide6.QtCore import QRect, QSize, Qt, Signal, Slot
+from PySide6.QtCore import QEvent, QRect, QSize, Qt, Signal, Slot
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
-    QPushButton, QTextBrowser, QStyle, QStyledItemDelegate, QStyleOptionViewItem,
+    QPushButton, QTextBrowser, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QWidget,
 )
 
 from ..core import config as cfg_mod
@@ -16,6 +16,7 @@ from ..core.context import TaskContext
 from ..core.input_session import InputSession
 from ..tasks.daily import CHAINABLE, DailyTask
 from . import theme as T
+from .icons import line_icon
 from .task_page import TaskPage
 from .widgets import DoubleSpinBox as QDoubleSpinBox, FlowLayout
 
@@ -24,6 +25,26 @@ class _DailyRowDelegate(QStyledItemDelegate):
     """保留原生选择、勾选与排序，仅把任务信息按列绘制。"""
 
     ROW_ROLE = int(Qt.ItemDataRole.UserRole) + 1
+    mode_requested = Signal(int)
+    configure_requested = Signal(int)
+
+    @staticmethod
+    def action_rects(rect):
+        configure = QRect(rect.right() - 39, rect.y() + 14, 30, rect.height() - 28)
+        status = QRect(configure.left() - 108, rect.y(), 104, rect.height())
+        mode = QRect(status.left() - 76, rect.y() + 17, 68, rect.height() - 34)
+        return mode, status, configure
+
+    def editorEvent(self, event, model, option, index):
+        if event.type() == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
+            mode, _, configure = self.action_rects(option.rect)
+            if mode.contains(event.position().toPoint()):
+                self.mode_requested.emit(index.row())
+                return True
+            if configure.contains(event.position().toPoint()):
+                self.configure_requested.emit(index.row())
+                return True
+        return super().editorEvent(event, model, option, index)
 
     def sizeHint(self, option, index):
         return QSize(240, max(T.ROW_HEIGHT, option.fontMetrics.height() + 24))
@@ -36,23 +57,41 @@ class _DailyRowDelegate(QStyledItemDelegate):
         self.initStyleOption(opt, index)
         opt.text = ""
         style = opt.widget.style()
+        selected = bool(opt.state & QStyle.StateFlag.State_Selected)
+        opt.state &= ~QStyle.StateFlag.State_Selected
         style.drawControl(QStyle.ControlElement.CE_ItemViewItem, opt, painter, opt.widget)
-        area = style.subElementRect(QStyle.SubElement.SE_ItemViewItemText, opt, opt.widget).adjusted(8, 0, -10, 0)
-        mode_width = max(60, opt.fontMetrics.horizontalAdvance(row[2]) + 12)
-        status_width = min(160, max(110, opt.fontMetrics.horizontalAdvance(row[3]) + 12))
-        name_width = max(40, area.width() - mode_width - status_width - 48)
-        widths = (28, name_width, mode_width, status_width)
-        colors = (T.TEXT_DIM, T.TEXT, T.TEXT_DIM,
-                  T.WARNING if row[3] in ("缺少标定", "未选窗口") else T.TEXT_DIM)
+        area = style.subElementRect(QStyle.SubElement.SE_ItemViewItemText, opt, opt.widget).adjusted(8, 0, -8, 0)
+        mode, status, configure = self.action_rects(option.rect)
         painter.save()
         painter.setClipRect(option.rect)
-        x = area.x()
-        for text, width, color in zip(row, widths, colors):
-            painter.setPen(QColor(color))
-            painter.drawText(QRect(x, area.y(), width, area.height()),
-                             Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
-                             opt.fontMetrics.elidedText(text, Qt.TextElideMode.ElideRight, width - 8))
-            x += width + 4
+        painter.setPen(QColor(T.TEXT_DIM))
+        painter.drawText(QRect(area.x(), area.y(), 22, area.height()), Qt.AlignmentFlag.AlignVCenter, row[0])
+        key = index.data(Qt.ItemDataRole.UserRole)
+        badge = QRect(area.x() + 26, option.rect.y() + (option.rect.height() - 32) // 2, 32, 32)
+        painter.setPen(Qt.PenStyle.NoPen)
+        ink, fill = T.TASK_TONES.get(key, (T.ACCENT, T.ROLE_SELECTED))
+        painter.setBrush(QColor(fill))
+        painter.drawRoundedRect(badge, 5, 5)
+        line_icon(key, ink, 21).paint(painter, badge.adjusted(5, 5, -5, -5))
+        name_rect = QRect(badge.right() + 12, area.y(), max(24, mode.left() - badge.right() - 20), area.height())
+        painter.setPen(QColor(T.TEXT))
+        painter.drawText(name_rect, Qt.AlignmentFlag.AlignVCenter,
+                         opt.fontMetrics.elidedText(row[1], Qt.TextElideMode.ElideRight, name_rect.width()))
+        painter.setPen(QColor(T.BORDER))
+        painter.setBrush(QColor(T.AUX_SURFACE))
+        painter.drawRoundedRect(mode, 4, 4)
+        painter.setPen(QColor(T.WARNING if row[2] == "实战" else T.TEXT_DIM))
+        painter.drawText(mode.adjusted(0, 0, -10, 0), Qt.AlignmentFlag.AlignCenter, row[2])
+        x, y = mode.right() - 12, mode.center().y()
+        painter.drawLine(x - 3, y - 1, x, y + 2)
+        painter.drawLine(x, y + 2, x + 3, y - 1)
+        painter.setPen(QColor(T.WARNING if row[3] in ("缺少标定", "未选窗口") else T.TEXT_DIM))
+        painter.drawText(status, Qt.AlignmentFlag.AlignCenter,
+                         opt.fontMetrics.elidedText(row[3], Qt.TextElideMode.ElideRight, status.width()))
+        line_icon("settings", T.ACCENT if selected else T.TEXT_DIM).paint(painter, configure.adjusted(5, 5, -5, -5))
+        if selected:
+            painter.setPen(QColor(T.ACCENT))
+            painter.drawLine(option.rect.left(), option.rect.top() + 12, option.rect.left(), option.rect.bottom() - 12)
         painter.restore()
 
 
@@ -137,36 +176,53 @@ class DailyPage(TaskPage):
         self.refresh_button = QPushButton("刷新配置", self)
         self.refresh_button.setToolTip("重新读取配置并在后台检查本次执行条件")
         self.refresh_button.clicked.connect(self.refresh_config)
+        T.set_role(self.refresh_button, "link")
         self.layout().itemAt(0).layout().insertWidget(1, self.refresh_button)
         self.content_layout.setSpacing(T.SPACE_SM)
         self.steps_list = QListWidget(self)
-        self.steps_list.setItemDelegate(_DailyRowDelegate(self.steps_list))
+        self.steps_list.setObjectName("dailySteps")
+        delegate = _DailyRowDelegate(self.steps_list)
+        delegate.mode_requested.connect(self._toggle_row_mode)
+        delegate.configure_requested.connect(self._configure_row)
+        self.steps_list.setItemDelegate(delegate)
         self.steps_list.setToolTip("拖动任务行排序，勾选启用。模式与参数沿用各任务页。")
         self.steps_list.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
         self.steps_list.setDefaultDropAction(Qt.DropAction.MoveAction)
         self.steps_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.steps_list.setSpacing(0)
         self.steps_list.setMinimumHeight(220)
+        self.steps_list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.steps_list.itemChanged.connect(self._steps_changed)
         self.steps_list.model().rowsMoved.connect(self._steps_changed)
         self.steps_list.currentItemChanged.connect(self._show_details)
         self.content_layout.addWidget(self.steps_list, 1)
-        actions = FlowLayout()
+        actions_widget = QWidget(self)
+        actions = FlowLayout(actions_widget)
         self.configure_button = QPushButton("配置", self)
         self.configure_button.clicked.connect(self._configure_step)
+        T.set_role(self.configure_button, "link")
         self.move_up_button = QPushButton("上移", self)
         self.move_down_button = QPushButton("下移", self)
+        T.set_role(self.move_up_button, "link")
+        T.set_role(self.move_down_button, "link")
         self.move_up_button.clicked.connect(lambda: self._move_step(-1))
         self.move_down_button.clicked.connect(lambda: self._move_step(1))
         self.step_live_mode = QCheckBox("实战模式", self)
         self.step_live_mode.toggled.connect(self._save_step_mode)
         for widget in (self.configure_button, self.move_up_button, self.move_down_button, self.step_live_mode):
             actions.addWidget(widget)
-        self.content_layout.addLayout(actions)
+        self.content_layout.addWidget(actions_widget)
+        actions_widget.hide()
+        self.order_button = QPushButton("调整顺序", self)
+        self.order_button.setCheckable(True)
+        T.set_role(self.order_button, "link")
+        self.order_button.toggled.connect(actions_widget.setVisible)
+        self.steps_list.itemActivated.connect(lambda *_: self._configure_step())
         time_row = QHBoxLayout()
         time_row.addWidget(QLabel("整体时间上限", self))
         time_row.addWidget(self.time_limit)
         time_row.addStretch()
+        time_row.addWidget(self.order_button)
         self.content_layout.addLayout(time_row)
         self.summary_label = QLabel("尚未检查", self)
         self.summary_label.setWordWrap(True)
@@ -291,10 +347,22 @@ class DailyPage(TaskPage):
         item = self.steps_list.currentItem()
         row = self._summary_rows.get(item.data(Qt.ItemDataRole.UserRole), {}) if item else {}
         self.details.setPlainText("\n".join([row.get("title", ""), *row.get("problems", [])]))
-        self.details.setVisible(bool(row.get("problems")))
+        self.details.setVisible(bool(row.get("problems")) and row.get("result") in ("缺少标定", "未选窗口"))
         self.step_live_mode.blockSignals(True)
-        self.step_live_mode.setChecked(row.get("mode") == "实战")
+        name = item.data(Qt.ItemDataRole.UserRole) if item else None
+        if name == "dungeon":
+            name = DailyTask._selected_dungeon(SimpleNamespace(task_cfg=lambda key: cfg_mod.task_config(self.cfg, key)))
+        self.step_live_mode.setChecked(bool(name) and not cfg_mod.task_config(self.cfg, name).get("dry_run", True))
         self.step_live_mode.blockSignals(False)
+
+    def _toggle_row_mode(self, row):
+        if not self._start_pending and not self._runtime_running():
+            self.steps_list.setCurrentRow(row)
+            self.step_live_mode.setChecked(not self.step_live_mode.isChecked())
+
+    def _configure_row(self, row):
+        self.steps_list.setCurrentRow(row)
+        self._configure_step()
 
     def _configure_step(self):
         item = self.steps_list.currentItem()
@@ -364,7 +432,7 @@ class DailyPage(TaskPage):
 
     def _set_editable(self, editable):
         for widget in (self.steps_list, self.time_limit, self.refresh_button, self.configure_button,
-                       self.move_up_button, self.move_down_button, self.step_live_mode):
+                       self.move_up_button, self.move_down_button, self.step_live_mode, self.order_button):
             widget.setEnabled(editable)
 
     def _start_result(self, ok, problems):

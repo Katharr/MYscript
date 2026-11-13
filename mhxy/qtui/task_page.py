@@ -106,7 +106,7 @@ class TaskPage(QWidget):
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(T.SPACE_LG, T.SPACE_LG, T.SPACE_LG, T.SPACE_LG)
+        layout.setContentsMargins(T.SPACE_LG, 20, T.SPACE_LG, 20)
         layout.setSpacing(T.SPACE_MD)
 
         header = QHBoxLayout()

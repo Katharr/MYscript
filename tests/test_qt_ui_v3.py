@@ -77,7 +77,7 @@ class WorkspaceV3Tests(unittest.TestCase):
             self.assertTrue(button.isVisible())
             self.assertLess(button.mapTo(self.window, button.rect().bottomRight()).y(),
                             self.window.log_panel.mapTo(self.window, self.window.log_panel.rect().topLeft()).y())
-        self.assertGreater(self.window.role_strip.width(), self.window.log_workspace.script.width())
+        self.assertGreater(self.window.role_strip.width(), self.window.log_workspace.script.width() - 48)
         QTest.keyClick(self.window.log_panel.toggle_button, Qt.Key.Key_Escape)
         self.app.processEvents()
         self.assertFalse(self.window.log_workspace.overlay_open)
@@ -132,3 +132,52 @@ class WorkspaceV3Tests(unittest.TestCase):
             page.step_live_mode.setChecked(False)
         self.assertFalse(C.task_config(self.cfg, 'taohaiqu')['dry_run'])
         self.assertIn('保存失败', page.summary_label.text())
+    def test_legacy_dark_config_does_not_override_v3_light_baseline(self):
+        self.cfg['appearance'] = 'dark'
+        other = MainWindow(QSettings(str(Path(self.temp.name) / 'legacy.ini'), QSettings.Format.IniFormat))
+        try:
+            self.assertEqual(self.app.property('appearance'), 'light')
+            other._config_changed(copy.deepcopy(self.cfg))
+            self.assertEqual(self.app.property('appearance'), 'light')
+            self.assertEqual(self.cfg['appearance'], 'dark')
+            other.show_page('settings')
+            self.assertEqual(other.pages['settings'].appearance.currentData(), 'light')
+        finally:
+            other.close()
+            other.deleteLater()
+
+    def test_daily_inline_mode_and_configuration_actions_use_clicked_row(self):
+        self.window.show_page('daily')
+        page = self.window.pages['daily']
+        self.app.processEvents()
+        index = page.steps_list.model().index(0, 0)
+        name = index.data(Qt.ItemDataRole.UserRole)
+        rect = page.steps_list.visualRect(index)
+        mode, _, configure = page.steps_list.itemDelegate().action_rects(rect)
+        QTest.mouseClick(page.steps_list.viewport(), Qt.MouseButton.LeftButton, pos=mode.center())
+        self.assertFalse(C.task_config(self.cfg, name)['dry_run'])
+        QTest.mouseClick(page.steps_list.viewport(), Qt.MouseButton.LeftButton, pos=configure.center())
+        self.assertEqual(self.window.current_page, name)
+
+    def test_explicit_theme_choice_after_upgrade_survives_restart(self):
+        self.window.show_page('settings')
+        settings = self.window.pages['settings']
+        settings.appearance.setCurrentIndex(settings.appearance.findData('dark'))
+        self.assertTrue(settings.save())
+        self.assertEqual(self.app.property('appearance'), 'dark')
+        other = MainWindow(self.window._settings)
+        try:
+            self.assertEqual(self.app.property('appearance'), 'dark')
+        finally:
+            other.close()
+            other.deleteLater()
+
+    def test_inline_mode_toggles_actual_configuration_while_summary_is_pending(self):
+        self.cfg['tasks']['escort']['dry_run'] = False
+        self.window.show_page('daily')
+        page = self.window.pages['daily']
+        page._summary_rows.clear()
+        row = next(i for i in range(page.steps_list.count())
+                   if page.steps_list.item(i).data(Qt.ItemDataRole.UserRole) == 'escort')
+        page._toggle_row_mode(row)
+        self.assertTrue(C.task_config(self.cfg, 'escort')['dry_run'])

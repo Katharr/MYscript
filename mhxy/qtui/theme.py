@@ -5,7 +5,7 @@ from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, Q
 from PySide6.QtWidgets import QApplication, QProxyStyle, QStyle, QStyleFactory, QStyleOption
 
 FONT_FAMILY = "Microsoft YaHei UI"
-FONT_SIZE = 11
+FONT_SIZE = 13  # logical pixels; never interpreted as points
 SPACE_SM = 8
 SPACE_MD = 16
 SPACE_LG = 24
@@ -14,13 +14,19 @@ ROW_HEIGHT = 62
 NAV_WIDTH = 176
 WINDOW_SIZE = (1120, 720)
 MIN_WINDOW_SIZE = (800, 640)
-LOG_WIDTH = 260
+LOG_WIDTH = 236
 LOG_MIN_WIDTH = 236
 LOG_MAX_WIDTH = 320
 LOG_RAIL_WIDTH = 40
 LOG_HANDLE_WIDTH = 8
 LOG_PADDING = 12
 SCRIPT_COMFORT_WIDTH = 620
+TASK_TONES = {
+    "treasure_map": ("#806B35", "#F5F1E8"),
+    "escort": ("#457499", "#EAF1F8"),
+    "secret_realm": ("#877499", "#F1ECF5"),
+    "dungeon": ("#5F8076", "#EAF2EE"),
+}
 
 PALETTES = {
     "light": dict(
@@ -161,6 +167,15 @@ class _ReadableStyle(QProxyStyle):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(QPen(border, 2))
         painter.setBrush(fill)
+        if widget is not None and widget.property("role") == "captain":
+            painter.setBrush(QColor(INPUT))
+            painter.drawEllipse(rect)
+            if checked:
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(border)
+                painter.drawEllipse(rect.adjusted(5, 5, -5, -5))
+            painter.restore()
+            return
         painter.drawRoundedRect(rect, 3, 3)
         if checked:
             painter.setPen(QPen(palette.color(group, QPalette.ColorRole.HighlightedText), 2.4,
@@ -180,12 +195,13 @@ class _ReadableStyle(QProxyStyle):
 
 def _style_sheet(font_height):
     content_height = max(BUTTON_HEIGHT - 12, font_height)
-    accent_hover = QColor(ACCENT).darker(110).name()
+    accent_hover = "#005AA8" if ACCENT == "#0067C0" else QColor(ACCENT).darker(110).name()
     return f"""
     QWidget {{ color: {TEXT}; }}
     QMainWindow, QWidget#shell {{ background: {BG}; }}
     QDialog, QWidget[role="page"] {{ background: {SURFACE}; }}
-    QWidget[role="page"] {{ border-radius: 10px; }}
+    QWidget[role="page"] {{ border-radius: 0; }}
+    QWidget#workspace {{ background: {SURFACE}; border-top-left-radius: 9px; }}
     QFrame#navigation, QWidget#navigationBody {{ background: {SIDEBAR}; }}
     QFrame#navigation {{ border-right: 1px solid {DIVIDER}; }}
     QLabel[role="brand"] {{ font-size: 17px; font-weight: 600; }}
@@ -237,7 +253,7 @@ def _style_sheet(font_height):
         alternate-background-color: {BG}; gridline-color: {DIVIDER};
     }}
     QTextBrowser, QPlainTextEdit {{ padding: 8px; border-radius: 5px; }}
-    QWidget#logSidebar {{ background: {AUX_SURFACE}; border-radius: 8px; }}
+    QWidget#logSidebar {{ background: {AUX_SURFACE}; border-radius: 0; border-left: 1px solid {DIVIDER}; }}
     QWidget#logSidebar QPlainTextEdit {{ border: none; padding: 0; }}
     QWidget#logSidebar QToolButton, QWidget#logSidebar QPushButton {{ padding: 5px 6px; }}
     QSplitter#logSplitter::handle {{ background: {BG}; }}
@@ -254,17 +270,28 @@ def _style_sheet(font_height):
     QScrollArea {{ border: none; background: transparent; }}
     QWidget#taskBody, QWidget#activityBody, QWidget#sniperBody,
     QWidget#settingsBody, QWidget#windowBody, QWidget#profileBody {{ background: {SURFACE}; }}
+    QFrame#toolGroup {{ background: {SURFACE}; border: 1px solid {DIVIDER}; border-radius: 7px; }}
     QFrame#activityCard {{ background: {SURFACE}; border: 1px solid {DIVIDER}; border-radius: 8px; }}
-    QScrollArea#roleStrip, QWidget#roleStripBody {{ background: {BG}; }}
-    QFrame#roleItem {{ background: {SURFACE}; border: 1px solid {DIVIDER}; border-radius: 6px; }}
+    QScrollArea#roleStrip, QWidget#roleStripBody {{ background: {SURFACE}; }}
+    QFrame#roleItem {{ background: {AUX_SURFACE}; border: 1px solid {DIVIDER}; border-radius: 6px; }}
     QFrame#roleItem[selected="true"] {{ border-color: {ROLE_BORDER}; background: {ROLE_SELECTED}; }}
     QFrame#roleItem:focus {{ border-color: {ACCENT}; }}
+    QFrame#roleItem QCheckBox[role="captain"] {{ font-size: 11px; }}
     QFrame#roleItem QCheckBox {{ min-height: 24px; spacing: 5px; padding: 0; }}
     QPushButton:disabled, QToolButton:disabled, QLineEdit:disabled, QComboBox:disabled,
     QSpinBox:disabled, QDoubleSpinBox:disabled {{
         color: {DISABLED}; background: {DISABLED_BG}; border-color: {DIVIDER};
     }}
     QCheckBox:disabled {{ color: {DISABLED}; }}
+    QPushButton[role="toolbar"], QPushButton[role="link"], QToolButton[role="link"] {{ border: 1px solid transparent; background: transparent; padding: 2px 8px; min-height: 24px; }}
+    QPushButton[role="toolbar"] {{ color: {TEXT_DIM}; }}
+    QPushButton[role="link"] {{ color: {ACCENT}; }}
+    QPushButton[role="toolbar"]:hover, QPushButton[role="link"]:hover {{ background: {BUTTON_HOVER}; }}
+    QPushButton[role="toolbar"]:focus, QPushButton[role="link"]:focus {{ border-color: {ACCENT}; }}
+    QLabel[role="avatar"] {{ background: {SELECTION}; color: {TEXT_DIM}; border-radius: 4px; font-size: 17px; }}
+    QListWidget#dailySteps {{ border: 1px solid {DIVIDER}; border-radius: 7px; background: {SURFACE}; }}
+    QListWidget#dailySteps::item {{ padding: 0; border-bottom: 1px solid {DIVIDER}; }}
+    QTabBar#taskTabs {{ background: {SURFACE}; }}
     QTabBar#taskTabs::tab {{ background: transparent; padding: 10px 14px; border-bottom: 2px solid transparent; }}
     QTabBar#taskTabs::tab:selected {{ color: {ACCENT}; border-bottom-color: {ACCENT}; }}
     QTabBar#taskTabs::tab:focus {{ background: {SELECTION}; }}
@@ -281,7 +308,9 @@ def apply_theme(app: QApplication, appearance="light") -> None:
     if not hasattr(app, "_mhxy_readable_style"):
         app._mhxy_readable_style = _ReadableStyle(QStyleFactory.create("Fusion"))
         app.setStyle(app._mhxy_readable_style)
-    app.setFont(QFont(FONT_FAMILY, FONT_SIZE))
+    font = QFont(FONT_FAMILY)
+    font.setPixelSize(FONT_SIZE)
+    app.setFont(font)
     palette = QPalette()
     roles = {
         "Window": SURFACE, "Base": INPUT, "AlternateBase": BG,

@@ -3,14 +3,15 @@
 import copy
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QCheckBox, QLabel, QPushButton
+from PySide6.QtWidgets import QCheckBox, QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from ..core import calibration_assets, config as cfg_mod
 from ..tasks.organize_bag import OrganizeBagTask
 from .inventory_items_dialog import InventoryItemsDialog
 from .task_page import TaskPage
 from . import theme as T
-from .widgets import FlowLayout, set_window_summary
+from .icons import line_icon
+from .widgets import CollapsibleSection, FlowLayout, set_window_summary
 
 
 class _ConfigTaskPage(TaskPage):
@@ -136,54 +137,65 @@ class InventoryPanel(_ConfigTaskPage):
         self.auto_organize.toggled.connect(self._save_auto)
         self.add_control("自动整理", self.auto_organize)
         self._edit_controls.append(self.auto_organize)
-        team_title = QLabel("队伍", self)
-        team_title.setProperty("role", "section")
-        self.content_layout.addWidget(team_title)
-        team_actions = FlowLayout()
+        self.body.layout().removeItem(self.form)
         self.team_button = QPushButton("一键组队", self)
         self.disband_button = QPushButton("一键解散", self)
+        self.organize_button = QPushButton("整理背包", self)
+        self.items_button = QPushButton("管理物品", self)
         self.team_button.clicked.connect(lambda: self._start_tool("dungeon"))
         self.disband_button.clicked.connect(lambda: self._start_tool("disband"))
-        for button in (self.team_button, self.disband_button):
-            team_actions.addWidget(button)
-            self._edit_controls.append(button)
-        self.content_layout.addLayout(team_actions)
+        self.organize_button.clicked.connect(lambda: self._start_tool("organize_bag"))
+        self.items_button.clicked.connect(self.open_items)
+        self.tool_groups = []
+        for title, icon, buttons in (("队伍", "daily", (self.team_button, self.disband_button)),
+                                     ("背包", "tasks", (self.organize_button, self.items_button))):
+            group = QFrame(self)
+            group.setObjectName("toolGroup")
+            group_layout = QHBoxLayout(group)
+            group_layout.setContentsMargins(16, 16, 16, 16)
+            image = QLabel(group)
+            image.setPixmap(line_icon(icon).pixmap(20, 20))
+            group_layout.addWidget(image)
+            label = QLabel(title, group)
+            label.setProperty("role", "section")
+            group_layout.addWidget(label)
+            group_layout.addStretch()
+            actions_box = QWidget(group)
+            actions_box.setMinimumWidth(180)
+            actions = FlowLayout(actions_box)
+            for button in buttons:
+                actions.addWidget(button)
+                self._edit_controls.append(button)
+            group_layout.addWidget(actions_box)
+            self.content_layout.addWidget(group)
+            self.tool_groups.append(group)
+        self.team_options = CollapsibleSection("队伍设置", self)
+        team_form = QVBoxLayout(self.team_options.content)
         self.team_live_mode = QCheckBox("实战模式", self)
         self.team_live_mode.toggled.connect(self._save_team_mode)
-        self.content_layout.addWidget(self.team_live_mode)
-        self._edit_controls.append(self.team_live_mode)
         self.team_calibration_button = QPushButton("标定（队伍）", self)
         self.team_calibration_button.clicked.connect(self._open_team_calibration)
-        self.content_layout.addWidget(self.team_calibration_button)
-        self._edit_controls.append(self.team_calibration_button)
-        bag_title = QLabel("背包", self)
-        bag_title.setProperty("role", "section")
-        self.content_layout.addWidget(bag_title)
-        bag_actions = FlowLayout()
-        self.organize_button = QPushButton("整理背包", self)
-        self.organize_button.clicked.connect(lambda: self._start_tool("organize_bag"))
-        bag_actions.addWidget(self.organize_button)
-        self._edit_controls.append(self.organize_button)
-        self.content_layout.addLayout(bag_actions)
-        self.body.layout().removeItem(self.form)
-        self.content_layout.addLayout(self.form)
-        controls = FlowLayout()
-        self.items_button = QPushButton("管理物品", self)
-        self.items_button.clicked.connect(self.open_items)
-        bag_actions.addWidget(self.items_button)
+        team_form.addWidget(self.team_live_mode)
+        team_form.addWidget(self.team_calibration_button)
+        self.bag_options = CollapsibleSection("背包设置", self)
+        bag_form = QVBoxLayout(self.bag_options.content)
+        bag_form.addLayout(self.form)
         self.calibrate_button = QPushButton("标定（整理背包）", self)
         self.calibrate_button.clicked.connect(self.open_calibration)
         self.refresh_button = QPushButton("刷新配置", self)
         self.refresh_button.clicked.connect(self.refresh_config)
-        for button in (self.items_button, self.calibrate_button, self.refresh_button):
-            if button is not self.items_button:
-                controls.addWidget(button)
-            self._edit_controls.append(button)
-        self.content_layout.addLayout(controls)
+        controls = FlowLayout()
+        controls.addWidget(self.calibrate_button)
+        controls.addWidget(self.refresh_button)
+        bag_form.addLayout(controls)
         self.summary = QLabel(self)
         self.summary.setWordWrap(True)
-        self.content_layout.addWidget(self.summary)
-        self.items_button.setToolTip("运行前配置 open_bag 快捷键，并将游戏包裹保持可见。")
+        bag_form.addWidget(self.summary)
+        for section in (self.team_options, self.bag_options):
+            T.set_role(section.toggle, "link")
+            self.content_layout.addWidget(section)
+        self._edit_controls.extend((self.team_live_mode, self.team_calibration_button,
+                                    self.calibrate_button, self.refresh_button))
         self.content_layout.addStretch()
 
     def _save_team_mode(self, checked):

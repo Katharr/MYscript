@@ -28,8 +28,8 @@ class LogWorkspace(QWidget):
         self._mode_initialized = False
 
         row = QHBoxLayout(self)
-        row.setContentsMargins(0, T.SPACE_MD, 0, T.SPACE_MD)
-        row.setSpacing(T.LOG_HANDLE_WIDTH)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(0)
         self.splitter = QSplitter(Qt.Orientation.Horizontal, self)
         self.splitter.setObjectName("logSplitter")
         self.splitter.setHandleWidth(T.LOG_HANDLE_WIDTH)

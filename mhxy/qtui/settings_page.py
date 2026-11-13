@@ -130,7 +130,8 @@ class SettingsPage(QWidget):
             checkbox.setChecked(checked)
         self.hotkey_key.setCurrentText(key)
         for combo, value in ((self.failsafe, cfg.get("failsafe_corner", DEFAULT_FAILSAFE)),
-                             (self.appearance, cfg.get("appearance", "light"))):
+                             (self.appearance, self.window()._settings.value("window/v3Appearance", "light")
+                              if hasattr(self.window(), "_settings") else cfg.get("appearance", "light"))):
             combo.setCurrentIndex(max(0, combo.findData(value)))
         loop = cfg_mod.task_config(cfg, "sniper")["loop"]
         self.threshold.setText(str(loop.get("match_threshold", 0.85)))
