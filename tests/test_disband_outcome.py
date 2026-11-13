@@ -107,9 +107,10 @@ class DisbandEvidenceTests(unittest.TestCase):
         self.assertFalse(rec["done"])
         team._find_full.side_effect = lambda ctx, key: (10, 20, .99) if key == "team_create" else None
         team._db_quit(rec)
-        self.assertTrue(rec["ok"])
-        self.assertTrue(rec["done"])
-        rec["ctx"].send_hotkey.assert_called_once_with("close_panel")
+        self.assertFalse(rec["ok"])
+        self.assertFalse(rec["done"])
+        self.assertEqual(rec["state"], teaming.D_CLOSE)
+        rec["ctx"].send_hotkey.assert_not_called()
 
     def test_unknown_state_reopens_then_fails_instead_of_success(self):
         ctx, team = self.make_team(count=1)

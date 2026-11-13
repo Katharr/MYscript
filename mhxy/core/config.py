@@ -467,6 +467,7 @@ DEFAULT_CONFIG = {
                 "team_apply": None,          # 「申请」标签页（点它切到队员入队申请列表）
                 "team_accept": None,         # 「同意」按钮（切到申请页后，队员申请那行右侧，见即点）
                 "team_apply_join": None,     # 队员点队长右侧箭头后弹出的「申请入队」按钮
+                "friend_panel": None,        # 好友面板固定标题/页签：全号共享，用于关闭确认
                 "team_arrow": None,          # 好友列表里队长ID右侧的箭头按钮（在命中右侧小范围内找，可选）
                 "team_quit": None,           # 解散用：「退出队伍」按钮
                 "leader_id": None            # 队长ID（队员据此在好友列表定位队长）。由 leader_history 维护：

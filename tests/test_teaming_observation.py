@@ -97,7 +97,7 @@ class TeamingObservationTests(unittest.TestCase):
             self.team._mem_find(self.rec)
         match.assert_not_called()
         self.raw_mouse.click.assert_not_called()
-        self.assertEqual(self.rec["state"], teaming.M_FIND_LEADER)
+        self.assertEqual(self.rec["state"], teaming.M_CLOSE)
 
     def test_empty_probe_frame_does_not_use_previous_anchor(self):
         def fake_scan(**kwargs):
@@ -135,7 +135,7 @@ class TeamingObservationTests(unittest.TestCase):
     def test_rect_change_rejects_candidate_without_accepting_it(self):
         self._run_with_session(lambda session: setattr(self.window, "bounds", (600, 700, 240, 120)))
         self.raw_mouse.click.assert_not_called()
-        self.assertEqual(self.rec["state"], teaming.M_FIND_LEADER)
+        self.assertEqual(self.rec["state"], teaming.M_CLOSE)
         self.assertEqual(self.team.joined, 0)
         self.assertFalse(self.team.team_ready)
 
@@ -143,7 +143,7 @@ class TeamingObservationTests(unittest.TestCase):
         self._run_with_session(capture_success=False)
         self.raw_mouse.click.assert_not_called()
         self.raw_mouse.scroll.assert_not_called()
-        self.assertEqual(self.rec["state"], teaming.M_FIND_LEADER)
+        self.assertEqual(self.rec["state"], teaming.M_CLOSE)
 
     def test_stop_and_dry_run_gate_candidate_click(self):
         for kind in ("stop", "dry_run"):
@@ -154,7 +154,7 @@ class TeamingObservationTests(unittest.TestCase):
                 mutation = (lambda session: session.stop_event.set()) if kind == "stop" else None
                 self._run_with_session(mutation)
                 self.raw_mouse.click.assert_not_called()
-                self.assertEqual(self.rec["state"], teaming.M_FIND_LEADER)
+                self.assertEqual(self.rec["state"], teaming.M_CLOSE)
 
 
 if __name__ == "__main__":

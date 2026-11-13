@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""副本迁移门禁：保留失败后自动退队和点击即证据的旧边界。"""
+"""副本结果门禁：失败后自动退队、剧情进展及输入拒绝。"""
 import copy
 import unittest
 from types import SimpleNamespace
@@ -123,7 +123,8 @@ class TaohaiquOutcomeTests(unittest.TestCase):
                 task._open_and_join = mock.Mock(return_value=True)
                 task._click_enter = mock.Mock(return_value=True)
                 task._click_scene_center = mock.Mock()
-                task._click_when = mock.Mock(side_effect=lambda ctx, key, *a: key != failed_key)
+                task._click_when = mock.Mock(side_effect=lambda ctx, key, *a, **kw: key != failed_key)
+                task._advance_past_skip = mock.Mock(return_value=failed_key != "thq_skip")
                 self.assertEqual(task._run_dungeon(ctx, {}, {}, .85), expected)
 
     def test_dungeon_prefix_failures_remain_without_retry(self):
@@ -157,14 +158,18 @@ class TaohaiquOutcomeTests(unittest.TestCase):
                         "failed": "失败", "timeout": "超时"}[outcome]
             self.assertEqual(ctx.log.call_args.args[0], f"───── 「副本」{expected} ─────")
 
-    def test_rejected_click_still_satisfies_legacy_match_predicate(self):
+    def test_rejected_click_never_satisfies_match_predicate(self):
         ctx, task = self.make_task()
         task._scene_rect = mock.Mock(return_value=(0, 0, 800, 600))
         task._match_scene = mock.Mock(return_value=(10, 20, .99))
         ctx.mouse.click.return_value = False
-        with mock.patch("mhxy.tasks.taohaiqu.win_mod.grab", return_value=object()):
-            self.assertTrue(task._click_when(ctx, "thq_clock", "小闹钟", {}, .85, 1))
-        ctx.mouse.click.assert_called_once_with(10, 20)
+        from tests.test_dungeon_outcome import _Clock
+        clock = _Clock()
+        task._interruptible_sleep.side_effect = clock.sleep
+        with mock.patch("mhxy.tasks.taohaiqu.win_mod.grab", return_value=object()), \
+                mock.patch("mhxy.tasks.taohaiqu.time.time", clock.time):
+            self.assertFalse(task._click_when(ctx, "thq_clock", "小闹钟", {}, .85, 1))
+        self.assertTrue(ctx.mouse.click.called)
 
 
 if __name__ == "__main__":

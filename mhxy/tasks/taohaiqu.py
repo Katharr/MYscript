@@ -224,14 +224,13 @@ class TaohaiquTask(Task):
         self._focus(ctx)
         npc_to = loop.get("npc_dialog_sec", 60)
         step_to = loop.get("step_timeout_sec", 30)
-        daily_to = loop.get("daily_wait_sec", 1)     # 「日常」可选步骤的短等待：打开任务列表就有它，没检测到就快速跳过、直接点蹈海去
         entry_skip_to = loop.get("entry_skip_sec", 60)
         battle_to = loop.get("battle_timeout_sec", 600)
 
         # 前缀：开活动 → 参加 → 选副本 → 进入
         if not self._open_and_join(ctx, loop, regions, threshold):
             return "failed"
-        if not self._click_when(ctx, "thq_select", "选择副本", regions, threshold, npc_to):
+        if not self._click_when(ctx, "thq_select", "选择副本", regions, threshold, npc_to, next_key="thq_enter"):
             ctx.log("等「选择副本」对话框超时（角色可能还没寻路到 NPC），中止。", level="error")
             return "timeout"
         if not self._click_enter(ctx, loop, regions, threshold, step_to):
@@ -241,40 +240,27 @@ class TaohaiquTask(Task):
         # 三场剧情战斗：公共节奏 [等并点跳过 → 开任务弹窗 → 马上传送 → 点本场对话选项]
         skip_to = entry_skip_to     # 第 1 个跳过跟在「进入」后的传送动画后，给短一点
         for i, (opt_key, opt_label) in enumerate(_DIALOGS, start=1):
-            if not self._click_when(ctx, "thq_skip", f"跳过剧情({i})", regions, threshold, skip_to):
-                ctx.log(f"第 {i} 段等「跳过剧情」超时，中止。", level="error")
+            if not self._advance_past_skip(ctx, regions, threshold, skip_to, step_to, "thq_task"):
+                ctx.log(f"第 {i} 段跳过后未确认任务列表可操作，中止。", level="error")
                 return "partial"
-            self._focus(ctx)
-            if not ctx.send_hotkey("open_task"):
-                ctx.log("打不开任务弹窗（open_task 未配置），中止。", level="error")
-                return "partial"
-            self._interruptible_sleep(ctx, self._jitter(0.6, ctx))
-            # 开任务弹窗后【不能直接传送】：先尝试点「日常」分类、再在列表点中蹈海去这条任务，「马上传送」才对应它。
-            # 「日常」是可选步骤——检测到就点(它才会列出蹈海去任务)；没检测到就跳过、直接点蹈海去任务。
-            if not self._click_when(ctx, "thq_daily", "日常", regions, threshold, daily_to):
-                ctx.log("没检测到任务弹窗「日常」按钮，直接点蹈海去任务。", level="warn")
-            if not self._click_when(ctx, "thq_task", "任务列表·蹈海去", regions, threshold, step_to):
+            if not self._click_when(ctx, "thq_task", "任务列表·蹈海去", regions, threshold, step_to, next_key="thq_teleport"):
                 ctx.log("等任务列表里「蹈海去」任务条目超时，中止。", level="error")
                 return "partial"
-            if not self._click_when(ctx, "thq_teleport", "马上传送", regions, threshold, step_to):
+            if not self._click_when(ctx, "thq_teleport", "马上传送", regions, threshold, step_to, next_key=opt_key):
                 ctx.log("等「马上传送」超时，中止。", level="error")
                 return "partial"
-            if not self._click_when(ctx, opt_key, opt_label, regions, threshold, step_to):
+            if not self._click_when(ctx, opt_key, opt_label, regions, threshold, step_to, confirm_absent=True):
                 ctx.log(f"等对话「{opt_label}」超时，中止。", level="error")
                 return "partial"
             ctx.log(f"第 {i} 场战斗已发起，等它打完…", level="hit")
             skip_to = battle_to     # 后续跳过都跟在一场战斗后，给足时长
 
         # 收尾：第三场战斗结束的跳过 → 再点一下屏幕 → 小闹钟
-        if not self._click_when(ctx, "thq_skip", "跳过剧情(收尾)", regions, threshold, battle_to):
-            ctx.log("等收尾「跳过剧情」超时，中止。", level="error")
+        if not self._advance_past_skip(ctx, regions, threshold, battle_to, step_to, "thq_clock"):
+            ctx.log("收尾跳过后未确认小闹钟出现，中止。", level="error")
             return "partial"
-        self._interruptible_sleep(ctx, self._jitter(0.6, ctx))
-        self._click_scene_center(ctx, regions)          # 「再点一下屏幕」
-        self._interruptible_sleep(ctx, self._jitter(0.6, ctx))
         if self._click_when(ctx, "thq_clock", "小闹钟", regions, threshold, step_to):
             ctx.log("★ 蹈海去·50 完成，已点小闹钟收尾。★", level="hit")
-            # 旧完成证据是匹配后发出点击；输入拒绝仍可返回 True，没有新加客户端核验。
             return "completed"
         else:
             ctx.log("没点到「小闹钟」（副本可能已自动结束）。流程结束。", level="warn")
@@ -340,14 +326,91 @@ class TaohaiquTask(Task):
         box = loop.get("enter_box") or [0.0, 0.0, 1.0, 1.0]   # [x0,y0,x1,y1] 比例；默认整屏
         deadline = time.time() + timeout
         while not ctx.should_stop():
-            hit = self._match_subregion(ctx, regions, tpl, threshold,
-                                        (box[0], box[2]), (box[1], box[3]))
+            if self._focus(ctx) is False:
+                if time.time() > deadline:
+                    return False
+                self._interruptible_sleep(ctx, 0.4)
+                continue
+            try:
+                hit = self._match_subregion(ctx, regions, tpl, threshold,
+                                            (box[0], box[2]), (box[1], box[3]))
+            except Exception:
+                hit = None
             if hit is not None:
-                ctx.mouse.click(hit[0], hit[1])
-                ctx.log(f"点蹈海去「进入」（{hit[2]:.3f}）。", level="hit")
-                self._interruptible_sleep(ctx, self._jitter(0.6, ctx))
-                return True
+                if ctx.mouse.click(hit[0], hit[1]) is not False:
+                    ctx.log(f"点蹈海去「进入」（{hit[2]:.3f}）。", level="hit")
+                    self._interruptible_sleep(ctx, self._jitter(0.6, ctx))
+                    return True
             if time.time() > deadline:
+                return False
+            self._interruptible_sleep(ctx, self._jitter(0.4, ctx))
+        return False
+
+    # ------------------------------------------------------------------
+    def _advance_past_skip(self, ctx, regions, threshold, wait_timeout, progress_timeout, target):
+        """队长跳过带动全队；复用任务条目/小闹钟证明进展，不另标剧情结束画面。
+
+        先等战斗/剧情，再给推进独立预算。每次重试都重新观察；只重试跳过、页签、
+        开任务和收尾点屏幕，不重复进入副本或发起战斗。
+        """
+        deadline = time.time() + wait_timeout
+        progress_deadline = None
+        skip_attempts = prepare_attempts = daily_attempts = 0
+        last_skip = last_prepare = last_daily = -10.0
+        task_open_sent = False
+        last_log = time.time()
+        while not ctx.should_stop():
+            if self._focus(ctx) is False:
+                self._interruptible_sleep(ctx, 0.4)
+                if time.time() >= (progress_deadline or deadline):
+                    return False
+                continue
+            rect = self._scene_rect(ctx, regions)
+            try:
+                scene = win_mod.grab(rect) if rect else None
+            except Exception:
+                scene = None
+            if ctx.should_stop():
+                return False
+            now = time.time()
+            if now - last_log >= 15:
+                ctx.log("等待剧情跳过后续目标…" if progress_deadline is not None else
+                        "等待战斗或剧情的跳过按钮…")
+                last_log = now
+            if scene is not None:
+                next_hit = self._match_scene(ctx, scene, rect, target, threshold)
+                skip = self._match_scene(ctx, scene, rect, "thq_skip", threshold)
+                if progress_deadline is not None and next_hit is not None and skip is None:
+                    ctx.log("已确认剧情后续目标出现。", level="hit")
+                    return True
+                if now >= (progress_deadline or deadline):
+                    return False
+                if skip is not None:
+                    if skip_attempts >= 3 and now - last_skip >= 1.0:
+                        return False
+                    if skip_attempts < 3 and now - last_skip >= 1.0:
+                        skip_attempts += 1
+                        last_skip = now
+                        if ctx.mouse.click(skip[0], skip[1]) is not False:
+                            progress_deadline = progress_deadline or now + progress_timeout
+                            ctx.log(f"点跳过剧情（{skip_attempts}/3），等待后续目标。")
+                elif progress_deadline is not None:
+                    daily = (self._match_scene(ctx, scene, rect, "thq_daily", threshold)
+                             if target == "thq_task" else None)
+                    if daily is not None:
+                        if daily_attempts < 3 and now - last_daily >= 1.0:
+                            daily_attempts += 1
+                            last_daily = now
+                            ctx.mouse.click(daily[0], daily[1])
+                    elif (prepare_attempts < 3 and now - last_prepare >= 2.0
+                          and not (target == "thq_task" and task_open_sent)):
+                        prepare_attempts += 1
+                        last_prepare = now
+                        if target == "thq_task":
+                            task_open_sent = ctx.send_hotkey("open_task") is not False
+                        else:
+                            self._click_scene_center(ctx, regions)
+            if now >= (progress_deadline or deadline):
                 return False
             self._interruptible_sleep(ctx, self._jitter(0.4, ctx))
         return False
@@ -355,25 +418,67 @@ class TaohaiquTask(Task):
     # ------------------------------------------------------------------
     # 通用：轮询等某模板出现就点它（命中返回 True；超时返回 False）。全程勤查 should_stop。
     # ------------------------------------------------------------------
-    def _click_when(self, ctx, flag_key, label, regions, threshold, timeout):
+    def _click_when(self, ctx, flag_key, label, regions, threshold, timeout,
+                    *, next_key=None, confirm_absent=False):
+        """重新观察后有限补点；复用后续目标或当前模板消失确认关键交接。"""
         deadline = time.time() + timeout
         last_diag = 0.0
+        attempts = absent = 0
+        acted = False
+        accepted_clicks = 0
+        next_preexisting = None
+        last_click = -10.0
+        confirm_absent = confirm_absent or flag_key == "thq_clock"
         while not ctx.should_stop():
+            if self._focus(ctx) is False:
+                if time.time() > deadline:
+                    return False
+                self._interruptible_sleep(ctx, 0.4)
+                continue
             scene_rect = self._scene_rect(ctx, regions)
-            cur = win_mod.grab(scene_rect) if scene_rect else None
+            try:
+                cur = win_mod.grab(scene_rect) if scene_rect else None
+            except Exception:
+                cur = None
             hit = self._match_scene(ctx, cur, scene_rect, flag_key, threshold)
-            if hit is not None:
-                ctx.mouse.click(hit[0], hit[1])
-                ctx.log(f"点「{label}」（{hit[2]:.3f}）。", level="hit")
-                self._interruptible_sleep(ctx, self._jitter(0.4, ctx))
-                return True
+            if ctx.should_stop():
+                return False
+            next_hit = (self._match_scene(ctx, cur, scene_rect, next_key, threshold)
+                        if next_key is not None and cur is not None else None)
+            if next_preexisting is None and hit is not None:
+                next_preexisting = next_hit is not None
+            if acted and cur is not None:
+                if next_key is not None:
+                    # 传送按钮可能原本就可见，不能用它证明目标任务已选中。
+                    # 对这种幂等点选，重新观察后保守补点一次；不另增选中态标定。
+                    required = 2 if flag_key == "thq_task" and next_preexisting else 1
+                    if next_hit is not None and (accepted_clicks >= required or hit is None):
+                        return True
+                elif confirm_absent:
+                    absent = absent + 1 if hit is None else 0
+                    if absent >= 2:
+                        return True
+            else:
+                absent = 0
             now = time.time()
             if now > deadline:
                 return False
+            if hit is not None and now - last_click >= 1.0:
+                if attempts >= 3:
+                    return False
+                attempts += 1
+                last_click = now
+                if ctx.mouse.click(hit[0], hit[1]) is not False:
+                    acted = True
+                    accepted_clicks += 1
+                    ctx.log(f"点「{label}」（{hit[2]:.3f}，{attempts}/3）。", level="hit")
+                    if next_key is None and not confirm_absent:
+                        self._interruptible_sleep(ctx, self._jitter(0.4, ctx))
+                        return not ctx.should_stop()
             if now - last_diag >= 15.0:
-                ctx.log(f"等「{label}」…（已 {now - (deadline - timeout):.0f}/{timeout:.0f}s）")
+                ctx.log(f"等「{label}」推进…（已 {now - (deadline - timeout):.0f}/{timeout:.0f}s）")
                 last_diag = now
-            self._interruptible_sleep(ctx, self._jitter(0.5, ctx))
+            self._interruptible_sleep(ctx, self._jitter(0.4, ctx))
         return False
 
     def _click_scene_center(self, ctx, regions):
@@ -424,9 +529,9 @@ class TaohaiquTask(Task):
     # ------------------------------------------------------------------
     def _focus(self, ctx):
         try:
-            ctx.window.activate()
+            return ctx.window.activate()
         except Exception:
-            pass
+            return False
 
     def _load_flags(self, tc):
         templates = tc.get("templates", {})

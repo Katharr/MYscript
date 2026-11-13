@@ -515,6 +515,7 @@
         "team_apply": "templates/tm_team_apply.png",
         "team_accept": "templates/tm_team_accept.png",
         "team_apply_join": "templates/tm_team_apply_join.png",
+        "friend_panel": "templates/tm_friend_panel.png",
         "team_arrow": "templates/tm_team_arrow.png",
         "leader_id": "templates/tm_leader_id.png"
       },

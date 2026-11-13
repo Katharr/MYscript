@@ -127,18 +127,19 @@ class FormationOutcomeTests(unittest.TestCase):
                 team.joined = joined
                 for rec in team.records:
                     rec["done"] = True
+                    rec["ok"] = rec["panel_closed"] = joined == 2
                 self.assertEqual(team.run_until_formed(),
                                  (True, "formed") if joined == 2 else (False, "not_enough"))
                 self.assertEqual(team.formation_outcome, expected)
 
-    def test_timeout_distinguishes_zero_partial_and_legacy_success(self):
-        for joined, expected in [(0, "timeout"), (1, "partial"), (2, "completed")]:
+    def test_timeout_with_accept_count_but_no_panel_confirmation_is_not_success(self):
+        for joined, expected in [(0, "timeout"), (1, "partial"), (2, "partial")]:
             with self.subTest(joined=joined):
                 ctx, team = self.make_team()
                 team.joined = joined
                 team._step_once = mock.Mock()  # 等待不改 state；两个窗口均会让出
                 result = team.run_until_formed()
-                self.assertEqual(result, (True, "formed") if joined == 2 else (False, "not_enough"))
+                self.assertEqual(result, (False, "not_enough"))
                 self.assertEqual(team.formation_outcome, expected)
                 self.assertTrue(all(w.calls > 0 for w in ctx.windows))
 
@@ -187,19 +188,18 @@ class FormationOutcomeTests(unittest.TestCase):
         self.assertTrue(stepped)
         self.assertTrue(all(rec is team.records[1] for rec in stepped))
 
-    def test_legacy_rejected_click_still_counts_without_changing_state_machine(self):
+    def test_rejected_accept_click_does_not_count_as_joined(self):
         ctx, team = self.make_team()
         rec = team.records[0]
         rec["state"] = teaming.C_ACCEPT
         rec["ctx"].mouse.click.return_value = False
         team._find_in_region = mock.Mock(return_value=(10, 20, 0.99))
         team._cap_accept(rec)
-        self.assertEqual(team.joined, 1)
+        self.assertEqual(team.joined, 0)
         self.assertEqual(rec["state"], teaming.C_ACCEPT)
         team._cap_accept(rec)
-        self.assertEqual(team.joined, 2)
-        self.assertEqual(rec["state"], teaming.C_CLOSE)
-        # 这是旧判据基线，不能将其解释为真实成队核验。
+        self.assertEqual(team.joined, 0)
+        self.assertEqual(rec["state"], teaming.C_ACCEPT)
 
     def test_dry_run_selfcheck_finishes_or_stops_without_input(self):
         for stopped in (False, True):

@@ -47,16 +47,18 @@ TEAM_CALIBRATION = {
         ("team_arrow", "队长ID右侧箭头(可选)", "好友列表里ID右侧的箭头；不标则用固定偏移兜底"),
         ("leader_id", "队长ID", "队员据此定位队长，框队长名字、要独特"),
         ("team_quit", "解散·「退出队伍」按钮", "队伍面板里的「退出队伍」"),
+        ("friend_panel", "好友面板固定标志", "框好友面板始终可见的标题或固定页签，不框角色名字"),
     ],
     "watchlist": False,
 }
 
 # 全部模板键
 _TPL_KEYS = ["team_create", "team_apply", "team_accept", "team_apply_join", "team_arrow",
-             "leader_id", "team_quit"]
+             "leader_id", "team_quit", "friend_panel"]
 # preflight 用：必备区域 / 必备模板（team_arrow 可选，缺失走固定偏移兜底）
 TEAM_REQUIRED_REGIONS = ["team_panel", "friend_list"]
-TEAM_REQUIRED_TEMPLATES = ["team_create", "team_apply", "team_accept", "team_apply_join", "leader_id"]
+TEAM_REQUIRED_TEMPLATES = ["team_create", "team_apply", "team_accept", "team_apply_join", "leader_id",
+                           "friend_panel"]
 # 解散需识别退出按钮，以及证明当前不在队的创建按钮。
 DISBAND_REQUIRED_TEMPLATES = ["team_quit", "team_create"]
 
@@ -75,6 +77,7 @@ M_CLOSE = "M_CLOSE"               # 右键关好友弹窗
 # 解散队伍状态链（每号同一套流程，不分队长队员）
 D_OPEN = "D_OPEN"                 # 发 open_team 开队伍面板
 D_QUIT = "D_QUIT"                 # 整窗找退出按钮；看到「创建队伍」才确认退队
+D_CLOSE = "D_CLOSE"               # 已确认退队，关闭并确认队伍面板
 
 
 class TeamFormation:
@@ -193,7 +196,12 @@ class TeamFormation:
             multi=multi, switch_delay=switch_delay, tick=tick, overall_timeout=overall,
             timeout_msg=f"组队总超时 {overall}s 未成形 → 降级结束。",
             jitter_ratio=self.cfg.get("humanize", {}).get("interval_jitter", 0.4))
-        result = rotation.run_rotation(rc)
+        try:
+            result = rotation.run_rotation(rc)
+        finally:
+            # 总超时、窗口异常和握手失败也要收回本次打开的面板；主动停止不追加输入。
+            if not self.lead.should_stop():
+                self._cleanup_panels(self.records)
 
         if result == "aborted" and self._captain_gone:
             self.formation_outcome = "stopped" if self.lead.should_stop() else "failed"
@@ -201,8 +209,9 @@ class TeamFormation:
         if self.lead.should_stop():
             self.formation_outcome = "stopped"
             return False, "stopped"
-        if self.joined >= self.member_count:
-            # 保留现状：joined 是队长点击同意的计数，不新增客户端成队核验。
+        if (self.joined >= self.member_count and self.records
+                and all(r["ok"] and r.get("panel_closed") for r in self.records)):
+            # 接受计数仍是原组队证据；另要求各窗口的面板交接已确认。
             self.formation_outcome = "completed"
             self.lead.log(f"★ 组队成功：{self.joined}/{self.member_count} 名队员已入队。", level="hit")
             return True, "formed"
@@ -229,10 +238,12 @@ class TeamFormation:
     # ------------------------------------------------------------------
     def _cap_open(self, rec):
         ctx = rec["ctx"]
-        if not ctx.send_hotkey("open_team"):
+        if (self._panel_visible(ctx, "team_panel") is not True
+                and not ctx.send_hotkey("open_team")):
             ctx.log("队长：打不开队伍界面（open_team 未配置），组队放弃。", level="error")
             rec["done"] = True
             return
+        rec["panel_opened"] = True
         ctx.log("队长：已开队伍界面，准备创建队伍…")
         self._sleep(self._jitter(0.6))
         self._goto(rec, C_CREATE)
@@ -241,7 +252,8 @@ class TeamFormation:
         ctx = rec["ctx"]
         hit = self._find_in_region(ctx, "team_panel", "team_create")
         if hit is not None:
-            ctx.mouse.click(hit[0], hit[1])
+            if ctx.mouse.click(hit[0], hit[1]) is False:
+                return
             ctx.log(f"队长：点「创建队伍」（{hit[2]:.2f}），立刻切「申请」标签页。", level="hit")
             # 注意：此处【不】置 team_ready——队员继续门控，让队长趁前台一气呵成把「申请」也点了，
             # 不被队员抢前台/鼠标打断。team_ready 改到 _cap_apply 点完「申请」（或超时兜底）才置。
@@ -259,7 +271,8 @@ class TeamFormation:
         # 保证队长「创建→申请」两步一气呵成，不被队员切前台/抢鼠标打断。
         hit = self._find_in_region(ctx, "team_panel", "team_apply")
         if hit is not None:
-            ctx.mouse.click(hit[0], hit[1])
+            if ctx.mouse.click(hit[0], hit[1]) is False:
+                return
             ctx.log(f"队长：点「申请」标签页（{hit[2]:.2f}），队伍已开放，放队员去申请。", level="hit")
             self.team_ready = True
             self._sleep(self._jitter(0.5))
@@ -283,7 +296,8 @@ class TeamFormation:
         # 「同意」按钮在申请标签页内（队员申请那一行右侧）→ 在 team_panel 区域内找
         hit = self._find_in_region(ctx, "team_panel", "team_accept")
         if hit is not None:
-            ctx.mouse.click(hit[0], hit[1])
+            if ctx.mouse.click(hit[0], hit[1]) is False:
+                return
             self.joined += 1
             ctx.log(f"队长：点「同意」（{hit[2]:.2f}），已接受 {self.joined}/{self.member_count}。", level="hit")
             self._sleep(self._jitter(0.4))
@@ -296,11 +310,7 @@ class TeamFormation:
             self._goto(rec, C_CLOSE)
 
     def _cap_close(self, rec):
-        ctx = rec["ctx"]
-        self._close_panel(ctx, "team_panel")
-        ctx.log("队长：右键关闭队伍弹窗，完成。", level="hit")
-        rec["ok"] = self.joined >= self.member_count
-        rec["done"] = True
+        self._finish_panel(rec, "team_panel", self.joined >= self.member_count)
 
     # ------------------------------------------------------------------
     # 队员分支
@@ -312,10 +322,14 @@ class TeamFormation:
 
     def _mem_open(self, rec):
         ctx = rec["ctx"]
-        if not ctx.send_hotkey("open_friend"):
+        # 快捷键是开关；已经打开时直接使用，不能把残留好友界面切掉。
+        visible = self._panel_visible(ctx, "friend_list")
+        if visible is not True and not ctx.send_hotkey("open_friend"):
             ctx.log("队员：打不开好友界面（open_friend 未配置），该号放弃。", level="error")
-            rec["done"] = True
+            rec["failed"] = True
+            self._goto(rec, M_CLOSE)
             return
+        rec["panel_opened"] = True
         ctx.log("队员：已开好友界面，滚轮翻找队长ID…")
         self._sleep(self._jitter(0.6))
         rec["scrolls"] = 0
@@ -328,7 +342,8 @@ class TeamFormation:
         leader_tpl = self.tpl.get("leader_id")
         if leader_tpl is None:
             ctx.log("队员：leader_id 模板未标定，放弃该号。", level="error")
-            rec["done"] = True
+            rec["failed"] = True
+            self._goto(rec, M_CLOSE)
             return
         deadline = rec["t_state"] + self.loop.get("find_leader_timeout_sec", 60)
 
@@ -376,28 +391,27 @@ class TeamFormation:
                 ctx.log("队员：找队长ID超时，放弃该号。", level="warn")
             elif res.outcome != "stopped":
                 ctx.log("队员：翻找队长ID多次未果，放弃该号。", level="warn")
-            rec["done"] = True
+            rec["failed"] = True
+            self._goto(rec, M_CLOSE)
 
     def _mem_apply(self, rec):
         ctx = rec["ctx"]
         # 「申请入队」多是点箭头后弹出的小菜单，未必落在 friend_list 区内 → 整窗找更稳
         hit = self._find_full(ctx, "team_apply_join")
         if hit is not None:
-            ctx.mouse.click(hit[0], hit[1])
+            if ctx.mouse.click(hit[0], hit[1]) is False:
+                return
             ctx.log(f"队员：点「申请入队」（{hit[2]:.2f}）。", level="hit")
             self._sleep(self._jitter(0.5))
             self._goto(rec, M_CLOSE)
             return
         if self._elapsed(rec) > self.loop.get("apply_timeout_sec", 15):
             ctx.log("队员：没找到「申请入队」按钮，超时收尾。", level="warn")
+            rec["failed"] = True
             self._goto(rec, M_CLOSE)
 
     def _mem_close(self, rec):
-        ctx = rec["ctx"]
-        self._close_panel(ctx, "friend_list")
-        ctx.log("队员：右键关闭好友弹窗，完成。", level="hit")
-        rec["ok"] = True
-        rec["done"] = True
+        self._finish_panel(rec, "friend_list", not rec.get("failed"))
 
     # ------------------------------------------------------------------
     # 解散队伍（每号同一套流程，不分队长队员；用通用轮转逐号推进）
@@ -442,7 +456,11 @@ class TeamFormation:
             multi=multi, switch_delay=switch_delay, tick=tick, overall_timeout=overall,
             timeout_msg=f"解散队伍总超时 {overall}s → 结束。",
             jitter_ratio=self.cfg.get("humanize", {}).get("interval_jitter", 0.4))
-        rotation.run_rotation(rc)
+        try:
+            rotation.run_rotation(rc)
+        finally:
+            if not self.lead.should_stop():
+                self._cleanup_panels(records, "team_panel")
 
         if self.lead.should_stop():
             self.disband_outcome = "stopped"
@@ -463,12 +481,21 @@ class TeamFormation:
 
     def _disband_step(self, rec):
         """按该号当前 state 推进【一小步】后立刻返回（好轮转到下一个号）。"""
-        h = {D_OPEN: self._db_open, D_QUIT: self._db_quit}.get(rec["state"])
+        h = {D_OPEN: self._db_open, D_QUIT: self._db_quit,
+             D_CLOSE: lambda r: self._finish_panel(r, "team_panel", True)}.get(rec["state"])
         if h is not None:
             h(rec)
 
     def _db_open(self, rec):
         ctx = rec["ctx"]
+        if self.tpl.get("friend_panel") is not None and not rec.get("friend_closed"):
+            result = self._close_panel(ctx, "friend_list", rec.setdefault("friend_cleanup", {}))
+            if result is None:
+                return
+            if result != "closed":
+                rec["done"], rec["unsafe_ui"] = True, True
+                return
+            rec["friend_closed"] = True
         # 活动页等残留弹窗可能挡住队伍面板；先关闭，再打开，避免 Alt+T 把已开面板切掉。
         if ctx.send_hotkey("close_panel") is False:
             rec["done"] = True
@@ -480,6 +507,7 @@ class TeamFormation:
             ctx.log("解散：打不开队伍界面（open_team 未配置），跳过该号。", level="error")
             rec["done"] = True
             return
+        rec["panel_opened"] = True
         ctx.log("解散：已开队伍界面，找「退出队伍」…")
         rec["attempts"] += 1
         rec["quit_clicked"] = False
@@ -499,10 +527,7 @@ class TeamFormation:
                     return
         elif self._find_full(ctx, "team_create") is not None:
             ctx.log("解散：识别到「创建队伍」，确认当前不在队。", level="hit")
-            rec["ok"] = True
-            rec["done"] = True
-            if not self.lead.should_stop():
-                ctx.send_hotkey("close_panel")
+            self._goto(rec, D_CLOSE)
             return
         if self._elapsed(rec) > max(3.0, self.loop.get("disband_quit_wait_sec", 3.0)):
             if rec["attempts"] < 3:
@@ -529,7 +554,7 @@ class TeamFormation:
                 if not ctx.window.activate():
                     continue
                 rect = ctx.window.rect()
-                scene = win_mod.grab(rect) if rect else None
+                scene = self._grab(rect) if rect else None
                 found = []
                 for tpl_key, label in keys:
                     tpl = self.tpl.get(tpl_key)
@@ -550,6 +575,14 @@ class TeamFormation:
     # ------------------------------------------------------------------
     # 识别/点击工具
     # ------------------------------------------------------------------
+    @staticmethod
+    def _grab(rect):
+        """截图失败保持未知，让状态机按原预算重试。"""
+        try:
+            return win_mod.grab(rect)
+        except Exception:
+            return None
+
     def _region_rect(self, ctx, key):
         region = self.regions.get(key)
         return ctx.window.region_to_screen_rect(region) if region else ctx.window.rect()
@@ -560,7 +593,7 @@ class TeamFormation:
         rect = self._region_rect(ctx, region_key)
         if tpl is None or rect is None:
             return None
-        scene = win_mod.grab(rect)
+        scene = self._grab(rect)
         if scene is None:
             return None
         m = vision.match(scene, tpl, self.threshold)
@@ -574,7 +607,7 @@ class TeamFormation:
         rect = ctx.window.rect()
         if tpl is None or rect is None:
             return None
-        scene = win_mod.grab(rect)
+        scene = self._grab(rect)
         if scene is None:
             return None
         m = vision.match(scene, tpl, self.threshold)
@@ -642,7 +675,7 @@ class TeamFormation:
         rect = self._region_rect(ctx, region_key)
         if rect is None:
             return
-        scene = win_mod.grab(rect)
+        scene = self._grab(rect)
         if scene is None:
             return
         tpl = self.tpl.get(tpl_key)
@@ -653,15 +686,92 @@ class TeamFormation:
         ctx.log(f"诊断：『{tpl_key}』在 {region_key} 区域最高匹配分={score:.2f}（阈值 {self.threshold:.2f}）；"
                 f"该区域截图已存 {path}，可打开比对。", level="warn")
 
-    def _close_panel(self, ctx, region_key):
-        """右键关弹窗：右键点该区域中心；区域未标定则用 close_panel(Esc) 兜底。"""
-        rect = self._region_rect(ctx, region_key)
-        if rect is None:
-            ctx.send_hotkey("close_panel")
+    def _panel_visible(self, ctx, region_key):
+        """整窗有效观察；缺模板/截图失败为未知，不能当作面板已经消失。"""
+        keys = (["friend_panel"] if region_key == "friend_list" else
+                ["team_create", "team_quit", "team_apply", "team_accept"])
+        templates = [self.tpl[k] for k in keys if self.tpl.get(k) is not None]
+        rect = ctx.window.rect()
+        if not templates or rect is None:
+            return None
+        scene = self._grab(rect)
+        if scene is None or scene.size == 0:
+            return None
+        return any(vision.match(scene, tpl, self.threshold) is not None for tpl in templates)
+
+    def _close_panel(self, ctx, region_key, progress):
+        """每次推进做一次新观察，有限重试；返回 closed / failed / None（等待）。"""
+        if self.lead.should_stop():
+            return None
+        now = time.time()
+        progress.setdefault("started", now)
+        visible = self._panel_visible(ctx, region_key)
+        if self.lead.should_stop():
+            return None
+        if visible is False:
+            progress["absent"] = progress.get("absent", 0) + 1
+            if progress["absent"] >= 2:
+                return "closed"
+            return None
+        progress["absent"] = 0
+        if now - progress.get("last_attempt", -10) < 0.6:
+            return None
+        attempts = progress.get("attempts", 0)
+        if attempts >= 3 or now - progress["started"] >= 8:
+            ctx.log("面板关闭未确认，停止该号后续操作。", level="error")
+            return "failed"
+        progress["attempts"] = attempts + 1
+        progress["last_attempt"] = now
+        # 未知时只消耗观察预算，不盲发 Esc。右键使用本次观察，后续尝试以 Esc 兜底。
+        if visible is True:
+            rect = self._region_rect(ctx, region_key)
+            if attempts == 0 and rect:
+                accepted = ctx.mouse.right_click(rect[0] + rect[2] // 2,
+                                                 rect[1] + rect[3] // 2)
+            else:
+                accepted = ctx.send_hotkey("close_panel")
+            if accepted is False:
+                ctx.log("关闭面板的输入未执行，等待重新观察后重试。", level="warn")
+        return None
+
+    def _finish_panel(self, rec, region_key, success):
+        result = self._close_panel(rec["ctx"], region_key, rec.setdefault("cleanup", {}))
+        if result is None:
             return
-        cx, cy = rect[0] + rect[2] // 2, rect[1] + rect[3] // 2
-        ctx.mouse.right_click(cx, cy)
-        self._sleep(self._jitter(0.3))
+        rec["panel_closed"] = result == "closed"
+        rec["ok"] = success and rec["panel_closed"]
+        rec["done"] = True
+        if not rec["panel_closed"]:
+            rec["unsafe_ui"] = True
+            key = "friend_panel" if region_key == "friend_list" else "team_create"
+            self._diag_dump(rec["ctx"], "full_window", key, "panel_close")
+        else:
+            rec["ctx"].log("已确认面板关闭。", level="hit")
+
+    def _cleanup_panels(self, records, region_key=None):
+        """只收本次已打开但未确认关闭的面板；每号预算独立且有固定推进上限。"""
+        for rec in records:
+            if self.lead.should_stop():
+                return
+            if rec.get("panel_closed") or not rec.get("panel_opened"):
+                continue
+            ctx = rec["ctx"]
+            region = region_key or ("team_panel" if rec["role"] == self.ROLE_CAPTAIN else "friend_list")
+            for _ in range(24):
+                if self.lead.should_stop():
+                    return
+                try:
+                    if ctx.window.rect() is None or not ctx.window.activate():
+                        rec["ok"], rec["unsafe_ui"] = False, True
+                        break
+                    self._finish_panel(rec, region, False)
+                except Exception as exc:
+                    rec["ok"], rec["unsafe_ui"] = False, True
+                    ctx.log(f"该号面板收尾异常，其余号继续：{exc}", level="error")
+                    break
+                if rec.get("panel_closed") or rec.get("unsafe_ui"):
+                    break
+                self._sleep(0.4)
 
     # ------------------------------------------------------------------
     # 演练：只识别各号角色相关标志，不发快捷键/不点
@@ -683,7 +793,7 @@ class TeamFormation:
                 if not ctx.window.activate():
                     continue
                 rect = ctx.window.rect()
-                scene = win_mod.grab(rect) if rect else None
+                scene = self._grab(rect) if rect else None
                 keys = cap_keys if rec["role"] == self.ROLE_CAPTAIN else mem_keys
                 found = []
                 for tpl_key, label in keys:
