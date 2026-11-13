@@ -35,6 +35,27 @@ def configured():
 
 
 class CommonRuntimeTests(unittest.TestCase):
+    def test_visual_observer_keeps_window_and_template_source_explicit(self):
+        cfg = configured()
+        ctx = SimpleNamespace(cfg=cfg, window=SimpleNamespace(rect=lambda: [100, 200, 200, 200]))
+        task = TreasureMapTask()
+        observer = calibration_runtime.VisualObserver(
+            ctx, task, {"flag_bag_open": ("organize_bag", "sort_button")})
+        marker = np.random.default_rng(84).integers(0, 256, (12, 14, 3), dtype=np.uint8)
+        base = np.zeros((100, 100, 3), dtype=np.uint8)
+        base[40:52, 28:42] = marker
+        scene = cv2.resize(base, (200, 200), interpolation=cv2.INTER_NEAREST)
+        cfg["tasks"]["organize_bag"] = {
+            "templates": {"sort_button": "sort.png"}, "templates_calib": {"sort_button": 1}}
+        with mock.patch.object(calibration_runtime, "item_size",
+                               wraps=calibration_runtime.item_size) as size:
+            hit = observer.match(scene, marker, "flag_bag_open", 0.99)
+        self.assertIsNotNone(hit)
+        size.assert_called_once_with(ctx, "organize_bag", "templates", "sort_button")
+        self.assertFalse(hasattr(task, "_calibration_ctx"))
+        self.assertFalse(hasattr(task, "_template_sources"))
+        self.assertFalse(hasattr(task, "_bag_source"))
+
     def test_context_resolves_shared_preflight_values_without_persisting_them(self):
         ctx = TaskContext.__new__(TaskContext)
         ctx.cfg = configured()
@@ -55,10 +76,10 @@ class CommonRuntimeTests(unittest.TestCase):
         scene = cv2.resize(base, (200, 200), interpolation=cv2.INTER_NEAREST)
         task.flags = {"escort_battle": template}
         task._scene_rect(ctx, {})
-        hit = task._match_scene(scene, [100, 200, 200, 200], "escort_battle", 0.99)
+        hit = task._match_scene(ctx, scene, [100, 200, 200, 200], "escort_battle", 0.99)
         self.assertIsNotNone(hit)
         self.assertEqual(hit[:2], (170, 292))
-        self.assertTrue(task._present(scene, "escort_battle", 0.99))
+        self.assertTrue(task._present(ctx, scene, "escort_battle", 0.99))
 
     def test_region_uses_common_profile_then_local_profile_after_override(self):
         cfg = configured()
@@ -190,19 +211,17 @@ class CommonRuntimeTests(unittest.TestCase):
                 task = TreasureMapTask()
                 # Previously scanned character had a different size. The bag
                 # check must bind to the current character before matching.
-                task._calibration_ctx = SimpleNamespace(
-                    cfg=cfg, window=SimpleNamespace(rect=lambda: [0, 0, 100, 100]))
-
                 def load(path):
                     return {"sort.png": marker, "dedicated.png": current_marker}.get(path)
 
                 with mock.patch("mhxy.tasks.treasure_map.vision.load_template", side_effect=load):
-                    task.flags = {"flag_bag_open": task._load_bag_template(ctx)}
+                    template, source = task._load_bag_template(ctx)
+                    task.flags = {"flag_bag_open": template}
                 expected_source = (("treasure_map", "flag_bag_open") if local_path == "dedicated.png"
                                    else ("organize_bag", "sort_button"))
                 with mock.patch("mhxy.tasks.treasure_map.win_mod.grab", return_value=scene), \
                      mock.patch.object(calibration_runtime, "item_size", wraps=calibration_runtime.item_size) as size:
-                    self.assertTrue(task._bag_visible(ctx, 0.99))
+                    self.assertTrue(task._bag_visible(ctx, 0.99, source=source))
                     size.assert_called_once_with(ctx, expected_source[0], "templates", expected_source[1])
 
     def test_subregion_matching_uses_current_context_after_scanning_another_window(self):
@@ -217,8 +236,6 @@ class CommonRuntimeTests(unittest.TestCase):
                 ctx = SimpleNamespace(cfg=cfg, window=SimpleNamespace(rect=lambda: [100, 200, 200, 200]))
                 task = cls()
                 task.flags = {key: marker}
-                task._calibration_ctx = SimpleNamespace(
-                    cfg=cfg, window=SimpleNamespace(rect=lambda: [0, 0, 100, 100]))
                 with mock.patch("mhxy.core.window.grab", return_value=scene):
                     hit = task._match_subregion(ctx, {}, marker, 0.99, (0, 1), (0, 1))
                 self.assertIsNotNone(hit)

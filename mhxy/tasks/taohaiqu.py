@@ -361,7 +361,7 @@ class TaohaiquTask(Task):
         while not ctx.should_stop():
             scene_rect = self._scene_rect(ctx, regions)
             cur = win_mod.grab(scene_rect) if scene_rect else None
-            hit = self._match_scene(cur, scene_rect, flag_key, threshold)
+            hit = self._match_scene(ctx, cur, scene_rect, flag_key, threshold)
             if hit is not None:
                 ctx.mouse.click(hit[0], hit[1])
                 ctx.log(f"点「{label}」（{hit[2]:.3f}）。", level="hit")
@@ -407,7 +407,7 @@ class TaohaiquTask(Task):
                         tpl = self.flags.get(key)
                         if tpl is None or scene is None:
                             continue
-                        hit = calibrated.match_flag(self, scene, tpl, key, threshold, wctx)
+                        hit = calibrated.VisualObserver(wctx, self).match(scene, tpl, key, threshold)
                         if hit is not None:
                             found.append(f"{label}({hit[2]:.2f})")
                 if found:
@@ -434,7 +434,6 @@ class TaohaiquTask(Task):
                 for k in _FLAG_KEYS}
 
     def _scene_rect(self, ctx, regions):
-        self._calibration_ctx = ctx
         region = regions.get("scene")
         return calibrated.region_rect(ctx, self.name, "scene", region)
 
@@ -442,39 +441,20 @@ class TaohaiquTask(Task):
         rect = self._scene_rect(ctx, regions)
         return win_mod.grab(rect) if rect else None
 
-    def _match_scene(self, cur, scene_rect, flag_key, threshold):
+    def _match_scene(self, ctx, cur, scene_rect, flag_key, threshold):
         """在整张 scene 里匹配 flag_key，命中返回屏幕绝对 (x,y,score)，否则 None。"""
         tpl = self.flags.get(flag_key)
         if cur is None or tpl is None or scene_rect is None:
             return None
-        m = calibrated.match_flag(self, cur, tpl, flag_key, threshold)
-        if m is None:
-            return None
-        return (scene_rect[0] + m[0], scene_rect[1] + m[1], m[2])
+        return calibrated.VisualObserver(ctx, self).match_scene(
+            cur, scene_rect, tpl, flag_key, threshold)
 
     def _match_subregion(self, ctx, regions, tpl, threshold, x_frac, y_frac):
         """只在 scene 的比例子区域内匹配 tpl（用于「进入」这类需按位置区分的同款按钮）。
         x_frac/y_frac 为 (起,止) 的 0~1 比例。命中返回屏幕 (x,y,score)，否则 None。"""
-        rect = self._scene_rect(ctx, regions)
-        if rect is None or tpl is None:
-            return None
-        scene = win_mod.grab(rect)
-        if scene is None:
-            return None
-        sh, sw = scene.shape[:2]
-        x0 = max(0, int(sw * x_frac[0]))
-        x1 = min(sw, int(sw * x_frac[1]))
-        y0 = max(0, int(sh * y_frac[0]))
-        y1 = min(sh, int(sh * y_frac[1]))
-        if x1 - x0 < 1 or y1 - y0 < 1:
-            return None
-        crop = scene[y0:y1, x0:x1]
         key = next((key for key, flag in self.flags.items() if flag is tpl), None)
-        m = calibrated.match_flag(self, crop, tpl, key, threshold, ctx)
-        if m is None:
-            return None
-        cx, cy, score = m
-        return (rect[0] + x0 + cx, rect[1] + y0 + cy, score)
+        return calibrated.VisualObserver(ctx, self).match_subregion(
+            regions, tpl, key, threshold, x_frac, y_frac)
 
     def _calib_size(self, ctx, key=None):
         """有 key 时取最终模板自己的标定尺寸，包含通用继承及旧配置归属兜底。

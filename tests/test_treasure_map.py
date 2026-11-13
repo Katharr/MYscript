@@ -310,9 +310,9 @@ class TreasureMapFallbackTests(unittest.TestCase):
     def test_battle_detection_uses_separate_verified_threshold(self):
         self.task.flags['flag_battle'] = np.ones((2, 2, 3), dtype=np.uint8)
         with mock.patch.object(tm.vision, 'match', return_value=(10, 15, .819)) as match:
-            self.assertTrue(self.task._in_battle(self.scene, {}, .85))
+            self.assertTrue(self.task._in_battle(self.ctx, self.scene, {}, .85))
             self.assertEqual(match.call_args.args[2], .80)
-            self.assertTrue(self.task._in_battle(self.scene, {'battle_threshold': .81}, .85))
+            self.assertTrue(self.task._in_battle(self.ctx, self.scene, {'battle_threshold': .81}, .85))
             self.assertEqual(match.call_args.args[2], .81)
 
     def test_missing_item_template_cannot_be_mistaken_for_empty_bag(self):

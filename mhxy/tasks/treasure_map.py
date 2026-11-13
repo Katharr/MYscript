@@ -153,7 +153,7 @@ class TreasureMapTask(Task):
         self._start_state = S_DIG_OPEN_BAG if self._skip_collect else S_OPEN_ACTIVITY
         threshold = loop["match_threshold"]
         self.flags = self._load_flags(tc)
-        self.flags["flag_bag_open"] = self._load_bag_template(ctx)
+        self.flags["flag_bag_open"], bag_source = self._load_bag_template(ctx)
 
         multi = ctx.cfg.get("targets", {}).get("multi", False)
         switch_delay = ctx.cfg.get("targets", {}).get("switch_delay_sec", 0.15)
@@ -192,7 +192,7 @@ class TreasureMapTask(Task):
         if time_limit > 0:
             ctx.log(f"时间上限 {time_limit} 分钟（到点自停）。主终止条件是各号背包藏宝图挖空。")
 
-        records = [self._new_record(c) for c in contexts]
+        records = [self._new_record(c, bag_source) for c in contexts]
         rc = self._make_rotation(
             ctx, records,
             lambda rec: self._step_once(rec["ctx"], rec, loop, regions, threshold),
@@ -221,10 +221,10 @@ class TreasureMapTask(Task):
         regions = tc["regions"]
         threshold = loop["match_threshold"]
         self.flags = self._load_flags(tc)
-        self.flags["flag_bag_open"] = self._load_bag_template(wctx)
+        self.flags["flag_bag_open"], bag_source = self._load_bag_template(wctx)
         self._skip_collect = tc.get("skip_collect", False)
         self._start_state = S_DIG_OPEN_BAG if self._skip_collect else S_OPEN_ACTIVITY
-        rec = self._new_record(wctx)
+        rec = self._new_record(wctx, bag_source)
         return rec, (lambda: self._step_once(wctx, rec, loop, regions, threshold))
 
     # ------------------------------------------------------------------
@@ -242,7 +242,7 @@ class TreasureMapTask(Task):
         ctx.window = wins[0]
         return [ctx]
 
-    def _new_record(self, wctx):
+    def _new_record(self, wctx, bag_source=None):
         """每个号一份独立状态。轮转时按 state 各推进一步，互不干扰。
         phase_b：是否已进入挖宝阶段（决定卡死兜底回开活动还是回重开背包）。
         last/still_since/t0/t_diag：收集/挖宝监控的逐帧状态（原内部 while 循环搬到这里、跨访问保留）。"""
@@ -252,7 +252,7 @@ class TreasureMapTask(Task):
                 "recover": 0, "done": False, "dead_logged": False, "empty_passes": 0,
                 "bag_scan": None, "inventory_revision": getattr(wctx, "inventory_revision", 0),
                 "close_attempts": 0, "cleanup_outcome": None, "unsafe_ui": False,
-                "scan_failures": 0}
+                "scan_failures": 0, "bag_source": bag_source}
 
     @staticmethod
     def _goto(rec, state):
@@ -372,12 +372,12 @@ class TreasureMapTask(Task):
                 ctx.log("等待对话时截图失败，转入恢复；未确认收图状态。", level="warn")
                 self._recover_window(ctx, rec, loop, regions)
             return
-        if self._in_battle(cur, loop, threshold):
+        if self._in_battle(ctx, cur, loop, threshold):
             ctx.log("已进入战斗，跳过等待 NPC 对话，继续监控自动收图。", level="hit")
             rec["recover"] = 0
             self._enter_monitor(rec, S_COLLECTING)
             return
-        hit = self._match_scene(cur, scene_rect, "flag_tingting", threshold)
+        hit = self._match_scene(ctx, cur, scene_rect, "flag_tingting", threshold)
         if hit is not None:
             if ctx.mouse.click(hit[0], hit[1]) is False:
                 self._recover_window(ctx, rec, loop, regions)
@@ -390,7 +390,7 @@ class TreasureMapTask(Task):
         # 并打印当前「听听无妨」的最佳相似度，便于区分「对话框还没弹」与「弹了但相似度低于阈值认不出」。
         now = time.time()
         if now - (rec.get("t_diag") or 0.0) >= 6.0:
-            best = self._best_score(cur, "flag_tingting")
+            best = self._best_score(ctx, cur, "flag_tingting")
             tip = f"最佳相似度 {best:.2f}<阈值 {threshold}" if best is not None else "尚未出现对话框"
             ctx.log(f"等 NPC 对话框中…（已 {self._state_elapsed(rec):.0f}/{timeout:.0f}s，{tip}）")
             rec["t_diag"] = now
@@ -413,7 +413,7 @@ class TreasureMapTask(Task):
         if cur is None:
             rec["last"], rec["still_since"] = None, None
             return
-        in_battle = self._in_battle(cur, loop, threshold)
+        in_battle = self._in_battle(ctx, cur, loop, threshold)
         diff = self._frame_diff(rec["last"], cur) if rec["last"] is not None else None
         if in_battle:
             rec["still_since"], rec["last"] = None, None   # 战斗中不计静止
@@ -434,9 +434,9 @@ class TreasureMapTask(Task):
         rec["phase_b"] = True
         self._goto(rec, S_DIG_OPEN_BAG)
 
-    def _in_battle(self, cur, loop, threshold):
+    def _in_battle(self, ctx, cur, loop, threshold):
         # 战斗小图标受按钮光效影响，本次存证真战斗约 0.82；不能共用道具的 0.85。
-        return self._present(cur, "flag_battle", min(threshold, loop.get("battle_threshold", 0.80)))
+        return self._present(ctx, cur, "flag_battle", min(threshold, loop.get("battle_threshold", 0.80)))
 
     # ---- 阶段 B：开背包 ----
     def _do_dig_open_bag(self, ctx, rec, loop, regions, threshold):
@@ -444,10 +444,10 @@ class TreasureMapTask(Task):
         if ctx.should_stop():
             return
         cur = self._grab_scene(ctx, regions)
-        if cur is not None and self._in_battle(cur, loop, threshold):
+        if cur is not None and self._in_battle(ctx, cur, loop, threshold):
             # 战斗中不能打开背包；等待结束，不能消耗恢复次数或反复按开关。
             return
-        visible = self._bag_visible(ctx, threshold)
+        visible = self._bag_visible(ctx, threshold, source=rec.get("bag_source"))
         if visible is None:
             rec["empty_passes"] = 0
             ctx.log("无法确认背包界面，转入恢复；未确认挖空。", level="warn")
@@ -474,11 +474,11 @@ class TreasureMapTask(Task):
         if ctx.should_stop():
             return
         cur = self._grab_scene(ctx, regions)
-        if cur is not None and self._in_battle(cur, loop, threshold):
+        if cur is not None and self._in_battle(ctx, cur, loop, threshold):
             rec["empty_passes"] = 0
             self._goto(rec, S_DIG_OPEN_BAG)
             return
-        visible = self._bag_visible(ctx, threshold)
+        visible = self._bag_visible(ctx, threshold, source=rec.get("bag_source"))
         if visible is True:
             ctx.log("已确认背包打开，翻找藏宝图…")
             self._goto(rec, S_DIG_FIND)
@@ -500,7 +500,7 @@ class TreasureMapTask(Task):
             ctx.log("藏宝图模板不可用，转入恢复；未确认挖空。", level="warn")
             self._recover_window(ctx, rec, loop, regions)
             return
-        if self._bag_visible(ctx, threshold) is not True:
+        if self._bag_visible(ctx, threshold, source=rec.get("bag_source")) is not True:
             rec["empty_passes"] = 0
             ctx.log("背包界面不可确认，重新检查背包；未确认挖空。", level="warn")
             self._goto(rec, S_DIG_OPEN_BAG)
@@ -519,7 +519,8 @@ class TreasureMapTask(Task):
             if scene is None or scene.shape[0] < template.shape[0] or scene.shape[1] < template.shape[1]:
                 action_failed = True
                 return (scan.STAY, None)
-            hit = calibrated.match_flag(self, scene, template, "treasure_item", threshold, ctx)
+            hit = calibrated.VisualObserver(ctx, self).match(
+                scene, template, "treasure_item", threshold)
             if hit is not None:
                 if ctx.mouse.double_click(rect[0] + hit[0], rect[1] + hit[1]) is False:
                     action_failed = True
@@ -530,7 +531,7 @@ class TreasureMapTask(Task):
 
         try:
             res = progress.advance(
-                capture=lambda: self._capture_bag(ctx, list_region, threshold),
+                capture=lambda: self._capture_bag(ctx, list_region, threshold, rec.get("bag_source")),
                 probe=probe, mouse=ctx.mouse,
                 should_stop=lambda: ctx.should_stop() or action_failed,
                 sleep=lambda s: self._interruptible_sleep(ctx, self._jitter(s, ctx)),
@@ -581,7 +582,7 @@ class TreasureMapTask(Task):
             ctx.log("背包观察或输入异常，重新核验；未确认挖空。", level="warn")
             self._recover_window(ctx, rec, loop, regions)
             return
-        if self._bag_visible(ctx, threshold) is not True:
+        if self._bag_visible(ctx, threshold, source=rec.get("bag_source")) is not True:
             rec["empty_passes"] = 0
             ctx.log("扫描后背包界面不可确认，重新检查；未确认挖空。", level="warn")
             self._goto(rec, S_DIG_OPEN_BAG)
@@ -595,7 +596,7 @@ class TreasureMapTask(Task):
         ctx.log("背包连续两轮完整扫描均无藏宝图，准备关闭并确认。")
         self._begin_bag_cleanup(rec, "completed")
 
-    def _capture_bag(self, ctx, list_region, threshold):
+    def _capture_bag(self, ctx, list_region, threshold, source=None):
         """同一帧确认背包并裁出物品区；每次观察都更新输入会话证据。"""
         window_rect = ctx.window.rect()
         rect = calibrated.region_rect(ctx, self.name, "bag_list", list_region)
@@ -606,7 +607,7 @@ class TreasureMapTask(Task):
         if w <= 0 or h <= 0 or x < wx or y < wy or x + w > wx + ww or y + h > wy + wh:
             return None, None
         cur = win_mod.grab(window_rect)
-        if self._bag_visible(ctx, threshold, scene=cur) is not True:
+        if self._bag_visible(ctx, threshold, scene=cur, source=source) is not True:
             return None, None
         if cur is None or cur.shape[0] < y - wy + h or cur.shape[1] < x - wx + w:
             return None, None
@@ -646,7 +647,7 @@ class TreasureMapTask(Task):
     def _do_bag_cleanup(self, ctx, rec, loop, threshold):
         if ctx.should_stop():
             return
-        visible = self._bag_visible(ctx, threshold)
+        visible = self._bag_visible(ctx, threshold, source=rec.get("bag_source"))
         if ctx.should_stop():
             return
         if visible is False:
@@ -681,7 +682,7 @@ class TreasureMapTask(Task):
                 self._recover_window(ctx, rec, loop, regions)
             return
 
-        nxt = self._match_scene(cur, scene_rect, "flag_next_map", threshold)
+        nxt = self._match_scene(ctx, cur, scene_rect, "flag_next_map", threshold)
         if nxt is not None:
             if ctx.mouse.click(nxt[0], nxt[1]) is False:
                 self._recover_window(ctx, rec, loop, regions)
@@ -692,7 +693,7 @@ class TreasureMapTask(Task):
             self._interruptible_sleep(ctx, self._jitter(1.0, ctx))
             return
 
-        in_battle = self._in_battle(cur, loop, threshold)
+        in_battle = self._in_battle(ctx, cur, loop, threshold)
         diff = self._frame_diff(rec["last"], cur) if rec["last"] is not None else None
         if in_battle:
             rec["t0"], rec["last"], rec["still_since"] = time.time(), None, None   # 战斗中刷新计时
@@ -759,20 +760,18 @@ class TreasureMapTask(Task):
         return TreasureMapTask._bag_asset(ctx)[0]
 
     def _load_bag_template(self, ctx):
-        template, source = self._bag_asset(ctx)
-        self._template_sources = {"flag_bag_open": source}
-        return template
+        return self._bag_asset(ctx)
 
-    def _bag_visible(self, ctx, threshold, *, scene=_UNSET_SCENE):
+    def _bag_visible(self, ctx, threshold, *, scene=_UNSET_SCENE, source=None):
         """True=固定背包标志可见，False=有效画面未命中，None=不可观察。"""
-        self._calibration_ctx = ctx
         if self.flags.get("flag_bag_open") is None:
             return None
         rect = ctx.window.rect()
         cur = (win_mod.grab(rect) if rect else None) if scene is _UNSET_SCENE else scene
         if cur is None or cur.size == 0 or cur.ndim != 3 or cur.std(axis=(0, 1)).max() < 1.0:
             return None
-        return self._present(cur, "flag_bag_open", threshold)
+        source = source or (self.name, "flag_bag_open")
+        return self._present(ctx, cur, "flag_bag_open", threshold, source=source)
 
     def _log_summary(self, ctx, records, reason, elapsed_min):
         completed = 0
@@ -838,7 +837,6 @@ class TreasureMapTask(Task):
                 for k in _FLAG_KEYS}
 
     def _scene_rect(self, ctx, regions):
-        self._calibration_ctx = ctx
         region = regions.get("scene")
         return calibrated.region_rect(ctx, self.name, "scene", region)
 
@@ -846,29 +844,28 @@ class TreasureMapTask(Task):
         rect = self._scene_rect(ctx, regions)
         return win_mod.grab(rect) if rect else None
 
-    def _present(self, scene, flag_key, threshold):
+    def _present(self, ctx, scene, flag_key, threshold, *, source=None):
         tpl = self.flags.get(flag_key)
         if scene is None or tpl is None:
             return False
-        return calibrated.match_flag(self, scene, tpl, flag_key, threshold) is not None
+        return calibrated.VisualObserver(ctx, self, {flag_key: source} if source else None).match(
+            scene, tpl, flag_key, threshold) is not None
 
-    def _match_scene(self, cur, scene_rect, flag_key, threshold):
+    def _match_scene(self, ctx, cur, scene_rect, flag_key, threshold):
         """在整张 scene 里匹配 flag_key，命中返回屏幕绝对 (x,y,score)，否则 None。"""
         tpl = self.flags.get(flag_key)
         if cur is None or tpl is None or scene_rect is None:
             return None
-        m = calibrated.match_flag(self, cur, tpl, flag_key, threshold)
-        if m is None:
-            return None
-        return (scene_rect[0] + m[0], scene_rect[1] + m[1], m[2])
+        return calibrated.VisualObserver(ctx, self).match_scene(
+            cur, scene_rect, tpl, flag_key, threshold)
 
-    def _best_score(self, cur, flag_key):
+    def _best_score(self, ctx, cur, flag_key):
         """不受阈值限制取 flag_key 在 cur 里的最佳相似度（用 0 阈值），用于诊断「弹了但分低」。
         cur/模板缺失或尺寸不够返回 None。"""
         tpl = self.flags.get(flag_key)
         if cur is None or tpl is None:
             return None
-        m = calibrated.match_flag(self, cur, tpl, flag_key, 0.0)
+        m = calibrated.VisualObserver(ctx, self).match(cur, tpl, flag_key, 0.0)
         return m[2] if m is not None else None
 
     def _close_bag(self, ctx):
@@ -914,7 +911,7 @@ class TreasureMapTask(Task):
                     if tpl is None:
                         continue
                     flag_threshold = min(threshold, loop.get("battle_threshold", 0.80)) if key == "flag_battle" else threshold
-                    hit = calibrated.match_flag(self, scene, tpl, key, flag_threshold, wctx)
+                    hit = calibrated.VisualObserver(wctx, self).match(scene, tpl, key, flag_threshold)
                     if hit is not None:
                         found.append(f"{label}({hit[2]:.2f})")
                 if found:

@@ -291,7 +291,7 @@ class EscortTask(Task):
     def _do_dialog(self, ctx, rec, loop, regions, threshold):
         scene_rect = self._scene_rect(ctx, regions)
         cur = win_mod.grab(scene_rect)
-        hit = self._match_scene(cur, scene_rect, "escort_silver", threshold)
+        hit = self._match_scene(ctx, cur, scene_rect, "escort_silver", threshold)
         if hit is not None:
             ctx.mouse.click(hit[0], hit[1])
             rec["escorts"] += 1
@@ -307,7 +307,7 @@ class EscortTask(Task):
     def _do_confirm(self, ctx, rec, loop, regions, threshold):
         scene_rect = self._scene_rect(ctx, regions)
         cur = win_mod.grab(scene_rect)
-        hit = self._match_scene(cur, scene_rect, "escort_confirm", threshold)
+        hit = self._match_scene(ctx, cur, scene_rect, "escort_confirm", threshold)
         if hit is not None:
             ctx.mouse.click(hit[0], hit[1])
             ctx.log(f"点「确认」（{hit[2]:.3f}），开始监控本趟运镖。", level="hit")
@@ -339,7 +339,7 @@ class EscortTask(Task):
         cur = win_mod.grab(scene_rect)
 
         # 对话框又弹出来了 → 这一趟跑完、还有次数，续点开始下一趟
-        hit = self._match_scene(cur, scene_rect, "escort_silver", threshold)
+        hit = self._match_scene(ctx, cur, scene_rect, "escort_silver", threshold)
         if hit is not None:
             if rec["escorts"] >= self.max_escorts:
                 # 已押满设定趟数仍弹框（异常/识别抖动）→ 不再续点，直接收尾
@@ -354,8 +354,8 @@ class EscortTask(Task):
             self._goto(rec, S_CONFIRM)
             return
 
-        ongoing = self._present(cur, "escort_ongoing", threshold)
-        in_battle = self._present(cur, "escort_battle", threshold)
+        ongoing = self._present(ctx, cur, "escort_ongoing", threshold)
+        in_battle = self._present(ctx, cur, "escort_battle", threshold)
 
         if ongoing or in_battle:
             # 明确在运镖途中/战斗中 → 绝不停，刷新计时
@@ -458,7 +458,6 @@ class EscortTask(Task):
                 for k in _FLAG_KEYS}
 
     def _scene_rect(self, ctx, regions):
-        self._calibration_ctx = ctx
         region = regions.get("scene")
         return calibrated.region_rect(ctx, self.name, "scene", region)
 
@@ -466,21 +465,19 @@ class EscortTask(Task):
         rect = self._scene_rect(ctx, regions)
         return win_mod.grab(rect) if rect else None
 
-    def _present(self, scene, flag_key, threshold):
+    def _present(self, ctx, scene, flag_key, threshold):
         tpl = self.flags.get(flag_key)
         if scene is None or tpl is None:
             return False
-        return calibrated.match_flag(self, scene, tpl, flag_key, threshold) is not None
+        return calibrated.VisualObserver(ctx, self).match(scene, tpl, flag_key, threshold) is not None
 
-    def _match_scene(self, cur, scene_rect, flag_key, threshold):
+    def _match_scene(self, ctx, cur, scene_rect, flag_key, threshold):
         """在整张 scene 里匹配 flag_key，命中返回屏幕绝对 (x,y,score)，否则 None。"""
         tpl = self.flags.get(flag_key)
         if cur is None or tpl is None or scene_rect is None:
             return None
-        m = calibrated.match_flag(self, cur, tpl, flag_key, threshold)
-        if m is None:
-            return None
-        return (scene_rect[0] + m[0], scene_rect[1] + m[1], m[2])
+        return calibrated.VisualObserver(ctx, self).match_scene(
+            cur, scene_rect, tpl, flag_key, threshold)
 
     def _dry_run_selfcheck(self, ctx, contexts, multi, regions, threshold, switch_delay, deadline):
         """演练：周期性对【每个号】当前屏幕识别各标志，报告命中，便于用户验证模板/阈值。"""
@@ -505,7 +502,7 @@ class EscortTask(Task):
                     tpl = self.flags.get(key)
                     if tpl is None:
                         continue
-                    hit = calibrated.match_flag(self, scene, tpl, key, threshold, wctx)
+                    hit = calibrated.VisualObserver(wctx, self).match(scene, tpl, key, threshold)
                     if hit is not None:
                         found.append(f"{label}({hit[2]:.2f})")
                 if found:

@@ -355,7 +355,7 @@ class SecretRealmTask(Task):
     def _do_challenge(self, ctx, rec, loop, regions, threshold):
         scene_rect = self._scene_rect(ctx, regions)
         cur = win_mod.grab(scene_rect)
-        hit = self._match_scene(cur, scene_rect, "sr_challenge", threshold)
+        hit = self._match_scene(ctx, cur, scene_rect, "sr_challenge", threshold)
         if hit is not None:
             ctx.mouse.click(hit[0], hit[1])
             ctx.log(f"点「挑战」（{hit[2]:.3f}）→ 进入秘境，开始自动战斗监控。", level="hit")
@@ -382,7 +382,7 @@ class SecretRealmTask(Task):
         cur = win_mod.grab(scene_rect)
 
         # 判定失败：先点掉「失败」结算，「离开」按钮才点得到（直接点离开会点空）
-        fail = self._match_scene(cur, scene_rect, "sr_fail", threshold)
+        fail = self._match_scene(ctx, cur, scene_rect, "sr_fail", threshold)
         if fail is not None:
             ctx.log(f"判定失败（{fail[2]:.3f}）→ 先点掉「失败」结算，转去点「离开」。", level="hit")
             ctx.mouse.click(fail[0], fail[1])
@@ -391,7 +391,7 @@ class SecretRealmTask(Task):
             return
 
         # 难度关卡：出现「进入战斗」就点它续战
-        eb = self._match_scene(cur, scene_rect, "sr_enter_battle", threshold)
+        eb = self._match_scene(ctx, cur, scene_rect, "sr_enter_battle", threshold)
         if eb is not None:
             ctx.mouse.click(eb[0], eb[1])
             ctx.log(f"难度关卡：点「进入战斗」（{eb[2]:.3f}）继续。", level="hit")
@@ -401,7 +401,7 @@ class SecretRealmTask(Task):
         # 否则：自动战斗中/过场——节流打印诊断
         now = time.time()
         if now - rec["t_diag"] >= 10.0:
-            st = "战斗中" if self._present(cur, "sr_battle", threshold) else "自动推进/过场"
+            st = "战斗中" if self._present(ctx, cur, "sr_battle", threshold) else "自动推进/过场"
             ctx.log(f"监控…{st}（已 {now - rec['t_battle']:.0f}/{overall:.0f}s）")
             rec["t_diag"] = now
 
@@ -409,7 +409,7 @@ class SecretRealmTask(Task):
     def _do_leave(self, ctx, rec, loop, regions, threshold):
         scene_rect = self._scene_rect(ctx, regions)
         cur = win_mod.grab(scene_rect)
-        hit = self._match_scene(cur, scene_rect, "sr_leave", threshold)
+        hit = self._match_scene(ctx, cur, scene_rect, "sr_leave", threshold)
         if hit is not None:
             ctx.mouse.click(hit[0], hit[1])
             ctx.log(f"点「离开」（{hit[2]:.3f}）退出秘境。", level="hit")
@@ -475,7 +475,7 @@ class SecretRealmTask(Task):
         """在 scene 里找某按钮，命中就点它并切到 next_state，返回是否点到（非阻塞，一次扫描）。"""
         scene_rect = self._scene_rect(ctx, regions)
         cur = win_mod.grab(scene_rect)
-        hit = self._match_scene(cur, scene_rect, flag_key, threshold)
+        hit = self._match_scene(ctx, cur, scene_rect, flag_key, threshold)
         if hit is not None:
             ctx.mouse.click(hit[0], hit[1])
             ctx.log(f"点「{label}」（{hit[2]:.3f}）。", level="hit")
@@ -502,7 +502,6 @@ class SecretRealmTask(Task):
                 for k in _FLAG_KEYS}
 
     def _scene_rect(self, ctx, regions):
-        self._calibration_ctx = ctx
         region = regions.get("scene")
         return calibrated.region_rect(ctx, self.name, "scene", region)
 
@@ -510,45 +509,26 @@ class SecretRealmTask(Task):
         rect = self._scene_rect(ctx, regions)
         return win_mod.grab(rect) if rect else None
 
-    def _present(self, scene, flag_key, threshold):
+    def _present(self, ctx, scene, flag_key, threshold):
         tpl = self.flags.get(flag_key)
         if scene is None or tpl is None:
             return False
-        return calibrated.match_flag(self, scene, tpl, flag_key, threshold) is not None
+        return calibrated.VisualObserver(ctx, self).match(scene, tpl, flag_key, threshold) is not None
 
-    def _match_scene(self, cur, scene_rect, flag_key, threshold):
+    def _match_scene(self, ctx, cur, scene_rect, flag_key, threshold):
         """在整张 scene 里匹配 flag_key，命中返回屏幕绝对 (x,y,score)，否则 None。"""
         tpl = self.flags.get(flag_key)
         if cur is None or tpl is None or scene_rect is None:
             return None
-        m = calibrated.match_flag(self, cur, tpl, flag_key, threshold)
-        if m is None:
-            return None
-        return (scene_rect[0] + m[0], scene_rect[1] + m[1], m[2])
+        return calibrated.VisualObserver(ctx, self).match_scene(
+            cur, scene_rect, tpl, flag_key, threshold)
 
     def _match_subregion(self, ctx, regions, tpl, threshold, x_frac, y_frac):
         """只在 scene 的比例子区域内匹配 tpl（用于「进入」这类需按位置区分的同款按钮）。
         x_frac/y_frac 为 (起,止) 的 0~1 比例。命中返回屏幕 (x,y,score)，否则 None。"""
-        rect = self._scene_rect(ctx, regions)
-        if rect is None or tpl is None:
-            return None
-        scene = win_mod.grab(rect)
-        if scene is None:
-            return None
-        sh, sw = scene.shape[:2]
-        x0 = max(0, int(sw * x_frac[0]))
-        x1 = min(sw, int(sw * x_frac[1]))
-        y0 = max(0, int(sh * y_frac[0]))
-        y1 = min(sh, int(sh * y_frac[1]))
-        if x1 - x0 < 1 or y1 - y0 < 1:
-            return None
-        crop = scene[y0:y1, x0:x1]
         key = next((key for key, flag in self.flags.items() if flag is tpl), None)
-        m = calibrated.match_flag(self, crop, tpl, key, threshold, ctx)
-        if m is None:
-            return None
-        cx, cy, score = m
-        return (rect[0] + x0 + cx, rect[1] + y0 + cy, score)
+        return calibrated.VisualObserver(ctx, self).match_subregion(
+            regions, tpl, key, threshold, x_frac, y_frac)
 
     def _dry_run_selfcheck(self, ctx, contexts, multi, regions, threshold, switch_delay, deadline):
         """演练：周期性对【每个号】当前屏幕识别各标志，报告命中，便于验证模板/阈值。"""
@@ -575,7 +555,7 @@ class SecretRealmTask(Task):
                     tpl = self.flags.get(key)
                     if tpl is None:
                         continue
-                    hit = calibrated.match_flag(self, scene, tpl, key, threshold, wctx)
+                    hit = calibrated.VisualObserver(wctx, self).match(scene, tpl, key, threshold)
                     if hit is not None:
                         found.append(f"{label}({hit[2]:.2f})")
                 if found:
