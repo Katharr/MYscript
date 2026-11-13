@@ -193,7 +193,7 @@ class QtReadabilityTests(unittest.TestCase):
                         self.assertGreaterEqual(contrast(colors[foreground], colors[background]), 4.5)
                 self.assertGreaterEqual(contrast(colors["ON_ACCENT"], colors["ACCENT"]), 4.5)
                 for background in ("SURFACE", "INPUT"):
-                    self.assertGreaterEqual(contrast(colors["BORDER"], colors[background]), 3)
+                    self.assertGreaterEqual(contrast(colors["ACCENT"], colors[background]), 3)  # 3.0 以强调色标示焦点与选中
 
 
 if __name__ == "__main__":

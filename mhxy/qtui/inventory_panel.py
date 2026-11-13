@@ -9,6 +9,7 @@ from ..core import calibration_assets, config as cfg_mod
 from ..tasks.organize_bag import OrganizeBagTask
 from .inventory_items_dialog import InventoryItemsDialog
 from .task_page import TaskPage
+from . import theme as T
 from .widgets import FlowLayout, set_window_summary
 
 
@@ -42,7 +43,7 @@ class _ConfigTaskPage(TaskPage):
         if self._busy():
             return self.cfg
         super().refresh_config()
-        tc = cfg_mod.task_config(self.cfg, self.task_name)
+        tc = cfg_mod.task_config(self.cfg, self.TASK_NAME)
         self.live_mode.blockSignals(True)
         self.live_mode.setChecked(not tc.get("dry_run", True))
         self.live_mode.blockSignals(False)
@@ -70,9 +71,9 @@ class _ConfigTaskPage(TaskPage):
         if self._busy():
             return
         draft = self._draft()
-        tc = cfg_mod.task_config(draft, self.task_name)
+        tc = cfg_mod.task_config(draft, self.TASK_NAME)
         tc["dry_run"] = not checked
-        cfg_mod.set_task_config(draft, self.task_name, tc)
+        cfg_mod.set_task_config(draft, self.TASK_NAME, tc)
         self._commit(draft)
         self.refresh_config()
 
@@ -119,11 +120,12 @@ class _ConfigTaskPage(TaskPage):
 
 class InventoryPanel(_ConfigTaskPage):
     TASK_NAME = "organize_bag"
-    TITLE = "通用 / 工具 · 整理背包"
+    TITLE = "通用工具"
     LOG_SOURCE = "整理背包"
     START_TEXT = "整理背包"
 
     def __init__(self, *args, **kwargs):
+        self.tool_task = "organize_bag"
         kwargs.setdefault("task_factory", OrganizeBagTask)
         super().__init__(*args, **kwargs)
 
@@ -134,15 +136,48 @@ class InventoryPanel(_ConfigTaskPage):
         self.auto_organize.toggled.connect(self._save_auto)
         self.add_control("自动整理", self.auto_organize)
         self._edit_controls.append(self.auto_organize)
+        team_title = QLabel("队伍", self)
+        team_title.setProperty("role", "section")
+        self.content_layout.addWidget(team_title)
+        team_actions = FlowLayout()
+        self.team_button = QPushButton("一键组队", self)
+        self.disband_button = QPushButton("一键解散", self)
+        self.team_button.clicked.connect(lambda: self._start_tool("dungeon"))
+        self.disband_button.clicked.connect(lambda: self._start_tool("disband"))
+        for button in (self.team_button, self.disband_button):
+            team_actions.addWidget(button)
+            self._edit_controls.append(button)
+        self.content_layout.addLayout(team_actions)
+        self.team_live_mode = QCheckBox("实战模式", self)
+        self.team_live_mode.toggled.connect(self._save_team_mode)
+        self.content_layout.addWidget(self.team_live_mode)
+        self._edit_controls.append(self.team_live_mode)
+        self.team_calibration_button = QPushButton("标定（队伍）", self)
+        self.team_calibration_button.clicked.connect(self._open_team_calibration)
+        self.content_layout.addWidget(self.team_calibration_button)
+        self._edit_controls.append(self.team_calibration_button)
+        bag_title = QLabel("背包", self)
+        bag_title.setProperty("role", "section")
+        self.content_layout.addWidget(bag_title)
+        bag_actions = FlowLayout()
+        self.organize_button = QPushButton("整理背包", self)
+        self.organize_button.clicked.connect(lambda: self._start_tool("organize_bag"))
+        bag_actions.addWidget(self.organize_button)
+        self._edit_controls.append(self.organize_button)
+        self.content_layout.addLayout(bag_actions)
+        self.body.layout().removeItem(self.form)
+        self.content_layout.addLayout(self.form)
         controls = FlowLayout()
         self.items_button = QPushButton("管理物品", self)
         self.items_button.clicked.connect(self.open_items)
+        bag_actions.addWidget(self.items_button)
         self.calibrate_button = QPushButton("标定（整理背包）", self)
         self.calibrate_button.clicked.connect(self.open_calibration)
         self.refresh_button = QPushButton("刷新配置", self)
         self.refresh_button.clicked.connect(self.refresh_config)
         for button in (self.items_button, self.calibrate_button, self.refresh_button):
-            controls.addWidget(button)
+            if button is not self.items_button:
+                controls.addWidget(button)
             self._edit_controls.append(button)
         self.content_layout.addLayout(controls)
         self.summary = QLabel(self)
@@ -151,26 +186,71 @@ class InventoryPanel(_ConfigTaskPage):
         self.items_button.setToolTip("运行前配置 open_bag 快捷键，并将游戏包裹保持可见。")
         self.content_layout.addStretch()
 
+    def _save_team_mode(self, checked):
+        if self._busy():
+            return
+        draft = self._draft()
+        tc = cfg_mod.task_config(draft, "teaming")
+        tc["dry_run"] = not checked
+        cfg_mod.set_task_config(draft, "teaming", tc)
+        self._commit(draft)
+        self.refresh_config()
+
+    def _open_team_calibration(self):
+        from .calibration_dialog import open_calibration
+        if not self._busy():
+            open_calibration(self, "teaming")
+
+    def _start_tool(self, name):
+        if self._busy():
+            return
+        from ..tasks import get_task
+
+        self.tool_task = self.task_name = name
+        self.task_factory = get_task(name)
+        self.LOG_SOURCE = {"dungeon": "组队", "disband": "解散", "organize_bag": "整理背包"}[name]
+        super().toggle_run()
+
+    def _set_status(self, status):
+        super()._set_status(status)
+        active = status in ("running", "stopping")
+        namespace = "teaming" if active and self.tool_task in ("dungeon", "disband") else self.TASK_NAME
+        tc = cfg_mod.task_config(self.cfg, namespace)
+        live = not tc.get("dry_run", True)
+        self.mode_label.setText("实战" if live else "演练")
+        T.set_tone(self.mode_label, "warning" if live else "")
+
+    def toggle_run(self):
+        if self._start_pending or self._runtime_running():
+            self.stop()
+        else:
+            self._start_tool("organize_bag")
+
     def refresh_config(self):
         if self._busy():
             return self.cfg
         super().refresh_config()
-        tc = cfg_mod.task_config(self.cfg, self.task_name)
+        tc = cfg_mod.task_config(self.cfg, self.TASK_NAME)
         self.auto_organize.blockSignals(True)
         self.auto_organize.setChecked(bool(tc.get("auto_organize", False)))
         self.auto_organize.blockSignals(False)
         self.summary.setText(f"物品清单：{len(tc.get('items') or [])} 件；"
                              f"背包列表区：{'已标定' if tc.get('regions', {}).get('bag_list') else '整窗检测'}；"
                              f"背包满图标：{'已标定' if tc.get('templates', {}).get('bag_full_icon') else '未标定'}")
+        team = cfg_mod.task_config(self.cfg, "teaming")
+        self.team_live_mode.blockSignals(True)
+        self.team_live_mode.setChecked(not team.get("dry_run", True))
+        self.team_live_mode.blockSignals(False)
+        self.mode_label.setText("实战" if not tc.get("dry_run", True) else "演练")
         return self.cfg
 
     def _save_auto(self, checked):
         if self._busy():
             return
         draft = self._draft()
-        tc = cfg_mod.task_config(draft, self.task_name)
+        tc = cfg_mod.task_config(draft, self.TASK_NAME)
         tc["auto_organize"] = bool(checked)
-        cfg_mod.set_task_config(draft, self.task_name, tc)
+        cfg_mod.set_task_config(draft, self.TASK_NAME, tc)
         self._commit(draft)
         self.refresh_config()
 
@@ -197,4 +277,4 @@ class InventoryPanel(_ConfigTaskPage):
         from .calibration_dialog import open_calibration
 
         if not self._busy():
-            open_calibration(self)
+            open_calibration(self, self.TASK_NAME)

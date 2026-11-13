@@ -30,7 +30,7 @@ def run_smoke(app, report_path):
                 raise RuntimeError(error)
             assert window.isVisible() and window.current_page == "role_window"
             assert len([w for w in app.topLevelWidgets() if isinstance(w, QMainWindow)]) == 1
-            for key, _ in window.NAV:
+            for key, _ in window.NAV + window.TASK_TABS:
                 window.show_page(key)
             assert not {"tkinter", "customtkinter", "mhxy.gui.app"}.intersection(sys.modules)
             from ..core import accounts

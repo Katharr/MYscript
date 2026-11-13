@@ -1,7 +1,7 @@
 """窗口管理入口；实际唤窗/关闭由主窗口在后台执行。"""
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from . import theme as T
 from .widgets import FlowLayout
@@ -11,12 +11,13 @@ class WindowTools(QWidget):
     wake_requested = Signal()
     close_requested = Signal()
 
-    def __init__(self, parent=None, *, separate_close=False):
+    def __init__(self, parent=None, *, separate_close=False, compact=False):
         super().__init__(parent)
-        layout = QVBoxLayout(self)
+        self.compact = compact
+        layout = QHBoxLayout(self) if compact else QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
-        actions = FlowLayout()
+        actions = QHBoxLayout() if compact else FlowLayout()
         self.wake_button = QPushButton("唤出所有游戏窗口", self)
         self.wake_button.setToolTip("还原所有游戏窗口，并逐窗识别角色名；任务运行时请先停止。")
         self.wake_button.clicked.connect(self.wake_requested.emit)
@@ -39,4 +40,7 @@ class WindowTools(QWidget):
         self.close_button.setText("正在关闭…" if action == "close" else "关闭所有游戏窗口")
         self.status.setText(message)
         T.set_tone(self.status, {"warn": "warning", "error": "error"}.get(level, ""))
-        self.status.setVisible(bool(message))
+        self.status.setVisible(bool(message) and not self.compact)
+        if self.compact:
+            self.wake_button.setText("唤出中…" if action == "wake" else "唤出")
+            self.close_button.setText("关闭中…" if action == "close" else "全关")

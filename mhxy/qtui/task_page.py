@@ -133,8 +133,9 @@ class TaskPage(QWidget):
         self.window_status = QLabel("窗口配置由任务页提供", self)
         self.window_status.setProperty("role", "muted")
         self.window_status.setWordWrap(True)
-        controls.addWidget(self.window_status, 1)
-        layout.addLayout(controls)
+        header.removeWidget(self.mode_label)
+        controls.insertWidget(0, self.window_status, 1)
+        controls.insertWidget(1, self.mode_label)
 
         self.body_scroll = QScrollArea(self)
         self.body_scroll.setWidgetResizable(True)
@@ -153,12 +154,14 @@ class TaskPage(QWidget):
         body_layout.addLayout(self.content_layout, 1)
         self.body_scroll.setWidget(self.body)
         layout.addWidget(self.body_scroll, 1)
+        layout.addLayout(controls)
 
         self.log_panel = LogPanel(self, collapsed=True)
         layout.addWidget(self.log_panel)
         self.run_button = self.start_button
         self.log = self.log_panel
         self.stop_button.setEnabled(False)
+        self.stop_button.hide()
 
     @property
     def page_title(self):
@@ -222,6 +225,10 @@ class TaskPage(QWidget):
         return runner
 
     def _set_status(self, status):
+        active = status in ("running", "stopping")
+        self.start_button.setVisible(not active)
+        self.stop_button.setVisible(active)
+        self.stop_button.setText("停止中…" if status == "stopping" else "停止")
         T.set_tone(self.status_label, {"failed": "error", "timeout": "error", "partial": "warning",
                                      "stopping": "warning", "running": "success", "completed": "success"}.get(status, ""))
         status = self.STATUS_NAMES.get(status, str(status))

@@ -10,25 +10,26 @@ SPACE_SM = 8
 SPACE_MD = 16
 SPACE_LG = 24
 BUTTON_HEIGHT = 36
-ROW_HEIGHT = 44
-NAV_WIDTH = 160
-WINDOW_SIZE = (1440, 720)
+ROW_HEIGHT = 62
+NAV_WIDTH = 176
+WINDOW_SIZE = (1120, 720)
 MIN_WINDOW_SIZE = (800, 640)
-LOG_WIDTH = 280
-LOG_MIN_WIDTH = 240
+LOG_WIDTH = 260
+LOG_MIN_WIDTH = 236
 LOG_MAX_WIDTH = 320
 LOG_RAIL_WIDTH = 40
 LOG_HANDLE_WIDTH = 8
 LOG_PADDING = 12
-SCRIPT_COMFORT_WIDTH = 640
+SCRIPT_COMFORT_WIDTH = 620
 
 PALETTES = {
     "light": dict(
-        BG="#f3f6fb", SIDEBAR="#e9eff7", SURFACE="#ffffff", INPUT="#ffffff",
-        BORDER="#7d8ba0", DIVIDER="#d4dce8", TEXT="#1f2937", TEXT_DIM="#526176",
-        ACCENT="#2563eb", ON_ACCENT="#ffffff", BUTTON_HOVER="#e5edfb",
-        SELECTION="#dce9ff", DISABLED="#64748b", DISABLED_BG="#edf1f6",
-        SUCCESS="#16794b", WARNING="#946200", ERROR="#b42318",
+        BG="#F3F4F6", SIDEBAR="#F3F4F6", SURFACE="#FFFFFF", INPUT="#FFFFFF",
+        BORDER="#D8DCE1", DIVIDER="#E4E7EB", TEXT="#202124", TEXT_DIM="#68717D",
+        ACCENT="#0067C0", ON_ACCENT="#FFFFFF", BUTTON_HOVER="#F0F6FD",
+        SELECTION="#E3EAF3", DISABLED="#68717D", DISABLED_BG="#F3F4F6",
+        SUCCESS="#16794B", WARNING="#996128", ERROR="#BD343B",
+        AUX_SURFACE="#FAFBFD", ROLE_SELECTED="#F0F6FD", ROLE_BORDER="#ADCAE9",
     ),
     "dark": dict(
         BG="#181f2a", SIDEBAR="#1c2532", SURFACE="#222d3d", INPUT="#1b2533",
@@ -36,6 +37,7 @@ PALETTES = {
         ACCENT="#82aaff", ON_ACCENT="#172132", BUTTON_HOVER="#34465f",
         SELECTION="#354e73", DISABLED="#9cabc0", DISABLED_BG="#293445",
         SUCCESS="#80d8a6", WARNING="#f2cb75", ERROR="#ffaaa3",
+        AUX_SURFACE="#1b2533", ROLE_SELECTED="#354e73", ROLE_BORDER="#82aaff",
     ),
 }
 globals().update(PALETTES["light"])
@@ -187,7 +189,7 @@ def _style_sheet(font_height):
     QFrame#navigation, QWidget#navigationBody {{ background: {SIDEBAR}; }}
     QFrame#navigation {{ border-right: 1px solid {DIVIDER}; }}
     QLabel[role="brand"] {{ font-size: 17px; font-weight: 600; }}
-    QLabel[role="heading"] {{ font-size: 24px; font-weight: 600; }}
+    QLabel[role="heading"] {{ font-size: 25px; font-weight: 600; }}
     QLabel[role="section"] {{ font-weight: 600; }}
     QLabel[role="muted"] {{ color: {TEXT_DIM}; }}
     QLabel[tone="success"] {{ color: {SUCCESS}; }}
@@ -195,7 +197,7 @@ def _style_sheet(font_height):
     QLabel[tone="error"] {{ color: {ERROR}; }}
     QPushButton, QToolButton {{
         min-height: {content_height}px; padding: 5px 12px;
-        border: 1px solid {BORDER}; border-radius: 6px; background: {SURFACE};
+        border: 1px solid {BORDER}; border-radius: 5px; background: {SURFACE};
     }}
     QPushButton:hover, QToolButton:hover {{ background: {BUTTON_HOVER}; }}
     QPushButton:focus, QToolButton:focus {{ border-color: {ACCENT}; }}
@@ -205,7 +207,7 @@ def _style_sheet(font_height):
     QPushButton[role="navigation"] {{ text-align: left; border-color: transparent; background: transparent; }}
     QPushButton[role="navigation"]:hover {{ background: {BUTTON_HOVER}; }}
     QPushButton[role="navigation"]:checked, QPushButton[role="profile"]:checked {{
-        background: {SELECTION}; color: {TEXT}; border-color: {ACCENT}; font-weight: 600;
+        background: {SELECTION}; color: {ACCENT}; border-color: transparent; border-left: 3px solid {ACCENT}; font-weight: 600;
     }}
     QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {{
         min-height: {content_height}px; padding: 5px 10px;
@@ -235,7 +237,7 @@ def _style_sheet(font_height):
         alternate-background-color: {BG}; gridline-color: {DIVIDER};
     }}
     QTextBrowser, QPlainTextEdit {{ padding: 8px; border-radius: 5px; }}
-    QWidget#logSidebar {{ background: {SURFACE}; border-radius: 8px; }}
+    QWidget#logSidebar {{ background: {AUX_SURFACE}; border-radius: 8px; }}
     QWidget#logSidebar QPlainTextEdit {{ border: none; padding: 0; }}
     QWidget#logSidebar QToolButton, QWidget#logSidebar QPushButton {{ padding: 5px 6px; }}
     QSplitter#logSplitter::handle {{ background: {BG}; }}
@@ -255,7 +257,7 @@ def _style_sheet(font_height):
     QFrame#activityCard {{ background: {SURFACE}; border: 1px solid {DIVIDER}; border-radius: 8px; }}
     QScrollArea#roleStrip, QWidget#roleStripBody {{ background: {BG}; }}
     QFrame#roleItem {{ background: {SURFACE}; border: 1px solid {DIVIDER}; border-radius: 6px; }}
-    QFrame#roleItem[selected="true"] {{ border-color: {ACCENT}; background: {SELECTION}; }}
+    QFrame#roleItem[selected="true"] {{ border-color: {ROLE_BORDER}; background: {ROLE_SELECTED}; }}
     QFrame#roleItem:focus {{ border-color: {ACCENT}; }}
     QFrame#roleItem QCheckBox {{ min-height: 24px; spacing: 5px; padding: 0; }}
     QPushButton:disabled, QToolButton:disabled, QLineEdit:disabled, QComboBox:disabled,
@@ -263,6 +265,10 @@ def _style_sheet(font_height):
         color: {DISABLED}; background: {DISABLED_BG}; border-color: {DIVIDER};
     }}
     QCheckBox:disabled {{ color: {DISABLED}; }}
+    QTabBar#taskTabs::tab {{ background: transparent; padding: 10px 14px; border-bottom: 2px solid transparent; }}
+    QTabBar#taskTabs::tab:selected {{ color: {ACCENT}; border-bottom-color: {ACCENT}; }}
+    QTabBar#taskTabs::tab:focus {{ background: {SELECTION}; }}
+    QTabBar#taskTabs::tab:disabled {{ color: {DISABLED}; }}
     QStatusBar {{ background: {SIDEBAR}; color: {TEXT_DIM}; border-top: 1px solid {DIVIDER}; }}
     QStatusBar::item {{ border: none; }}
     QToolTip {{ color: {TEXT}; background: {SURFACE}; border: 1px solid {BORDER}; padding: 6px; }}

@@ -40,13 +40,15 @@ class QtShellTests(unittest.TestCase):
         self.assertEqual(self.window.stack.count(), 1)
         for key, _ in self.window.NAV:
             QTest.mouseClick(self.window.nav_buttons[key], Qt.MouseButton.LeftButton)
-            self.assertEqual(self.window.current_page, key)
-            self.assertIs(self.window.stack.currentWidget(), self.window.pages[key])
+            selected = "treasure_map" if key == "tasks" else key
+            self.assertEqual(self.window.current_page, selected)
+            self.assertIs(self.window.stack.currentWidget(), self.window.pages[selected])
             self.assertEqual([k for k, b in self.window.nav_buttons.items() if b.isChecked()], [key])
         original_pages = dict(self.window.pages)
         for key, _ in reversed(self.window.NAV):
             self.window.show_page(key)
-            self.assertIs(self.window.pages[key], original_pages[key])
+            selected = "treasure_map" if key == "tasks" else key
+            self.assertIs(self.window.pages[selected], original_pages[selected])
         self.assertEqual(self.window.stack.count(), len(self.window.NAV))
 
     def test_unknown_page_does_not_change_selection(self):
@@ -96,7 +98,7 @@ def navigate_and_close():
     assert len(window.role_strip.items) == count
     assert window.role_page.launch_panel.isVisible() == (count == 0)
     assert window.width() >= 800 and window.height() >= 640
-    window.nav_buttons['sniper'].click()
+    window.show_page('sniper')
     assert window.current_page == 'sniper'
     window.pages['sniper']._open_calibration()
     window.pages['sniper']._calibration_dialog.reject()

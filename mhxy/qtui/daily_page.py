@@ -2,11 +2,12 @@
 
 import copy
 import threading
+from types import SimpleNamespace
 
 from PySide6.QtCore import QRect, QSize, Qt, Signal, Slot
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QAbstractItemView, QLabel, QListWidget, QListWidgetItem,
+    QAbstractItemView, QCheckBox, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
     QPushButton, QTextBrowser, QStyle, QStyledItemDelegate, QStyleOptionViewItem,
 )
 
@@ -16,7 +17,7 @@ from ..core.input_session import InputSession
 from ..tasks.daily import CHAINABLE, DailyTask
 from . import theme as T
 from .task_page import TaskPage
-from .widgets import DoubleSpinBox as QDoubleSpinBox
+from .widgets import DoubleSpinBox as QDoubleSpinBox, FlowLayout
 
 
 class _DailyRowDelegate(QStyledItemDelegate):
@@ -133,7 +134,6 @@ class DailyPage(TaskPage):
         self.time_limit.setSuffix(" 分钟")
         self.time_limit.setSpecialValueText("不限")
         self.time_limit.editingFinished.connect(self._save_edits)
-        self.add_control("整体时间上限", self.time_limit)
         self.refresh_button = QPushButton("刷新配置", self)
         self.refresh_button.setToolTip("重新读取配置并在后台检查本次执行条件")
         self.refresh_button.clicked.connect(self.refresh_config)
@@ -151,6 +151,23 @@ class DailyPage(TaskPage):
         self.steps_list.model().rowsMoved.connect(self._steps_changed)
         self.steps_list.currentItemChanged.connect(self._show_details)
         self.content_layout.addWidget(self.steps_list, 1)
+        actions = FlowLayout()
+        self.configure_button = QPushButton("配置", self)
+        self.configure_button.clicked.connect(self._configure_step)
+        self.move_up_button = QPushButton("上移", self)
+        self.move_down_button = QPushButton("下移", self)
+        self.move_up_button.clicked.connect(lambda: self._move_step(-1))
+        self.move_down_button.clicked.connect(lambda: self._move_step(1))
+        self.step_live_mode = QCheckBox("实战模式", self)
+        self.step_live_mode.toggled.connect(self._save_step_mode)
+        for widget in (self.configure_button, self.move_up_button, self.move_down_button, self.step_live_mode):
+            actions.addWidget(widget)
+        self.content_layout.addLayout(actions)
+        time_row = QHBoxLayout()
+        time_row.addWidget(QLabel("整体时间上限", self))
+        time_row.addWidget(self.time_limit)
+        time_row.addStretch()
+        self.content_layout.addLayout(time_row)
         self.summary_label = QLabel("尚未检查", self)
         self.summary_label.setWordWrap(True)
         self.content_layout.addWidget(self.summary_label)
@@ -175,6 +192,7 @@ class DailyPage(TaskPage):
             item.setFlags((item.flags() | Qt.ItemFlag.ItemIsUserCheckable) & ~Qt.ItemFlag.ItemIsDropEnabled)
             item.setCheckState(Qt.CheckState.Checked if step["enabled"] else Qt.CheckState.Unchecked)
         self.steps_list.blockSignals(False)
+        self.steps_list.setFixedHeight(self.steps_list.count() * max(T.ROW_HEIGHT, self.steps_list.fontMetrics().height() + 24) + 2)
         self.time_limit.setValue(float(tc.get("loop", {}).get("time_limit_min", 0) or 0))
         self._request_summary()
         return self.cfg
@@ -274,6 +292,52 @@ class DailyPage(TaskPage):
         row = self._summary_rows.get(item.data(Qt.ItemDataRole.UserRole), {}) if item else {}
         self.details.setPlainText("\n".join([row.get("title", ""), *row.get("problems", [])]))
         self.details.setVisible(bool(row.get("problems")))
+        self.step_live_mode.blockSignals(True)
+        self.step_live_mode.setChecked(row.get("mode") == "实战")
+        self.step_live_mode.blockSignals(False)
+
+    def _configure_step(self):
+        item = self.steps_list.currentItem()
+        if item is not None and not self._start_pending and not self._runtime_running():
+            navigate = getattr(self.window(), "show_page", None)
+            if navigate:
+                navigate(item.data(Qt.ItemDataRole.UserRole))
+
+    def _move_step(self, offset):
+        row = self.steps_list.currentRow()
+        target = row + offset
+        if self._start_pending or self._runtime_running() or row < 0 or not 0 <= target < self.steps_list.count():
+            return
+        self.steps_list.blockSignals(True)
+        item = self.steps_list.takeItem(row)
+        self.steps_list.insertItem(target, item)
+        self.steps_list.setCurrentRow(target)
+        self.steps_list.blockSignals(False)
+        self._steps_changed()
+        self._show_details()
+
+    def _save_step_mode(self, checked):
+        item = self.steps_list.currentItem()
+        if item is None or self._start_pending or self._runtime_running():
+            return
+        name = item.data(Qt.ItemDataRole.UserRole)
+        try:
+            cfg = cfg_mod.load_config()
+            if name == "dungeon":
+                name = DailyTask._selected_dungeon(SimpleNamespace(task_cfg=lambda key: cfg_mod.task_config(cfg, key)))
+            if not name:
+                raise ValueError("请先选择副本")
+            tc = cfg_mod.task_config(cfg, name)
+            tc["dry_run"] = not checked
+            cfg_mod.set_task_config(cfg, name, tc)
+            cfg_mod.save_config(cfg)
+        except Exception as exc:
+            self._show_details()
+            self.summary_label.setText("保存失败：" + str(exc))
+            return
+        self.cfg = cfg
+        self.config_changed.emit(cfg)
+        self._request_summary()
 
     def _make_runner(self):
         # TaskPage 的 worker 调 runtime.start；本计划也在同一个受保护的
@@ -299,7 +363,8 @@ class DailyPage(TaskPage):
     start = toggle_run
 
     def _set_editable(self, editable):
-        for widget in (self.steps_list, self.time_limit, self.refresh_button):
+        for widget in (self.steps_list, self.time_limit, self.refresh_button, self.configure_button,
+                       self.move_up_button, self.move_down_button, self.step_live_mode):
             widget.setEnabled(editable)
 
     def _start_result(self, ok, problems):
