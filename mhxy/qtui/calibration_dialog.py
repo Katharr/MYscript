@@ -172,7 +172,7 @@ class CalibrationDialog(QDialog):
                 pid = calib.template_profile(self.cfg, self.task_name, name)
             else:
                 pid = calibration.resolve_item(self.cfg, self.task_name, group, key)["profile"]
-            self.model.item(row, 2).setForeground(QColor(T.SUCCESS if pid == active and calib.get(self.cfg, pid)
+            self.model.item(row, 2).setForeground(QColor(T.SUCCESS if self._tracks_profile and pid == active and calib.get(self.cfg, pid)
                                                        else T.TEXT_DIM))
 
     def _select_task(self):
@@ -185,6 +185,11 @@ class CalibrationDialog(QDialog):
     def _draft(self):
         return copy.deepcopy(self.cfg) if self._cfg_supplied else cfg_mod.load_config()
 
+    @property
+    def _tracks_profile(self):
+        # 启动登录始终按原始像素识别，启动器尺寸不属于游戏窗口尺寸组。
+        return self.task_name != "launch_login"
+
     def refresh(self):
         self._generation += 1
         selected = self._selected() if hasattr(self, "rows") else None
@@ -194,6 +199,7 @@ class CalibrationDialog(QDialog):
         tc = cfg_mod.task_config(self.cfg, self.task_name)
         active = calib.active_id(self.cfg)
         self.profile_note.setText("当前尺寸组：" + calib.size_text(calib.active(self.cfg)))
+        self.profile_note.setVisible(self._tracks_profile)
         self.rows, requests = [], {}
         self._requests = requests
         for group in ("regions", "templates"):
@@ -238,8 +244,9 @@ class CalibrationDialog(QDialog):
         row = len(self.rows)
         self.rows.append((group, key, full))
         status = (str(value) if value else "整窗检测" if full else "未标定") if group == "regions" else "未标定"
-        prof = calib.get(self.cfg, pid)
-        badge = QStandardItem(("当前 · " if pid == active and prof else "")
+        prof = calib.get(self.cfg, pid) if self._tracks_profile else None
+        badge = QStandardItem("不适用" if not self._tracks_profile else
+                              ("当前 · " if pid == active and prof else "")
                               + (f"{prof['label']} {calib.size_text(prof)}" if prof else "未记录"))
         badge.setForeground(QColor(T.SUCCESS if pid == active and prof else T.TEXT_DIM))
         source = source or ("local" if value else "missing")
@@ -314,9 +321,11 @@ class CalibrationDialog(QDialog):
         if result is None:
             return None
         roi, crop, size = result
-        pid = None if self.task_name == "launch_login" else resolve_profile(draft, size, self)
-        if pid is None and self.task_name != "launch_login":
+        pid = resolve_profile(draft, size, self) if self._tracks_profile else None
+        if pid is None and self._tracks_profile:
             return None
+        if self.task_name == "launch_login":
+            return roi, crop, pid, list(size)
         return roi, crop, pid
 
     def _commit(self, draft, path=None, crop=None, leader=False):
@@ -356,8 +365,12 @@ class CalibrationDialog(QDialog):
             captured = self._grab_roi(draft, f"框选「{name}」")
             if captured is None:
                 return
-            roi, crop, pid = captured
+            roi, crop, pid = captured[:3]
+            launcher_size = (captured[3] if self.task_name == "launch_login"
+                             and key == "start_game" and len(captured) > 3 else None)
             tc = cfg_mod.task_config(draft, self.task_name)
+            if self.task_name == "launch_login" and launcher_size:
+                tc["launcher_size"] = [int(launcher_size[0]), int(launcher_size[1])]
             path = None
             if group == "regions":
                 tc.setdefault(group, {})[key] = roi
@@ -374,7 +387,8 @@ class CalibrationDialog(QDialog):
                 path = item.get("template") or f"templates/{key}.png"
                 item["template"] = path
             cfg_mod.set_task_config(draft, self.task_name, tc)
-            if group in ("regions", "templates"):
+            # 不参与尺寸组的任务只更新资产，保留旧元数据，不把 None 当作清空归属。
+            if self._tracks_profile and group in ("regions", "templates"):
                 calibration.set_item(draft, self.task_name, group, key,
                                      path if group == "templates" else roi, pid)
             if pid is not None:

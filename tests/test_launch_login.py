@@ -567,6 +567,50 @@ class LaunchLoginDiagnosticsTests(unittest.TestCase):
         self.assertFalse(clicked)
         self.assertTrue(any(level == "warn" and "未能切到前台" in msg for level, msg in logs), logs)
 
+    def test_start_button_normalizes_launcher_before_matching(self):
+        cfg = self._cfg()
+        cfg["tasks"]["launch_login"]["launcher_size"] = [1200, 800]
+        logs = []
+        task = LaunchLoginTask()
+        ctx = self._Ctx(cfg, logs)
+
+        class _ResizableWin(self._Win):
+            def normal_size(self):
+                return tuple(self._rect[2:4])
+
+            def resize_to(self, width, height):
+                self._rect[2:4] = [width, height]
+                return True
+
+        win = _ResizableWin(rect=[100, 100, 900, 600])
+        self.assertTrue(task._ensure_launcher_size(ctx, win, "点击开始游戏"))
+        self.assertEqual(win.rect()[2:4], [1200, 800])
+        self.assertTrue(any("先归一化窗口" in msg for _level, msg in logs), logs)
+        self.assertTrue(any("已归一化到 1200×800" in msg for _level, msg in logs), logs)
+
+    def test_start_button_does_not_match_when_launcher_normalization_fails(self):
+        cfg = self._cfg()
+        cfg["tasks"]["launch_login"]["launcher_size"] = [1200, 800]
+        logs = []
+        task = LaunchLoginTask()
+        ctx = self._Ctx(cfg, logs)
+        win = self._Win(rect=[100, 100, 900, 600])
+        with mock.patch.object(task, "_scene", side_effect=AssertionError("must not match before resize")):
+            self.assertFalse(task._click_template(ctx, win, object(), 0.85, "点击开始游戏"))
+        self.assertTrue(any("归一化失败" in msg for _level, msg in logs), logs)
+
+    def test_post_start_steps_do_not_use_launcher_size(self):
+        cfg = self._cfg()
+        cfg["tasks"]["launch_login"]["launcher_size"] = [1200, 800]
+        logs = []
+        task = LaunchLoginTask()
+        ctx = self._Ctx(cfg, logs)
+        win = self._Win(rect=[100, 100, 900, 600])
+        with mock.patch.object(win, "resize_to", create=True,
+                               side_effect=AssertionError("game steps must not resize launcher")):
+            self.assertTrue(task._ensure_launcher_size(ctx, win, "点击进入游戏"))
+            self.assertTrue(task._ensure_launcher_size(ctx, win, "点击切换角色"))
+
     def test_text_fallback_clicks_button_when_template_stale(self):
         """模板认不出来（官方更新了启动器外观）时，靠 OCR 认「开始游戏」文字把这一步走通。"""
         cfg = self._cfg()

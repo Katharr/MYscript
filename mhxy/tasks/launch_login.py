@@ -47,6 +47,8 @@ class LaunchLoginTask(Task):
     _TEXT_BOX = {"min_height": 16, "max_height": 64, "min_width": 30, "max_width": 360,
                  "min_ratio": 1.2, "max_ratio": 9.0}
     _MISS_LOG_INTERVAL = 5.0            # 「本步没认出来」的日志节流（每轮都会重试，不能刷屏）
+    _SIZE_TOL = 4
+    _SIZE_RETRY_INTERVAL = 1.0
 
     def __init__(self):
         # 识别失败诊断 / 文字兜底的节流状态（_run_profile 每档案会重置一次）。
@@ -54,6 +56,7 @@ class LaunchLoginTask(Task):
         self._ocr_interval = 6.0
         self._miss_since, self._miss_logged = {}, {}
         self._ocr_first, self._ocr_last = {}, {}
+        self._launcher_resize_attempt_at = {}
 
     _CORNER_LABELS = {"top_left": "左上", "top_right": "右上",
                       "bottom_right": "右下", "bottom_left": "左下"}
@@ -163,6 +166,7 @@ class LaunchLoginTask(Task):
         self._ocr_interval = max(2.0, float(loop_cfg.get("ocr_fallback_interval_sec", 6.0)))
         self._miss_since, self._miss_logged = {}, {}
         self._ocr_first, self._ocr_last = {}, {}
+        self._launcher_resize_attempt_at = {}
 
         # 启动器可能是独立标题/进程，不能沿用游戏窗口白名单。记录全桌面 HWND 基线后，
         # 仅接受本次启动新出现且命中“开始游戏”模板的窗口。
@@ -503,6 +507,65 @@ class LaunchLoginTask(Task):
             win_mod.mask_rects(image, rect, rects)
         return win_mod.ScaledScene(rect, None, img=image)
 
+    @staticmethod
+    def _size_value(value):
+        if not isinstance(value, (list, tuple)) or len(value) < 2:
+            return None
+        try:
+            width, height = int(value[0]), int(value[1])
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return (width, height) if width > 0 and height > 0 else None
+
+    def _ensure_launcher_size(self, ctx, win, action):
+        if str(action).replace("重新点击", "点击") != "点击开始游戏":
+            return True
+        target = self._size_value(ctx.task_cfg(self.name).get("launcher_size"))
+        if target is None:
+            return True
+        try:
+            current = win.normal_size() if callable(getattr(win, "normal_size", None)) else None
+        except Exception:
+            current = None
+        if current is None:
+            try:
+                rect = win.rect()
+                current = tuple(rect[2:4]) if rect else None
+            except Exception:
+                current = None
+        current = self._size_value(current)
+        if current is None:
+            return False
+        if all(abs(actual - expected) <= self._SIZE_TOL for actual, expected in zip(current, target)):
+            return True
+
+        hwnd = self._window_hwnd(win)
+        key = hwnd or id(win)
+        now = time.time()
+        if now - self._launcher_resize_attempt_at.get(key, 0.0) < self._SIZE_RETRY_INTERVAL:
+            return False
+        self._launcher_resize_attempt_at[key] = now
+        ctx.log("启动器尺寸为 %d×%d，标定基准为 %d×%d，先归一化窗口。"
+                % (current[0], current[1], target[0], target[1]), level="warn")
+        try:
+            if not win.activate() or not win.resize_to(target[0], target[1]):
+                ctx.log("启动器窗口归一化失败，暂不点击开始游戏。", level="warn")
+                return False
+            updated = win.normal_size() if callable(getattr(win, "normal_size", None)) else None
+            if updated is None:
+                rect = win.rect()
+                updated = tuple(rect[2:4]) if rect else None
+            updated = self._size_value(updated)
+        except Exception as exc:
+            ctx.log("启动器窗口归一化失败：%s，暂不点击开始游戏。" % exc, level="warn")
+            return False
+        if updated is None or any(abs(actual - expected) > self._SIZE_TOL
+                                  for actual, expected in zip(updated, target)):
+            ctx.log("启动器归一化后尺寸仍为 %s，暂不点击开始游戏。" % (updated or "未知"), level="warn")
+            return False
+        ctx.log("启动器窗口已归一化到 %d×%d。" % target, level="hit")
+        return True
+
     def _click_template(self, ctx, win, tpl, threshold, action):
         """识别并点击某一步的按钮。命中才点；**没命中、切不到前台都留下明确日志**。
 
@@ -511,6 +574,8 @@ class LaunchLoginTask(Task):
         另外识别失败到一定时长后会启用【文字兜底】（见 _click_by_text）——启动器是远端 WebView2
         页面，按钮外观会随官方更新变，模板一旦失效就再没有第二条通道。
         """
+        if not self._ensure_launcher_size(ctx, win, action):
+            return False
         scene = self._scene(ctx, win)
         result = scene.match(tpl, threshold) if scene is not None else None
         if result is None:

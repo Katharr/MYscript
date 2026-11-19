@@ -258,6 +258,7 @@ class QtCalibrationTests(unittest.TestCase):
         with mock.patch.object(cd, "capture_roi", return_value=([1, 2, 30, 40], self.pixels, [2400, 1700])) as capture:
             dialog.calibrate_selected()
         self.assertTrue(capture.call_args.kwargs["allow_desktop_windows"])
+        self.assertEqual(dialog.cfg["tasks"]["launch_login"]["launcher_size"], [2400, 1700])
         self.assertEqual(dialog.cfg["calib_profiles"], self.cfg["calib_profiles"])
         self.assertEqual(dialog.cfg["targets"], self.cfg["targets"])
 

@@ -231,6 +231,7 @@
     "launch_login": {
       "dry_run": true,
       "place_corner": true,
+      "launcher_size": null,
       "loop": {
         "match_threshold": 0.85,
         "launcher_timeout_sec": 120,

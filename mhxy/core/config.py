@@ -192,6 +192,7 @@ DEFAULT_CONFIG = {
         "launch_login": {
             "dry_run": True,             # 演练只识别当前已开窗口，不启动程序、不点击
             "place_corner": True,        # true=每登录好一个号就把它摆到屏幕角落（见 corner_order）
+            "launcher_size": None,       # 「开始游戏」模板标定时的启动器窗口尺寸 [w,h]
             "loop": {
                 "match_threshold": 0.85,
                 "launcher_timeout_sec": 120,
