@@ -23,6 +23,9 @@ __pycache__/
 /captures/
 /templates/
 /docs/*
+!/docs/视觉设计规范.md
+!/docs/ui-v3/
+!/docs/ui-v3/**
 !/docs/specs/
 !/docs/specs/**
 # /startup_error.log  启动致命错误落盘日志（每次崩溃重写，含本机路径）
